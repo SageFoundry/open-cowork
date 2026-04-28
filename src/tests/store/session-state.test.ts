@@ -63,6 +63,16 @@ describe('SessionState unified store', () => {
       useAppStore.getState().removeSession('s1');
       expect(useAppStore.getState().activeSessionId).toBeNull();
     });
+
+    it('should keep activeProjectId when removing an active session', () => {
+      const session = makeSession('s1');
+      useAppStore.getState().addSession(session);
+      useAppStore.getState().setActiveSession('s1');
+      useAppStore.getState().setActiveProject('cwd:/tmp');
+      useAppStore.getState().removeSession('s1');
+      expect(useAppStore.getState().activeSessionId).toBeNull();
+      expect(useAppStore.getState().activeProjectId).toBe('cwd:/tmp');
+    });
   });
 
   describe('removeSessions (batch)', () => {

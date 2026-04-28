@@ -16,6 +16,17 @@ export interface Session {
 
 export type SessionStatus = 'idle' | 'running' | 'completed' | 'error';
 
+export const DEFAULT_PROJECT_ID = 'default-project';
+
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  cwd?: string;
+  sessionCount: number;
+  lastUpdatedAt: number;
+  runningCount: number;
+}
+
 export interface MountedPath {
   virtual: string;
   real: string;

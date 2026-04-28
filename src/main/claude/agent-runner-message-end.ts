@@ -1,5 +1,6 @@
 import type { AssistantMessage, TextContent, ThinkingContent, ToolCall } from '@mariozechner/pi-ai';
 import { splitThinkTagBlocks } from './think-tag-parser';
+import { thinkingTextsMatch } from './thinking-compat';
 
 type MessageEndContentBlock = TextContent | ThinkingContent | ToolCall;
 
@@ -9,6 +10,7 @@ interface ResolveMessageEndPayloadOptions {
   message?: MessageEndMessage;
   streamedText: string;
   streamedThinking?: string;
+  streamedThinkingSignature?: string;
 }
 
 interface ResolvedMessageEndPayload {
@@ -17,6 +19,13 @@ interface ResolvedMessageEndPayload {
   nextStreamedText: string;
   nextStreamedThinking: string;
   shouldEmitMessage: boolean;
+}
+
+function shouldApplyStreamedThinkingSignature(thinking: string, streamedThinking: string): boolean {
+  if (!streamedThinking.trim()) {
+    return true;
+  }
+  return thinkingTextsMatch(thinking, streamedThinking);
 }
 
 export function toUserFacingErrorText(errorText: string): string {
@@ -140,7 +149,7 @@ export function toUserFacingErrorText(errorText: string): string {
 export function resolveMessageEndPayload(
   options: ResolveMessageEndPayloadOptions
 ): ResolvedMessageEndPayload {
-  const { message, streamedText, streamedThinking = '' } = options;
+  const { message, streamedText, streamedThinking = '', streamedThinkingSignature } = options;
   const nextStreamedText = '';
   const nextStreamedThinking = '';
 
@@ -154,14 +163,21 @@ export function resolveMessageEndPayload(
     };
   }
 
+  const streamedThinkingBlock = streamedThinking.trim()
+    ? ({
+        type: 'thinking' as const,
+        thinking: streamedThinking.trim(),
+        ...(streamedThinkingSignature ? { thinkingSignature: streamedThinkingSignature } : {}),
+      } satisfies ThinkingContent)
+    : null;
+  const streamedTextBlock = streamedText
+    ? ({ type: 'text' as const, text: streamedText } satisfies TextContent)
+    : null;
+
   const rawContent =
     Array.isArray(message?.content) && message.content.length > 0
       ? message.content
-      : streamedText
-        ? [{ type: 'text' as const, text: streamedText }]
-        : streamedThinking.trim()
-          ? [{ type: 'thinking' as const, thinking: streamedThinking.trim() }]
-        : [];
+      : ([streamedThinkingBlock, streamedTextBlock].filter(Boolean) as MessageEndContentBlock[]);
 
   if (rawContent.length === 0) {
     return {
@@ -176,22 +192,46 @@ export function resolveMessageEndPayload(
   // Post-process: split any <think>...</think> tags in text blocks into
   // separate thinking + text content blocks for proper UI rendering.
   const effectiveContent: MessageEndContentBlock[] = [];
+  let hasThinkingContent = false;
   for (const block of rawContent) {
     if (block.type === 'text') {
       const splitBlocks = splitThinkTagBlocks(block.text);
       for (const splitBlock of splitBlocks) {
         if (splitBlock.type === 'thinking') {
+          hasThinkingContent = true;
           effectiveContent.push({
             type: 'thinking',
             thinking: splitBlock.thinking,
+            ...(streamedThinkingSignature &&
+            shouldApplyStreamedThinkingSignature(splitBlock.thinking, streamedThinking)
+              ? { thinkingSignature: streamedThinkingSignature }
+              : {}),
           } as ThinkingContent);
         } else {
           effectiveContent.push({ type: 'text', text: splitBlock.text } as TextContent);
         }
       }
     } else {
+      if (block.type === 'thinking') {
+        hasThinkingContent = true;
+        if (
+          streamedThinkingSignature &&
+          !block.thinkingSignature &&
+          shouldApplyStreamedThinkingSignature(block.thinking, streamedThinking)
+        ) {
+          effectiveContent.push({
+            ...block,
+            thinkingSignature: streamedThinkingSignature,
+          } as ThinkingContent);
+          continue;
+        }
+      }
       effectiveContent.push(block);
     }
+  }
+
+  if (!hasThinkingContent && streamedThinkingBlock) {
+    effectiveContent.unshift(streamedThinkingBlock);
   }
 
   return {

@@ -1,9 +1,10 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAppStore } from '../store';
 import { useIPC } from '../hooks/useIPC';
 import type { ContentBlock } from '../types';
 import { getInitialSessionTitle } from '../../shared/session-title';
+import { buildProjectSummaries } from '../utils/projects';
 import {
   FileText,
   BarChart3,
@@ -40,15 +41,28 @@ export function WelcomeView() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { startSession, changeWorkingDir, isElectron } = useIPC();
   const workingDir = useAppStore((state) => state.workingDir);
+  const sessions = useAppStore((state) => state.sessions);
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
+  const setActiveProject = useAppStore((state) => state.setActiveProject);
   const setGlobalNotice = useAppStore((state) => state.setGlobalNotice);
   const isConfigured = useAppStore((state) => state.isConfigured);
   const setShowSettings = useAppStore((state) => state.setShowSettings);
   const setSettingsTab = useAppStore((state) => state.setSettingsTab);
   const canSubmit = prompt.trim().length > 0 || pastedImages.length > 0 || attachedFiles.length > 0;
+  const activeProject = useMemo(() => {
+    if (!activeProjectId) return null;
+    return buildProjectSummaries(sessions, t('sidebar.defaultProject')).find(
+      (project) => project.id === activeProjectId
+    ) || null;
+  }, [activeProjectId, sessions, t]);
+  const effectiveWorkingDir = activeProject?.cwd || workingDir || undefined;
 
   const handleSelectFolder = async () => {
     try {
-      const result = await changeWorkingDir(undefined, workingDir || undefined);
+      const result = await changeWorkingDir(undefined, effectiveWorkingDir);
+      if (result.success) {
+        setActiveProject(null);
+      }
       if (!result.success && result.error && result.error !== 'User cancelled') {
         setGlobalNotice({
           id: `notice-workdir-select-${Date.now()}`,
@@ -349,7 +363,7 @@ export function WelcomeView() {
     setIsSubmitting(true);
     try {
       const sessionTitle = getInitialSessionTitle(currentPrompt, attachedFiles[0]?.name);
-      const session = await startSession(sessionTitle, contentBlocks, workingDir || undefined);
+      const session = await startSession(sessionTitle, contentBlocks, effectiveWorkingDir);
       if (session) {
         setPrompt('');
         if (textareaRef.current) {
@@ -605,15 +619,17 @@ export function WelcomeView() {
                 type="button"
                 onClick={handleSelectFolder}
                 className={`flex items-center gap-2 text-sm transition-colors ${
-                  workingDir
+                  effectiveWorkingDir
                     ? 'text-text-secondary hover:text-text-primary'
                     : 'text-accent hover:text-accent-hover'
                 }`}
-                title={workingDir || t('welcome.selectWorkingFolder')}
+                title={effectiveWorkingDir || t('welcome.selectWorkingFolder')}
               >
                 <FolderOpen className="w-4 h-4" />
                 <span>
-                  {workingDir ? workingDir.split(/[/\\]/).pop() : t('welcome.selectWorkingFolder')}
+                  {effectiveWorkingDir
+                    ? effectiveWorkingDir.split(/[/\\]/).pop()
+                    : t('welcome.selectWorkingFolder')}
                 </span>
               </button>
 

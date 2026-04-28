@@ -15,7 +15,7 @@ describe('WelcomeView submit guards', () => {
   it('only clears the composer after startSession returns a created session', () => {
     const source = fs.readFileSync(welcomeViewPath, 'utf8');
 
-    expect(source).toContain('const session = await startSession(sessionTitle, contentBlocks, workingDir || undefined);');
+    expect(source).toContain('const session = await startSession(sessionTitle, contentBlocks, effectiveWorkingDir);');
     expect(source).toContain('if (session) {');
     expect(source).toContain('setPrompt(\'\');');
     expect(source).toContain('setPastedImages([]);');
@@ -26,7 +26,7 @@ describe('WelcomeView submit guards', () => {
     const source = fs.readFileSync(welcomeViewPath, 'utf8');
 
     expect(source).toContain("const setGlobalNotice = useAppStore((state) => state.setGlobalNotice);");
-    expect(source).toContain('const result = await changeWorkingDir(undefined, workingDir || undefined);');
+    expect(source).toContain('const result = await changeWorkingDir(undefined, effectiveWorkingDir);');
     expect(source).toContain("message: `${t('welcome.selectWorkingFolderFailed')}: ${result.error}`");
     expect(source).toContain(": t('welcome.selectWorkingFolderFailed')");
   });

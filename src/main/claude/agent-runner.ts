@@ -70,6 +70,11 @@ import {
   normalizeMcpToolResultForModel,
   normalizeToolExecutionResultForUi,
 } from './tool-result-utils';
+import {
+  disableThinkingForAnthropicPayload,
+  restoreOpenAIReasoningContentForPayload,
+  restoreUnsignedThinkingBlocksForAnthropicPayload,
+} from './thinking-compat';
 import { fetchOllamaModelInfo } from '../config/ollama-api';
 import { executeWindowsBash } from '../tools/windows-bash-executor';
 import {
@@ -106,15 +111,6 @@ interface StableHistoryPreambleResult {
   excludedCurrentTurnUser: boolean;
   historyCharBudget: number;
 }
-
-type AnthropicPayloadMessage = {
-  role?: string;
-  content?: unknown;
-};
-
-type AnthropicPayload = {
-  messages?: AnthropicPayloadMessage[];
-};
 
 function normalizeHistoryText(text: string): string {
   return text.replace(/\r\n?/g, '\n');
@@ -232,166 +228,6 @@ function buildStableConversationHistoryPreamble(input: {
     omittedMessages,
     excludedCurrentTurnUser,
     historyCharBudget,
-  };
-}
-
-function getBlockText(block: unknown): string | null {
-  if (!block || typeof block !== 'object') {
-    return null;
-  }
-  const typed = block as { type?: unknown; text?: unknown };
-  if (typed.type !== 'text' || typeof typed.text !== 'string') {
-    return null;
-  }
-  return typed.text;
-}
-
-function restoreThinkingBlockForPayload(block: Record<string, unknown>): Record<string, unknown> {
-  if (block.redacted === true) {
-    const redactedData =
-      typeof block.thinkingSignature === 'string' && block.thinkingSignature.trim().length > 0
-        ? block.thinkingSignature
-        : block.signature;
-    if (typeof redactedData === 'string' && redactedData.trim().length > 0) {
-      return {
-        type: 'redacted_thinking',
-        data: redactedData,
-      };
-    }
-  }
-
-  const restored: Record<string, unknown> = {
-    type: 'thinking',
-    thinking: block.thinking,
-  };
-
-  if (typeof block.thinkingSignature === 'string' && block.thinkingSignature.trim().length > 0) {
-    restored.signature = block.thinkingSignature;
-  }
-  if (typeof block.signature === 'string' && block.signature.trim().length > 0) {
-    restored.signature = block.signature;
-  }
-
-  return restored;
-}
-
-function thinkingTextsMatch(text: string, thinking: string): boolean {
-  return text === thinking || text.trim() === thinking.trim();
-}
-
-export function restoreUnsignedThinkingBlocksForAnthropicPayload(
-  payload: unknown,
-  sourceMessages: unknown[]
-): unknown {
-  if (!payload || typeof payload !== 'object') {
-    return payload;
-  }
-
-  const typedPayload = payload as AnthropicPayload;
-  if (!Array.isArray(typedPayload.messages)) {
-    return payload;
-  }
-
-  const sourceThinkingEntries = sourceMessages.flatMap((message) => {
-    if (
-      !message ||
-      typeof message !== 'object' ||
-      (message as { role?: unknown }).role !== 'assistant' ||
-      !Array.isArray((message as { content?: unknown }).content)
-    ) {
-      return [];
-    }
-
-    return (message as { content: Array<Record<string, unknown>> }).content
-      .filter((block) => {
-        if (block.type !== 'thinking') return false;
-        return typeof block.thinking === 'string' && block.thinking.trim().length > 0;
-      })
-      .map((block) => ({
-        thinking: block.thinking as string,
-        payloadBlock: restoreThinkingBlockForPayload(block),
-        used: false,
-      }));
-  });
-  let changed = false;
-
-  const messages = typedPayload.messages.map((message) => {
-    if (message.role !== 'assistant' || !Array.isArray(message.content)) {
-      return message;
-    }
-
-    if (sourceThinkingEntries.length === 0) {
-      return message;
-    }
-
-    const content = message.content.map((block) => {
-      const text = getBlockText(block);
-      if (text == null) {
-        return block;
-      }
-
-      const matchingThinkingEntry = sourceThinkingEntries.find(
-        (entry) => !entry.used && thinkingTextsMatch(text, entry.thinking)
-      );
-      if (!matchingThinkingEntry) {
-        return block;
-      }
-
-      matchingThinkingEntry.used = true;
-      changed = true;
-      return matchingThinkingEntry.payloadBlock;
-    });
-
-    return { ...message, content };
-  });
-
-  return changed ? { ...typedPayload, messages } : payload;
-}
-
-function disableThinkingForAnthropicPayload(payload: unknown): unknown {
-  if (!payload || typeof payload !== 'object') {
-    return payload;
-  }
-
-  const typedPayload = payload as AnthropicPayload & { thinking?: unknown };
-  if (!Array.isArray(typedPayload.messages)) {
-    return { ...typedPayload, thinking: { type: 'disabled' } };
-  }
-
-  const messages = typedPayload.messages
-    .map((message) => {
-      if (message.role !== 'assistant' || !Array.isArray(message.content)) {
-        return message;
-      }
-
-      const content = message.content
-        .map((block) => {
-          if (!block || typeof block !== 'object') {
-            return block;
-          }
-          const typed = block as {
-            type?: unknown;
-            thinking?: unknown;
-            data?: unknown;
-          };
-          if (typed.type === 'thinking' && typeof typed.thinking === 'string') {
-            return { type: 'text', text: typed.thinking };
-          }
-          if (typed.type === 'redacted_thinking') {
-            return null;
-          }
-          return block;
-        })
-        .filter(Boolean);
-
-      return content.length > 0 ? { ...message, content } : null;
-    })
-    .filter(Boolean) as AnthropicPayloadMessage[];
-
-  return {
-    ...typedPayload,
-    thinking: { type: 'disabled' },
-    messages,
   };
 }
 
@@ -2449,9 +2285,11 @@ Tool routing:
 
       const usesAnthropicMessagesProtocol =
         configProtocol === 'anthropic' || piModel.api === 'anthropic-messages';
+      const usesOpenAICompletionsProtocol =
+        configProtocol === 'openai' || piModel.api === 'openai-completions';
 
       // Set up event handler to bridge pi-coding-agent events → our ServerEvent protocol
-      if (usesAnthropicMessagesProtocol) {
+      if (usesAnthropicMessagesProtocol || usesOpenAICompletionsProtocol) {
         const agent = (piSession as unknown as { agent?: unknown }).agent as
           | {
               _onPayload?: (
@@ -2482,12 +2320,24 @@ Tool routing:
               ? ((await originalOnPayload.call(agent, payload, modelArg)) ?? payload)
               : payload;
             if (!enableThinking) {
-              return disableThinkingForAnthropicPayload(nextPayload) as Record<string, unknown>;
+              return (usesAnthropicMessagesProtocol
+                ? disableThinkingForAnthropicPayload(nextPayload)
+                : nextPayload) as Record<string, unknown>;
             }
-            return restoreUnsignedThinkingBlocksForAnthropicPayload(
-              nextPayload,
-              agent.state?.messages ?? []
-            ) as Record<string, unknown>;
+            let patchedPayload: unknown = nextPayload;
+            if (usesAnthropicMessagesProtocol) {
+              patchedPayload = restoreUnsignedThinkingBlocksForAnthropicPayload(
+                patchedPayload,
+                agent.state?.messages ?? []
+              );
+            }
+            if (usesOpenAICompletionsProtocol) {
+              patchedPayload = restoreOpenAIReasoningContentForPayload(
+                patchedPayload,
+                agent.state?.messages ?? []
+              );
+            }
+            return patchedPayload as Record<string, unknown>;
           };
         }
       }
@@ -2495,6 +2345,7 @@ Tool routing:
       // Accumulate streamed text deltas in case message_end.content is empty (pi SDK streaming behaviour)
       let streamedText = '';
       let streamedThinking = '';
+      let streamedThinkingSignature: string | undefined;
       let compactionStepId: string | undefined;
       let hasEmittedError = false;
       let terminalErrorText: string | undefined;
@@ -2625,6 +2476,16 @@ Tool routing:
               } else if (ame.type === 'thinking_delta') {
                 markFirstStreamEvent(ame.type);
                 streamedThinking += ame.delta;
+                const thinkingBlock = ame.partial?.content?.[ame.contentIndex];
+                if (
+                  thinkingBlock?.type === 'thinking' &&
+                  typeof thinkingBlock.thinkingSignature === 'string' &&
+                  thinkingBlock.thinkingSignature.trim().length > 0
+                ) {
+                  streamedThinkingSignature = thinkingBlock.thinkingSignature;
+                } else if (!streamedThinkingSignature && usesOpenAICompletionsProtocol) {
+                  streamedThinkingSignature = 'reasoning_content';
+                }
                 // Forward thinking delta to renderer for real-time display
                 this.sendToRenderer({
                   type: 'stream.thinking',
@@ -2686,9 +2547,11 @@ Tool routing:
                 message: msg as Parameters<typeof resolveMessageEndPayload>[0]['message'],
                 streamedText,
                 streamedThinking,
+                streamedThinkingSignature,
               });
               streamedText = resolvedPayload.nextStreamedText;
               streamedThinking = resolvedPayload.nextStreamedThinking;
+              streamedThinkingSignature = undefined;
               if (provider === 'ollama') {
                 log(
                   '[ClaudeAgentRunner] Ollama message_end diagnostics',

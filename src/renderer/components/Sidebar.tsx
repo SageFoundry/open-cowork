@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useAppStore } from '../store';
 import { useIPC } from '../hooks/useIPC';
 import {
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Trash2,
@@ -14,26 +15,30 @@ import {
   Plus,
   ListChecks,
   Check,
+  Folder,
 } from 'lucide-react';
-import type { Session } from '../types';
+import { DEFAULT_PROJECT_ID, type ProjectSummary, type Session } from '../types';
+import {
+  buildProjectSummaries,
+  getProjectIdForCwd,
+  getProjectSessions,
+} from '../utils/projects';
 
 import sidebarLogoSrc from '../assets/logo.png';
 
 const INITIAL_MESSAGES_PAGE_SIZE = 5;
 
-type SessionGroup = {
-  key: string;
-  label: string;
-  sessions: Session[];
-};
+type Translate = (key: string, values?: Record<string, string | number>) => string;
 
 export function Sidebar() {
   const { t } = useTranslation();
   const sessions = useAppStore((s) => s.sessions);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
+  const activeProjectId = useAppStore((s) => s.activeProjectId);
   const settings = useAppStore((s) => s.settings);
   const sessionStates = useAppStore((s) => s.sessionStates);
   const setActiveSession = useAppStore((s) => s.setActiveSession);
+  const setActiveProject = useAppStore((s) => s.setActiveProject);
   const setMessages = useAppStore((s) => s.setMessages);
   const setMessagePagination = useAppStore((s) => s.setMessagePagination);
   const setTraceSteps = useAppStore((s) => s.setTraceSteps);
@@ -54,20 +59,36 @@ export function Sidebar() {
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(new Set());
 
   const normalizedQuery = useMemo(() => searchQuery.trim().toLowerCase(), [searchQuery]);
-  const filteredSessions = useMemo(() => {
-    return normalizedQuery
-      ? sessions.filter((session) => session.title.toLowerCase().includes(normalizedQuery))
-      : sessions;
-  }, [sessions, normalizedQuery]);
-
-  const groupedSessions = useMemo(
-    () => groupSessionsByDate(filteredSessions, t),
-    [filteredSessions, t]
+  const projects = useMemo(
+    () => buildProjectSummaries(sessions, t('sidebar.defaultProject')),
+    [sessions, t]
   );
+  const activeProject = useMemo(
+    () => projects.find((project) => project.id === activeProjectId) || null,
+    [activeProjectId, projects]
+  );
+  const filteredSessions = useMemo(() => {
+    if (!normalizedQuery) return sessions;
+    return sessions.filter((session) => session.title.toLowerCase().includes(normalizedQuery));
+  }, [normalizedQuery, sessions]);
+  const filteredProjects = useMemo(() => {
+    if (!normalizedQuery) return projects;
+    return projects.filter((project) => {
+      const projectText = `${project.name} ${project.cwd || ''}`.toLowerCase();
+      const hasMatchingSession = getProjectSessions(sessions, project.id).some((session) =>
+        session.title.toLowerCase().includes(normalizedQuery)
+      );
+      return projectText.includes(normalizedQuery) || hasMatchingSession;
+    });
+  }, [normalizedQuery, projects, sessions]);
 
-  // Exit select mode when sidebar collapses
+  const visibleSessionIds = useMemo(() => filteredSessions.map((s) => s.id), [filteredSessions]);
+  const allVisibleSelected =
+    visibleSessionIds.length > 0 && visibleSessionIds.every((id) => selectedIds.has(id));
+
   useEffect(() => {
     if (sidebarCollapsed && isSelectMode) {
       setIsSelectMode(false);
@@ -76,7 +97,6 @@ export function Sidebar() {
     }
   }, [sidebarCollapsed, isSelectMode]);
 
-  // Escape key exits select mode
   useEffect(() => {
     if (!isSelectMode) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -90,7 +110,25 @@ export function Sidebar() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isSelectMode]);
 
-  // Reset selection when search query changes to avoid deleting hidden sessions
+  useEffect(() => {
+    if (!activeProjectId || activeProject || activeProjectId === DEFAULT_PROJECT_ID) return;
+    setActiveProject(null);
+    setActiveSession(null);
+    setIsSelectMode(false);
+    setSelectedIds(new Set());
+    setShowDeleteConfirm(false);
+  }, [activeProject, activeProjectId, setActiveProject, setActiveSession]);
+
+  useEffect(() => {
+    setExpandedProjectIds((prev) => {
+      const validIds = new Set(projects.map((project) => project.id));
+      const next = new Set(Array.from(prev).filter((id) => validIds.has(id)));
+      if (activeProjectId && validIds.has(activeProjectId)) next.add(activeProjectId);
+      if (next.size === 0 && projects[0]) next.add(projects[0].id);
+      return next;
+    });
+  }, [activeProjectId, projects]);
+
   useEffect(() => {
     if (isSelectMode) {
       setSelectedIds(new Set());
@@ -115,28 +153,17 @@ export function Sidebar() {
     });
   }, []);
 
-  const visibleSessionIds = useMemo(() => filteredSessions.map((s) => s.id), [filteredSessions]);
-
-  const allVisibleSelected =
-    visibleSessionIds.length > 0 && visibleSessionIds.every((id) => selectedIds.has(id));
-
   const toggleSelectAll = useCallback(() => {
     if (allVisibleSelected) {
-      // Deselect all visible, keep others
       setSelectedIds((prev) => {
         const next = new Set(prev);
-        for (const id of visibleSessionIds) {
-          next.delete(id);
-        }
+        for (const id of visibleSessionIds) next.delete(id);
         return next;
       });
     } else {
-      // Select all visible, keep existing selections
       setSelectedIds((prev) => {
         const next = new Set(prev);
-        for (const id of visibleSessionIds) {
-          next.add(id);
-        }
+        for (const id of visibleSessionIds) next.add(id);
         return next;
       });
     }
@@ -153,6 +180,10 @@ export function Sidebar() {
   const handleSessionClick = useCallback(
     async (sessionId: string) => {
       setShowSettings(false);
+      const session = sessions.find((item) => item.id === sessionId);
+      if (session) {
+        setActiveProject(getProjectIdForCwd(session.cwd));
+      }
 
       if (activeSessionId === sessionId) return;
 
@@ -196,6 +227,8 @@ export function Sidebar() {
       getSessionTraceSteps,
       isElectron,
       sessionStates,
+      sessions,
+      setActiveProject,
       setActiveSession,
       setMessages,
       setShowSettings,
@@ -204,9 +237,29 @@ export function Sidebar() {
     ]
   );
 
-  const handleNewSession = () => {
+  const handleNewSession = (projectId?: string) => {
+    if (projectId) {
+      setActiveProject(projectId);
+      setExpandedProjectIds((prev) => new Set(prev).add(projectId));
+    } else if (!activeProjectId) {
+      setActiveProject(null);
+    }
     setActiveSession(null);
     setShowSettings(false);
+  };
+
+  const handleProjectToggle = (projectId: string) => {
+    setActiveProject(projectId);
+    setShowSettings(false);
+    setExpandedProjectIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(projectId)) {
+        next.delete(projectId);
+      } else {
+        next.add(projectId);
+      }
+      return next;
+    });
   };
 
   const handleDeleteSession = (e: React.MouseEvent, sessionId: string) => {
@@ -241,7 +294,7 @@ export function Sidebar() {
             <ChevronRight className="w-4 h-4" />
           </button>
           <button
-            onClick={handleNewSession}
+            onClick={() => handleNewSession(activeProjectId || undefined)}
             className="w-9 h-9 rounded-2xl flex items-center justify-center bg-background hover:bg-surface-hover transition-colors text-text-primary border border-border-subtle"
             title={t('sidebar.newTask')}
           >
@@ -308,25 +361,25 @@ export function Sidebar() {
         </div>
 
         <button
-          onClick={handleNewSession}
+          onClick={() => handleNewSession(activeProjectId || undefined)}
           className="mt-3 w-full flex items-center gap-2 rounded-xl bg-background/60 px-3 py-2 text-left text-text-primary hover:bg-surface-hover transition-colors"
         >
           <Plus className="w-4 h-4 text-text-secondary flex-shrink-0" />
           <span className="text-[13px] font-medium">{t('sidebar.newTask')}</span>
         </button>
 
-        {sessions.length > 0 && (
-          <div className="mt-2 flex items-center gap-2">
-            <div className="relative flex-1 min-w-0">
-              <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder={t('sidebar.search')}
-                className="w-full rounded-xl border border-transparent bg-background/50 pl-9 pr-3 py-2 text-[13px] text-text-primary placeholder:text-text-muted focus:outline-none focus:border-border focus:bg-background transition-colors"
-              />
-            </div>
+        <div className="mt-2 flex items-center gap-2">
+          <div className="relative flex-1 min-w-0">
+            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder={t('sidebar.search')}
+              className="w-full rounded-xl border border-transparent bg-background/50 pl-9 pr-3 py-2 text-[13px] text-text-primary placeholder:text-text-muted focus:outline-none focus:border-border focus:bg-background transition-colors"
+            />
+          </div>
+          {sessions.length > 0 && (
             <button
               onClick={() => {
                 if (isSelectMode) {
@@ -344,80 +397,41 @@ export function Sidebar() {
             >
               <ListChecks className="w-3.5 h-3.5" />
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto px-3 py-4">
-        {groupedSessions.length === 0 ? (
+        {filteredProjects.length === 0 ? (
           <div className="px-3 py-6">
-            <p className="text-sm text-text-secondary">{t('sidebar.noTasks')}</p>
-            <p className="mt-1 text-xs leading-5 text-text-muted">{t('sidebar.noTasksHint')}</p>
+            <p className="text-sm text-text-secondary">{t('sidebar.noProjects')}</p>
+            <p className="mt-1 text-xs leading-5 text-text-muted">{t('sidebar.noProjectsHint')}</p>
           </div>
         ) : (
-          <div className="space-y-3">
-            {groupedSessions.map((group) => (
-              <section key={group.key}>
-                <div className="px-3 pb-2 text-[11px] font-medium tracking-[0.04em] text-text-muted">
-                  {group.label}
-                </div>
-                <div className="space-y-0.5">
-                  {group.sessions.map((session) => {
-                    const isActive = activeSessionId === session.id;
-                    const isSelected = selectedIds.has(session.id);
-                    return (
-                      <div
-                        key={session.id}
-                        onClick={() => {
-                          if (isSelectMode) {
-                            toggleSelectSession(session.id);
-                          } else {
-                            handleSessionClick(session.id);
-                          }
-                        }}
-                        onMouseEnter={() => setHoveredSession(session.id)}
-                        onMouseLeave={() => setHoveredSession(null)}
-                        className={`group relative cursor-pointer rounded-lg px-2.5 py-1.5 transition-colors ${
-                          isSelectMode && isSelected
-                            ? 'bg-accent-muted/20'
-                            : isActive && !isSelectMode
-                              ? 'bg-surface-hover/80'
-                              : 'hover:bg-surface-hover/60'
-                        }`}
-                      >
-                        <div className={`flex items-center gap-2 ${!isSelectMode ? 'pr-6' : ''}`}>
-                          {isSelectMode && (
-                            <div
-                              className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 transition-colors ${
-                                isSelected
-                                  ? 'bg-accent text-white'
-                                  : 'border border-border-muted bg-background'
-                              }`}
-                            >
-                              {isSelected && <Check className="w-2.5 h-2.5" />}
-                            </div>
-                          )}
-                          <div className="min-w-0 flex-1">
-                            <div className="text-[13px] font-medium leading-5 text-text-primary truncate">
-                              {session.title}
-                            </div>
-                          </div>
-                        </div>
-
-                        {!isSelectMode && hoveredSession === session.id && (
-                          <button
-                            onClick={(e) => handleDeleteSession(e, session.id)}
-                            className="absolute right-1.5 top-1/2 -translate-y-1/2 w-6 h-6 rounded-lg flex items-center justify-center text-text-muted hover:text-error hover:bg-surface-active transition-colors"
-                            title={t('common.delete')}
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </section>
+          <div className="space-y-2">
+            {filteredProjects.map((project) => (
+              <ProjectSection
+                key={project.id}
+                project={project}
+                sessions={getVisibleProjectSessions(project.id, filteredSessions, sessions)}
+                expanded={normalizedQuery ? true : expandedProjectIds.has(project.id)}
+                activeSessionId={activeSessionId}
+                hoveredSession={hoveredSession}
+                isSelectMode={isSelectMode}
+                selectedIds={selectedIds}
+                onToggleProject={handleProjectToggle}
+                onNewSession={handleNewSession}
+                onSessionClick={(session) => {
+                  if (isSelectMode) {
+                    toggleSelectSession(session.id);
+                  } else {
+                    handleSessionClick(session.id);
+                  }
+                }}
+                onHoverSession={setHoveredSession}
+                onDeleteSession={handleDeleteSession}
+                t={t}
+              />
             ))}
           </div>
         )}
@@ -509,34 +523,157 @@ export function Sidebar() {
   );
 }
 
-function groupSessionsByDate(sessions: Session[], t: (key: string) => string): SessionGroup[] {
-  const now = new Date();
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const startOfYesterday = startOfToday - 86_400_000;
-  const startOfPreviousWeek = startOfToday - 7 * 86_400_000;
+type ProjectSectionProps = {
+  project: ProjectSummary;
+  sessions: Session[];
+  expanded: boolean;
+  activeSessionId: string | null;
+  hoveredSession: string | null;
+  isSelectMode: boolean;
+  selectedIds: Set<string>;
+  onToggleProject: (projectId: string) => void;
+  onNewSession: (projectId: string) => void;
+  onSessionClick: (session: Session) => void;
+  onHoverSession: (sessionId: string | null) => void;
+  onDeleteSession: (e: React.MouseEvent, sessionId: string) => void;
+  t: Translate;
+};
 
-  const buckets: SessionGroup[] = [
-    { key: 'today', label: t('sidebar.today'), sessions: [] },
-    { key: 'yesterday', label: t('sidebar.yesterday'), sessions: [] },
-    { key: 'previousWeek', label: t('sidebar.previousWeek'), sessions: [] },
-    { key: 'older', label: t('sidebar.older'), sessions: [] },
-  ];
+function ProjectSection({
+  project,
+  sessions,
+  expanded,
+  activeSessionId,
+  hoveredSession,
+  isSelectMode,
+  selectedIds,
+  onToggleProject,
+  onNewSession,
+  onSessionClick,
+  onHoverSession,
+  onDeleteSession,
+  t,
+}: ProjectSectionProps) {
+  return (
+    <section>
+      <div className="group flex items-center gap-1">
+        <button
+          onClick={() => onToggleProject(project.id)}
+          className="min-w-0 flex-1 flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-text-secondary hover:text-text-primary hover:bg-surface-hover/60 transition-colors"
+          title={project.cwd || project.name}
+        >
+          {expanded ? (
+            <ChevronDown className="w-3.5 h-3.5 flex-shrink-0" />
+          ) : (
+            <ChevronRight className="w-3.5 h-3.5 flex-shrink-0" />
+          )}
+          <Folder className="w-3.5 h-3.5 flex-shrink-0" />
+          <span className="min-w-0 flex-1 text-[13px] font-medium truncate">{project.name}</span>
+          {project.runningCount > 0 && (
+            <span className="text-[10px] leading-4 px-1.5 rounded-full bg-accent-muted text-accent flex-shrink-0">
+              {project.runningCount}
+            </span>
+          )}
+        </button>
+        <button
+          onClick={() => onNewSession(project.id)}
+          className="w-7 h-7 rounded-lg flex items-center justify-center text-text-muted opacity-0 group-hover:opacity-100 hover:text-text-primary hover:bg-surface-hover transition-all"
+          title={t('sidebar.newTask')}
+        >
+          <Plus className="w-3.5 h-3.5" />
+        </button>
+      </div>
 
-  const sortedSessions = [...sessions].sort(
+      {expanded && (
+        <div className="mt-0.5 ml-7 space-y-0.5">
+          {sessions.length === 0 ? (
+            <div className="px-2 py-1 text-[12px] leading-5 text-text-muted">
+              {t('sidebar.noTasks')}
+            </div>
+          ) : (
+            sessions.map((session) => {
+              const isActive = activeSessionId === session.id;
+              const isSelected = selectedIds.has(session.id);
+              return (
+                <div
+                  key={session.id}
+                  onClick={() => onSessionClick(session)}
+                  onMouseEnter={() => onHoverSession(session.id)}
+                  onMouseLeave={() => onHoverSession(null)}
+                  className={`group/session relative cursor-pointer rounded-lg px-2 py-1.5 transition-colors ${
+                    isSelectMode && isSelected
+                      ? 'bg-accent-muted/20'
+                      : isActive && !isSelectMode
+                        ? 'bg-surface-hover/90'
+                        : 'hover:bg-surface-hover/60'
+                  }`}
+                >
+                  <div className={`flex items-center gap-2 ${!isSelectMode ? 'pr-7' : ''}`}>
+                    {isSelectMode && (
+                      <div
+                        className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 transition-colors ${
+                          isSelected
+                            ? 'bg-accent text-white'
+                            : 'border border-border-muted bg-background'
+                        }`}
+                      >
+                        {isSelected && <Check className="w-2.5 h-2.5" />}
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[13px] font-medium leading-5 text-text-primary truncate">
+                        {session.title}
+                      </div>
+                    </div>
+                    <span className="text-[11px] leading-5 text-text-muted flex-shrink-0">
+                      {formatSessionAge(session.updatedAt || session.createdAt, t)}
+                    </span>
+                  </div>
+
+                  {!isSelectMode && hoveredSession === session.id && (
+                    <button
+                      onClick={(e) => onDeleteSession(e, session.id)}
+                      className="absolute right-1.5 top-1/2 -translate-y-1/2 w-6 h-6 rounded-lg flex items-center justify-center text-text-muted hover:text-error hover:bg-surface-active transition-colors"
+                      title={t('common.delete')}
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function getVisibleProjectSessions(
+  projectId: string,
+  filteredSessions: Session[],
+  allSessions: Session[]
+): Session[] {
+  const source = filteredSessions.length === allSessions.length ? allSessions : filteredSessions;
+  return getProjectSessions(source, projectId).sort(
     (a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt)
   );
-  for (const session of sortedSessions) {
-    const timestamp = session.updatedAt || session.createdAt;
-    if (timestamp >= startOfToday) {
-      buckets[0].sessions.push(session);
-    } else if (timestamp >= startOfYesterday) {
-      buckets[1].sessions.push(session);
-    } else if (timestamp >= startOfPreviousWeek) {
-      buckets[2].sessions.push(session);
-    } else {
-      buckets[3].sessions.push(session);
-    }
-  }
+}
 
-  return buckets.filter((bucket) => bucket.sessions.length > 0);
+function formatSessionAge(timestamp: number, t: Translate): string {
+  const diff = Date.now() - timestamp;
+  const minute = 60_000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+
+  if (diff < hour) {
+    return t('sidebar.minutesAgo', { count: Math.max(1, Math.floor(diff / minute)) });
+  }
+  if (diff < day) {
+    return t('sidebar.hoursAgo', { count: Math.max(1, Math.floor(diff / hour)) });
+  }
+  if (diff < 30 * day) {
+    return t('sidebar.daysAgo', { count: Math.max(1, Math.floor(diff / day)) });
+  }
+  return t('sidebar.monthsAgo', { count: Math.max(1, Math.floor(diff / (30 * day))) });
 }

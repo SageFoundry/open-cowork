@@ -15,6 +15,7 @@ import type {
   TokenBudgetSnapshot,
 } from '../types';
 import { applySessionUpdate } from '../utils/session-update';
+import { getProjectIdForCwd } from '../utils/projects';
 
 export type GlobalNoticeType = 'info' | 'warning' | 'error' | 'success';
 export type GlobalNoticeAction = 'open_api_settings';
@@ -99,6 +100,7 @@ interface AppState {
   // Sessions
   sessions: Session[];
   activeSessionId: string | null;
+  activeProjectId: string | null;
 
   // Per-session state (messages, partials, turns, traces, etc.)
   sessionStates: Record<string, SessionState>;
@@ -148,6 +150,7 @@ interface AppState {
   removeSession: (sessionId: string) => void;
   removeSessions: (sessionIds: string[]) => void;
   setActiveSession: (sessionId: string | null) => void;
+  setActiveProject: (projectId: string | null) => void;
 
   addMessage: (sessionId: string, message: Message) => void;
   updateMessage: (sessionId: string, messageId: string, updates: Partial<Message>) => void;
@@ -252,6 +255,7 @@ export const useAppStore = create<AppState>((set) => ({
   // Initial state
   sessions: [],
   activeSessionId: null,
+  activeProjectId: null,
   sessionStates: {},
   isLoading: false,
   sidebarCollapsed: false,
@@ -318,6 +322,7 @@ export const useAppStore = create<AppState>((set) => ({
     }),
 
   setActiveSession: (sessionId) => set({ activeSessionId: sessionId }),
+  setActiveProject: (projectId) => set({ activeProjectId: projectId }),
 
   // Message actions
   addMessage: (sessionId, message) =>
@@ -677,6 +682,7 @@ if (typeof window !== 'undefined') {
     const store = useAppStore.getState();
     if (page === 'welcome') {
       store.setShowSettings(false);
+      store.setActiveProject(null);
       store.setActiveSession(null);
     } else if (page === 'settings') {
       store.setSettingsTab(tab || 'api');
@@ -685,7 +691,9 @@ if (typeof window !== 'undefined') {
       if (!sessionId || typeof sessionId !== 'string') return false;
       const exists = store.sessions.some((s) => s.id === sessionId);
       if (!exists) return false;
+      const session = store.sessions.find((s) => s.id === sessionId);
       store.setShowSettings(false);
+      store.setActiveProject(session ? getProjectIdForCwd(session.cwd) : null);
       store.setActiveSession(sessionId);
     }
     return true;
