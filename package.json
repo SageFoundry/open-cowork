@@ -1,6 +1,6 @@
 {
   "name": "open-cowork",
-  "version": "3.3.0",
+  "version": "3.3.1",
   "description": "Open-source AI agent desktop app for Windows & macOS — one-click install Claude Code, MCP tools, and Skills with sandbox isolation and multi-model support",
   "keywords": [
     "ai-agent",
@@ -24,13 +24,13 @@
     "slack",
     "multi-model"
   ],
-  "homepage": "https://github.com/OpenCoworkAI/open-cowork",
+  "homepage": "https://github.com/SageFoundry/open-cowork",
   "repository": {
     "type": "git",
-    "url": "https://github.com/OpenCoworkAI/open-cowork.git"
+    "url": "https://github.com/SageFoundry/open-cowork.git"
   },
   "bugs": {
-    "url": "https://github.com/OpenCoworkAI/open-cowork/issues"
+    "url": "https://github.com/SageFoundry/open-cowork/issues"
   },
   "engines": {
     "node": ">=22"

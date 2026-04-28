@@ -161,5 +161,5 @@ extraMetadata:
 
 publish:
   provider: github
-  owner: OpenCoworkAI
+  owner: SageFoundry
   repo: open-cowork
