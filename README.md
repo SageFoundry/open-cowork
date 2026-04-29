@@ -61,16 +61,16 @@ open-cowork/
 **macOS（推荐）**
 
 ```bash
-brew tap OpenCoworkAI/tap
+brew tap SageFoundry/tap
 brew install --cask --no-quarantine open-cowork
 ```
 
-**Windows / macOS 安装包**：从 [Releases](https://github.com/OpenCoworkAI/open-cowork/releases) 下载对应平台安装包。
+**Windows / macOS 安装包**：从 [Releases](https://github.com/SageFoundry/open-cowork/releases) 下载对应平台安装包。
 
 **源码运行**
 
 ```bash
-git clone https://github.com/OpenCoworkAI/open-cowork.git
+git clone https://github.com/SageFoundry/open-cowork.git
 cd open-cowork
 npm install
 npm run rebuild

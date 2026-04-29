@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.1] - 2026-04-28
+
+### Added
+
+- Codex-style project -> conversation sidebar: sessions are grouped by working directory, project groups expand inline, and new conversations launched from a project inherit that project's cwd.
+- Slack channel support for remote workflows, including Slack configuration UI and remote channel plumbing.
+- Context budgeting and compaction infrastructure, including renderer context usage updates and tests.
+- Windows environment doctor and runtime guidance, plus bundled `rg.exe` resolution for Windows hosts.
+- Project memory/session runtime groundwork for more reliable project-scoped context.
+
+### Changed
+
+- Refactored main-process IPC registration into focused handler modules for config, MCP, skills, sandbox, logs, remote, and schedule flows.
+- Consolidated duplicated path-containment logic into `src/shared/path-containment.ts`.
+- Centralized built-in/global/user skill path resolution in `src/main/skills/skill-paths.ts`.
+- Switched WSL/Lima sandbox agent builds to bundled outputs via `scripts/bundle-sandbox-agent.js`.
+- Improved chat message density, composer ergonomics, assistant turn grouping, thinking block display, and tool block rendering.
+- Updated release metadata and GitHub publishing target to `SageFoundry/open-cowork`.
+
+### Fixed
+
+- Stabilized OpenAI-compatible and DeepSeek thinking-mode payload replay across multi-turn conversations.
+- Fixed model context-window configuration persistence and config switching edge cases.
+- Improved session history restoration and assistant message aggregation by conversation turn.
+- Hardened Windows runtime/tool resolution, including PowerShell and Bash executor handling.
+- Removed noisy optional native dependency references from package metadata.
+
+### Release
+
+- Published Windows installer `Open-Cowork-3.3.1-win-x64.exe` with `.blockmap` and `latest.yml` for auto-update.
+- GitHub Release: https://github.com/SageFoundry/open-cowork/releases/tag/v3.3.1
+
 ## [3.3.0] - 2026-04-18
 
 First stable release of the 3.3.x series. Graduated from 9 beta releases with 30+ commits since beta.9.
@@ -124,10 +156,12 @@ First stable release of the 3.3.x series. Graduated from 9 beta releases with 30
 
 - Initial release of Open Cowork — open-source AI agent desktop app with one-click install for Windows and macOS
 
-[Unreleased]: https://github.com/OpenCoworkAI/open-cowork/compare/v3.3.0-beta.8...HEAD
-[3.3.0-beta.8]: https://github.com/OpenCoworkAI/open-cowork/compare/v3.2.0...v3.3.0-beta.8
-[3.2.0]: https://github.com/OpenCoworkAI/open-cowork/compare/v3.1.0...v3.2.0
-[3.1.0]: https://github.com/OpenCoworkAI/open-cowork/compare/v3.0.0...v3.1.0
-[3.0.0]: https://github.com/OpenCoworkAI/open-cowork/compare/v2.0.0...v3.0.0
-[2.0.0]: https://github.com/OpenCoworkAI/open-cowork/compare/v1.0...v2.0.0
-[1.0.0]: https://github.com/OpenCoworkAI/open-cowork/releases/tag/v1.0
+[Unreleased]: https://github.com/SageFoundry/open-cowork/compare/v3.3.1...HEAD
+[3.3.1]: https://github.com/SageFoundry/open-cowork/compare/2a282b1...v3.3.1
+[3.3.0]: https://github.com/SageFoundry/open-cowork/commit/2a282b1
+[3.3.0-beta.8]: https://github.com/SageFoundry/open-cowork/compare/v3.2.0...v3.3.0-beta.8
+[3.2.0]: https://github.com/SageFoundry/open-cowork/compare/v3.1.0...v3.2.0
+[3.1.0]: https://github.com/SageFoundry/open-cowork/compare/v3.0.0...v3.1.0
+[3.0.0]: https://github.com/SageFoundry/open-cowork/compare/v2.0.0...v3.0.0
+[2.0.0]: https://github.com/SageFoundry/open-cowork/compare/v1.0...v2.0.0
+[1.0.0]: https://github.com/SageFoundry/open-cowork/releases/tag/v1.0
