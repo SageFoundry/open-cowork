@@ -251,6 +251,44 @@ export function restoreOpenAIReasoningContentForPayload(
   return changed ? { ...typedPayload, messages } : payload;
 }
 
+export function disableThinkingForOpenAIPayload(payload: unknown): unknown {
+  if (!payload || typeof payload !== 'object') {
+    return payload;
+  }
+
+  const typedPayload = payload as Record<string, unknown>;
+  if (!Array.isArray(typedPayload.messages)) {
+    return { ...typedPayload, thinking: { type: 'disabled' } };
+  }
+
+  const messages = (typedPayload.messages as Array<Record<string, unknown>>).map((message) => {
+    if (message.role !== 'assistant' || !Array.isArray(message.content)) {
+      return message;
+    }
+
+    const content = message.content
+      .map((block) => {
+        if (!block || typeof block !== 'object') {
+          return block;
+        }
+        const typed = block as { type?: unknown; thinking?: unknown };
+        if (typed.type === 'thinking' && typeof typed.thinking === 'string') {
+          return { type: 'text', text: typed.thinking };
+        }
+        return block;
+      })
+      .filter(Boolean);
+
+    return content.length > 0 ? { ...message, content } : null;
+  }).filter(Boolean) as Array<Record<string, unknown>>;
+
+  return {
+    ...typedPayload,
+    thinking: { type: 'disabled' },
+    messages,
+  };
+}
+
 export function disableThinkingForAnthropicPayload(payload: unknown): unknown {
   if (!payload || typeof payload !== 'object') {
     return payload;

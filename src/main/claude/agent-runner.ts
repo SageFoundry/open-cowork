@@ -20,6 +20,7 @@ import {
   type AgentSession as PiAgentSession,
   type ToolDefinition,
 } from '@mariozechner/pi-coding-agent';
+import type { ImageContent as PiImageContent } from '@mariozechner/pi-ai';
 import { Type, type TSchema } from '@sinclair/typebox';
 import { getSharedAuthStorage, ModelRegistry } from './shared-auth';
 import type { Session, Message, TraceStep, ServerEvent, ContentBlock } from '../../renderer/types';
@@ -73,6 +74,7 @@ import {
 } from './tool-result-utils';
 import {
   disableThinkingForAnthropicPayload,
+  disableThinkingForOpenAIPayload,
   restoreOpenAIReasoningContentForPayload,
   restoreUnsignedThinkingBlocksForAnthropicPayload,
 } from './thinking-compat';
@@ -1722,8 +1724,20 @@ ${hints.join('\n')}
 
       const hasImages =
         lastUserMessage?.content.some((c) => (c as { type?: string }).type === 'image') || false;
-      if (hasImages) {
-        log('[ClaudeAgentRunner] User message contains images');
+      let piImages: PiImageContent[] | undefined;
+      if (hasImages && lastUserMessage) {
+        const rawImages = lastUserMessage.content.filter(
+          (c) => (c as { type?: string }).type === 'image'
+        ) as Array<{
+          type: 'image';
+          source: { type: string; media_type: string; data: string };
+        }>;
+        piImages = rawImages.map((img) => ({
+          type: 'image' as const,
+          data: img.source.data,
+          mimeType: img.source.media_type || 'image/png',
+        }));
+        log(`[ClaudeAgentRunner] Extracted ${piImages.length} image(s) for pi-ai prompt`);
       }
 
       logTiming('before pi-ai model resolution', runStartTime);
@@ -2573,7 +2587,7 @@ Tool routing:
             if (!enableThinking) {
               return (usesAnthropicMessagesProtocol
                 ? disableThinkingForAnthropicPayload(nextPayload)
-                : nextPayload) as Record<string, unknown>;
+                : disableThinkingForOpenAIPayload(nextPayload)) as Record<string, unknown>;
             }
             let patchedPayload: unknown = nextPayload;
             if (usesAnthropicMessagesProtocol) {
@@ -2867,10 +2881,9 @@ Tool routing:
                       input: block.arguments,
                     });
                   } else if (block.type === 'thinking') {
-                    if (!enableThinking) {
-                      continue;
-                    }
-                    // Include thinking blocks in the final message for UI display
+                    // Always include thinking blocks from the model response —
+                    // if the model natively produces reasoning, show it to the user.
+                    // enableThinking only controls whether we REQUEST thinking from the API.
                     contentBlocks.push({
                       type: 'thinking',
                       thinking: block.thinking,
@@ -3059,7 +3072,9 @@ Tool routing:
             })
           );
         }
-        const promptResult = await piSession.prompt(contextualPrompt);
+        const promptResult = await piSession.prompt(contextualPrompt, {
+          images: piImages,
+        });
         log(
           '[ClaudeAgentRunner] prompt() returned:',
           JSON.stringify(promptResult ?? 'void').substring(0, 1000)
