@@ -27,6 +27,7 @@ Open Cowork 将 Claude Code、OpenAI、Gemini、DeepSeek 等 AI 模型封装为�
 open-cowork/
 ├── src/
 │   ├── main/                  # Electron 主进程 (Node.js)
+│   │   ├── background/        # 后台任务管理 (dev server 等长时进程)
 │   │   ├── claude/            # Agent 执行引擎
 │   │   ├── config/            # 配置持久化
 │   │   ├── db/                # SQLite 数据层

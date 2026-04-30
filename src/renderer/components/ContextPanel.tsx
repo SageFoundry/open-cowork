@@ -1,7 +1,8 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAppStore } from '../store';
 import { resolveArtifactPath } from '../utils/artifact-path';
+import { getProjectIdForCwd } from '../utils/projects';
 import {
   extractFilePathFromToolInput,
   extractFilePathFromToolOutput,
@@ -36,8 +37,11 @@ import {
   Cpu,
   Copy,
   Layers,
+  Terminal,
+  Square,
+  ExternalLink,
 } from 'lucide-react';
-import type { TraceStep, MCPServerInfo } from '../types';
+import type { TraceStep, MCPServerInfo, BackgroundTask } from '../types';
 
 const EMPTY_STEPS: TraceStep[] = [];
 
@@ -46,14 +50,19 @@ export function ContextPanel() {
   const activeSessionId = useAppStore((s) => s.activeSessionId);
   const sessions = useAppStore((s) => s.sessions);
   const sessionStates = useAppStore((s) => s.sessionStates);
+  const backgroundTasks = useAppStore((s) => s.backgroundTasks);
+  const backgroundTaskLogs = useAppStore((s) => s.backgroundTaskLogs);
   const appConfig = useAppStore((s) => s.appConfig);
   const contextPanelCollapsed = useAppStore((s) => s.contextPanelCollapsed);
   const toggleContextPanel = useAppStore((s) => s.toggleContextPanel);
   const workingDir = useAppStore((s) => s.workingDir);
   const setGlobalNotice = useAppStore((s) => s.setGlobalNotice);
-  const { getMCPServers, changeWorkingDir, compactSession } = useIPC();
+  const { getMCPServers, changeWorkingDir, compactSession, getBackgroundTaskLogTail, stopBackgroundTask } = useIPC();
   const [artifactsOpen, setArtifactsOpen] = useState(true);
+  const [backgroundTasksOpen, setBackgroundTasksOpen] = useState(true);
   const [expandedConnector, setExpandedConnector] = useState<string | null>(null);
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
+  const [loadingTaskId, setLoadingTaskId] = useState<string | null>(null);
   const [mcpServers, setMcpServers] = useState<MCPServerInfo[]>([]);
   const [copiedPath, setCopiedPath] = useState(false);
   const [isChangingDir, setIsChangingDir] = useState(false);
@@ -131,6 +140,7 @@ export function ContextPanel() {
 
   const activeSession = activeSessionId ? sessions.find((s) => s.id === activeSessionId) : null;
   const currentWorkingDir = activeSession?.cwd || workingDir;
+  const activeProjectId = getProjectIdForCwd(currentWorkingDir);
   const { displayArtifactSteps } = getArtifactSteps(steps);
   const canShowItemInFolder =
     typeof window !== 'undefined' && !!window.electronAPI?.showItemInFolder;
@@ -177,6 +187,23 @@ export function ContextPanel() {
   const completedStepCount = useMemo(
     () => steps.reduce((n, s) => n + (s.status === 'completed' ? 1 : 0), 0),
     [steps]
+  );
+  const isActiveBackgroundTask = useCallback(
+    (task: BackgroundTask) =>
+      task.status === 'queued' ||
+      task.status === 'starting' ||
+      task.status === 'running' ||
+      task.status === 'stopping',
+    []
+  );
+  const projectBackgroundTasks = useMemo(() => {
+    return backgroundTasks.filter(
+      (task) => getProjectIdForCwd(task.cwd) === activeProjectId && isActiveBackgroundTask(task)
+    );
+  }, [activeProjectId, backgroundTasks, isActiveBackgroundTask]);
+  const runningProjectTaskCount = useMemo(
+    () => projectBackgroundTasks.length,
+    [projectBackgroundTasks]
   );
 
   useEffect(() => {
@@ -283,6 +310,38 @@ export function ContextPanel() {
     const interval = setInterval(loadMCPServers, 30000);
     return () => clearInterval(interval);
   }, [contextPanelCollapsed, getMCPServers]);
+
+  const handleTaskToggle = useCallback(
+    async (taskId: string) => {
+      const nextTaskId = expandedTaskId === taskId ? null : taskId;
+      setExpandedTaskId(nextTaskId);
+      if (!nextTaskId || backgroundTaskLogs[nextTaskId]) {
+        return;
+      }
+      setLoadingTaskId(nextTaskId);
+      try {
+        await getBackgroundTaskLogTail(nextTaskId);
+      } finally {
+        setLoadingTaskId((current) => (current === nextTaskId ? null : current));
+      }
+    },
+    [backgroundTaskLogs, expandedTaskId, getBackgroundTaskLogTail]
+  );
+
+  const handleOpenTaskLog = useCallback(async (taskId: string) => {
+    await window.electronAPI.tasks.openLog(taskId);
+  }, []);
+
+  const handleOpenTaskUrl = useCallback(async (taskId: string) => {
+    await window.electronAPI.tasks.openDetectedUrl(taskId);
+  }, []);
+
+  const handleStopTask = useCallback(
+    async (taskId: string) => {
+      await stopBackgroundTask(taskId);
+    },
+    [stopBackgroundTask]
+  );
 
   if (contextPanelCollapsed) {
     return (
@@ -433,6 +492,131 @@ export function ContextPanel() {
           )}
         </div>
       )}
+
+      {/* Background Tasks Section */}
+      <div className="border-b border-border-muted">
+        <button
+          onClick={() => setBackgroundTasksOpen(!backgroundTasksOpen)}
+          className="w-full px-4 py-2.5 flex items-center justify-between hover:bg-surface-hover transition-colors"
+        >
+          <span className="text-xs font-medium text-text-muted uppercase tracking-wider flex items-center gap-2">
+            <Terminal className="w-3.5 h-3.5" />
+            {t('context.backgroundTasks')}
+            {runningProjectTaskCount > 0 && (
+              <span className="text-[10px] leading-4 px-1.5 rounded-full bg-accent-muted text-accent">
+                {runningProjectTaskCount}
+              </span>
+            )}
+          </span>
+          {backgroundTasksOpen ? (
+            <ChevronUp className="w-3.5 h-3.5 text-text-muted" />
+          ) : (
+            <ChevronDown className="w-3.5 h-3.5 text-text-muted" />
+          )}
+        </button>
+
+        {backgroundTasksOpen && (
+          <div className="pb-2 max-h-72 overflow-y-auto">
+            {projectBackgroundTasks.length === 0 ? (
+              <div className="flex items-center gap-2 px-4 py-2 text-xs text-text-muted">
+                <Terminal className="w-3.5 h-3.5 shrink-0" />
+                <span>{t('context.noBackgroundTasks')}</span>
+              </div>
+            ) : (
+              <div className="space-y-2 px-3 pb-2">
+                {projectBackgroundTasks.map((task) => {
+                  const isExpanded = expandedTaskId === task.id;
+                  const taskLog = backgroundTaskLogs[task.id] || '';
+                  const isRunning = task.status === 'running' || task.status === 'starting';
+                  return (
+                    <div
+                      key={task.id}
+                      className="rounded-xl border border-border-subtle bg-background/40 overflow-hidden"
+                    >
+                      <button
+                        onClick={() => void handleTaskToggle(task.id)}
+                        className="w-full px-3 py-2.5 text-left hover:bg-surface-hover/60 transition-colors"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                              task.status === 'running'
+                                ? 'bg-emerald-500'
+                                : task.status === 'starting'
+                                  ? 'bg-amber-500'
+                                  : task.status === 'failed'
+                                    ? 'bg-red-500'
+                                    : task.status === 'lost'
+                                      ? 'bg-orange-500'
+                                      : 'bg-text-muted/60'
+                            }`}
+                          />
+                          <span className="min-w-0 flex-1 text-[13px] font-medium text-text-primary truncate">
+                            {task.title}
+                          </span>
+                          <span className="text-[11px] text-text-muted flex-shrink-0">
+                            {formatTaskDuration(task)}
+                          </span>
+                        </div>
+                        <div className="mt-1 text-[11px] text-text-muted truncate">
+                          {formatTaskStatus(task)}
+                        </div>
+                        {task.detectedUrl && (
+                          <div className="mt-1 text-[11px] text-accent truncate">
+                            {task.detectedUrl}
+                          </div>
+                        )}
+                      </button>
+
+                      {isExpanded && (
+                        <div className="border-t border-border-subtle px-3 py-3 space-y-2.5 bg-background/55">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {task.detectedUrl && (
+                              <button
+                                onClick={() => void handleOpenTaskUrl(task.id)}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
+                              >
+                                <ExternalLink className="w-3 h-3" />
+                                {t('context.openUrl')}
+                              </button>
+                            )}
+                            <button
+                              onClick={() => void handleOpenTaskLog(task.id)}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
+                            >
+                              <FileText className="w-3 h-3" />
+                              {t('context.openLog')}
+                            </button>
+                            {isRunning && (
+                              <button
+                                onClick={() => void handleStopTask(task.id)}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] text-error hover:bg-error/10 transition-colors"
+                              >
+                                <Square className="w-3 h-3 fill-current" />
+                                {t('context.stopTask')}
+                              </button>
+                            )}
+                          </div>
+                          <div className="rounded-lg border border-border-subtle bg-surface/70 p-2.5">
+                            <div className="text-[11px] text-text-muted mb-1.5">
+                              {t('context.logTail')}
+                            </div>
+                            <pre className="max-h-44 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-5 text-text-secondary font-mono">
+                              {loadingTaskId === task.id
+                                ? t('context.loadingLogs')
+                                : taskLog || t('context.noLogsYet')}
+                            </pre>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Artifacts Section */}
       <div className="border-b border-border-muted">
@@ -748,4 +932,40 @@ function formatTokenCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
+}
+
+function formatTaskStatus(task: BackgroundTask): string {
+  switch (task.status) {
+    case 'queued':
+      return 'Queued';
+    case 'starting':
+      return 'Starting';
+    case 'running':
+      return 'Running';
+    case 'stopping':
+      return 'Stopping';
+    case 'completed':
+      return 'Completed';
+    case 'failed':
+      return 'Failed';
+    case 'lost':
+      return 'Lost';
+    default:
+      return task.status;
+  }
+}
+
+function formatTaskDuration(task: BackgroundTask): string {
+  const end = task.endedAt ?? Date.now();
+  const diff = Math.max(0, end - task.startedAt);
+  const minute = 60_000;
+  const hour = 60 * minute;
+
+  if (diff < minute) {
+    return `${Math.max(1, Math.floor(diff / 1000))}s`;
+  }
+  if (diff < hour) {
+    return `${Math.floor(diff / minute)}m`;
+  }
+  return `${Math.floor(diff / hour)}h`;
 }

@@ -76,6 +76,8 @@ import {
 } from '../context/context-compaction';
 import { ProjectMemoryService } from '../memory/project-memory';
 import { resolveKnownModelSpecs } from '../claude/pi-model-resolution';
+import type { SkillsManager } from '../skills/skills-manager';
+import type { BackgroundTaskService } from '../background/background-task-service';
 
 interface AgentRunner {
   run(session: Session, prompt: string, existingMessages: Message[]): Promise<void>;
@@ -114,6 +116,8 @@ export class SessionManager {
   private agentRunner!: AgentRunner;
   private mcpManager: MCPManager;
   private pluginRuntimeService?: PluginRuntimeService;
+  private skillsManager?: SkillsManager;
+  private backgroundTaskService?: BackgroundTaskService;
   private activeSessions: Map<string, AbortController> = new Map();
   private promptQueues: Map<
     string,
@@ -135,7 +139,9 @@ export class SessionManager {
   constructor(
     db: DatabaseInstance,
     sendToRenderer: (event: ServerEvent) => void,
-    pluginRuntimeService?: PluginRuntimeService
+    pluginRuntimeService?: PluginRuntimeService,
+    skillsManager?: SkillsManager,
+    backgroundTaskService?: BackgroundTaskService
   ) {
     this.db = db;
     this.sendToRenderer = (event) => {
@@ -150,6 +156,8 @@ export class SessionManager {
     this.pathResolver = new PathResolver();
     this.sandboxAdapter = getSandboxAdapter();
     this.pluginRuntimeService = pluginRuntimeService;
+    this.skillsManager = skillsManager;
+    this.backgroundTaskService = backgroundTaskService;
 
     // Initialize MCP Manager
     this.mcpManager = new MCPManager();
@@ -180,7 +188,9 @@ export class SessionManager {
       },
       this.pathResolver,
       this.mcpManager,
-      this.pluginRuntimeService
+      this.pluginRuntimeService,
+      this.skillsManager,
+      this.backgroundTaskService
     );
   }
 

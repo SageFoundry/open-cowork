@@ -54,6 +54,14 @@ export interface DatabaseInstance {
     delete: (id: string) => void;
   };
 
+  backgroundTasks: {
+    create: (task: BackgroundTaskRow) => void;
+    update: (id: string, updates: Partial<BackgroundTaskRow>) => void;
+    get: (id: string) => BackgroundTaskRow | undefined;
+    getAll: () => BackgroundTaskRow[];
+    delete: (id: string) => void;
+  };
+
   // For compatibility with old interface
   prepare: (sql: string) => Database.Statement;
   exec: (sql: string) => void;
@@ -115,6 +123,24 @@ export interface ScheduledTaskRow {
   last_run_at: number | null;
   last_run_session_id: string | null;
   last_error: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface BackgroundTaskRow {
+  id: string;
+  title: string;
+  command: string;
+  args_json: string;
+  cwd: string;
+  status: string;
+  pid: number | null;
+  started_at: number;
+  ended_at: number | null;
+  exit_code: number | null;
+  log_path: string;
+  detected_url: string | null;
+  source_session_id: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -385,6 +411,34 @@ function initializeSchema(database: Database.Database): void {
     ON compaction_snapshots(session_id, created_at DESC)
   `);
 
+    database.exec(`
+    CREATE TABLE IF NOT EXISTS background_tasks (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      command TEXT NOT NULL,
+      args_json TEXT NOT NULL DEFAULT '[]',
+      cwd TEXT NOT NULL,
+      status TEXT NOT NULL,
+      pid INTEGER,
+      started_at INTEGER NOT NULL,
+      ended_at INTEGER,
+      exit_code INTEGER,
+      log_path TEXT NOT NULL,
+      detected_url TEXT,
+      source_session_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `);
+    ensureColumn(database, 'background_tasks', 'args_json', "args_json TEXT NOT NULL DEFAULT '[]'");
+    ensureColumn(database, 'background_tasks', 'detected_url', 'detected_url TEXT');
+    ensureColumn(database, 'background_tasks', 'source_session_id', 'source_session_id TEXT');
+
+    database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_background_tasks_updated
+    ON background_tasks(updated_at DESC)
+  `);
+
     log('[Database] Schema initialized');
   } catch (error) {
     logError('[Database] Schema initialization failed:', error);
@@ -570,6 +624,25 @@ export function initDatabase(): DatabaseInstance {
 
   const deleteScheduledTaskStmt = rawDb.prepare(`
     DELETE FROM scheduled_tasks WHERE id = ?
+  `);
+
+  const insertBackgroundTask = rawDb.prepare(`
+    INSERT OR REPLACE INTO background_tasks (
+      id, title, command, args_json, cwd, status, pid, started_at, ended_at, exit_code, log_path, detected_url, source_session_id, created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const getBackgroundTaskStmt = rawDb.prepare(`
+    SELECT * FROM background_tasks WHERE id = ?
+  `);
+
+  const getAllBackgroundTasksStmt = rawDb.prepare(`
+    SELECT * FROM background_tasks ORDER BY updated_at DESC
+  `);
+
+  const deleteBackgroundTaskStmt = rawDb.prepare(`
+    DELETE FROM background_tasks WHERE id = ?
   `);
 
   db = {
@@ -803,6 +876,62 @@ export function initDatabase(): DatabaseInstance {
 
       delete: (id: string) => {
         deleteScheduledTaskStmt.run(id);
+      },
+    },
+
+    backgroundTasks: {
+      create: (task: BackgroundTaskRow) => {
+        insertBackgroundTask.run(
+          task.id,
+          task.title,
+          task.command,
+          task.args_json,
+          task.cwd,
+          task.status,
+          task.pid,
+          task.started_at,
+          task.ended_at,
+          task.exit_code,
+          task.log_path,
+          task.detected_url,
+          task.source_session_id,
+          task.created_at,
+          task.updated_at
+        );
+      },
+
+      update: (id: string, updates: Partial<BackgroundTaskRow>) => {
+        const setClauses: string[] = [];
+        const values: unknown[] = [];
+
+        for (const [key, value] of Object.entries(updates)) {
+          if (value !== undefined) {
+            validateIdentifier(key);
+            setClauses.push(`${key} = ?`);
+            values.push(value);
+          }
+        }
+
+        if (setClauses.length === 0) return;
+
+        setClauses.push('updated_at = ?');
+        values.push(Date.now());
+        values.push(id);
+
+        const sql = `UPDATE background_tasks SET ${setClauses.join(', ')} WHERE id = ?`;
+        rawDb.prepare(sql).run(...values);
+      },
+
+      get: (id: string): BackgroundTaskRow | undefined => {
+        return getBackgroundTaskStmt.get(id) as BackgroundTaskRow | undefined;
+      },
+
+      getAll: (): BackgroundTaskRow[] => {
+        return getAllBackgroundTasksStmt.all() as BackgroundTaskRow[];
+      },
+
+      delete: (id: string) => {
+        deleteBackgroundTaskStmt.run(id);
       },
     },
 

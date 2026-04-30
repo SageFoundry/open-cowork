@@ -54,6 +54,8 @@ import { registerSandboxHandlers } from './ipc/sandbox-handlers';
 import { registerLogHandlers } from './ipc/log-handlers';
 import { registerRemoteHandlers } from './ipc/remote-handlers';
 import { registerScheduleHandlers } from './ipc/schedule-handlers';
+import { registerTasksHandlers } from './ipc/tasks-handlers';
+import { BackgroundTaskService } from './background/background-task-service';
 
 // Current working directory used for new sessions and relative path resolution.
 let currentWorkingDir: string | null = null;
@@ -82,6 +84,7 @@ let sessionManager: SessionManager | null = null;
 let skillsManager: SkillsManager | null = null;
 let pluginRuntimeService: PluginRuntimeService | null = null;
 let scheduledTaskManager: ScheduledTaskManager | null = null;
+let backgroundTaskService: BackgroundTaskService | null = null;
 
 function sanitizeDiagnosticBaseUrl(value: string | undefined): string | null {
   if (!value) {
@@ -800,9 +803,7 @@ app
 
     pluginRuntimeService = new PluginRuntimeService(new PluginCatalogService());
 
-    // Initialize session manager before creating an interactive window.
-    // This avoids session.start racing the startup path and hitting a null manager.
-    sessionManager = new SessionManager(db, sendToRenderer, pluginRuntimeService);
+    // Initialize skills manager first — it's needed by SessionManager for skill path resolution.
     skillsManager = new SkillsManager(db, {
       getConfiguredGlobalSkillsPath: () => configStore.get('globalSkillsPath') || '',
       setConfiguredGlobalSkillsPath: (nextPath: string) => {
@@ -816,6 +817,18 @@ app
         payload: event,
       });
     });
+
+    backgroundTaskService = new BackgroundTaskService(db, sendToRenderer);
+    backgroundTaskService.initialize();
+    // Initialize session manager after skills manager — it needs skillsManager for skill path resolution.
+    sessionManager = new SessionManager(
+      db,
+      sendToRenderer,
+      pluginRuntimeService,
+      skillsManager,
+      backgroundTaskService
+    );
+
     // pi-ai handles model routing natively — no proxy warmup needed
 
     // macOS: application menu, dock menu, tray icon
@@ -1006,6 +1019,7 @@ async function cleanupSandboxResources(): Promise<void> {
   stopNavServer();
   skillsManager?.stopStorageMonitoring();
   scheduledTaskManager?.stop();
+  backgroundTaskService?.shutdown();
   tray?.destroy();
   tray = null;
 
@@ -1459,6 +1473,9 @@ registerScheduleHandlers({
   getScheduledTaskManager: () => scheduledTaskManager,
   getWorkspacePathUnsupportedReason,
   resolveScheduledTaskTitle,
+});
+registerTasksHandlers({
+  getBackgroundTaskService: () => backgroundTaskService,
 });
 async function handleClientEvent(event: ClientEvent): Promise<unknown> {
   // Check if configured before starting sessions

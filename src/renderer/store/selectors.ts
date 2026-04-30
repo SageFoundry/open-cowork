@@ -286,6 +286,14 @@ export function useWorkingDir(): string | null {
   return useAppStore((s) => s.workingDir);
 }
 
+export function useBackgroundTasks() {
+  return useAppStore((s) => s.backgroundTasks);
+}
+
+export function useBackgroundTaskLog(taskId: string | null): string {
+  return useAppStore((s) => (taskId ? s.backgroundTaskLogs[taskId] || '' : ''));
+}
+
 /** Returns pending permission and sudo-password requests. */
 export function usePendingDialogs() {
   return useAppStore(

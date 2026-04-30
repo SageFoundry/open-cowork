@@ -1,3 +1,3 @@
 export interface SkillsAdapter {
-  getSkillPaths(): string[];
+  getSkillPaths(projectPath?: string): string[];
 }

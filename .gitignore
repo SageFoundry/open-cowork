@@ -102,6 +102,12 @@ DEV_LOG.md
 
 # Temp directories
 .tmp/
+tmp/
+.cowork-user-data/
+.codex-runtime/
+
+# Windows reserved name artifacts
+nul
 
 # Screenshots (debug/review)
 *.png

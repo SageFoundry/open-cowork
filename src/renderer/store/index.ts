@@ -13,6 +13,7 @@ import type {
   SessionCompactionInfo,
   SessionCompactionState,
   TokenBudgetSnapshot,
+  BackgroundTask,
 } from '../types';
 import { applySessionUpdate } from '../utils/session-update';
 import { getProjectIdForCwd } from '../utils/projects';
@@ -131,6 +132,10 @@ interface AppState {
   // Working directory
   workingDir: string | null;
 
+  // Background tasks
+  backgroundTasks: BackgroundTask[];
+  backgroundTaskLogs: Record<string, string>;
+
   // Sandbox setup
   sandboxSetupProgress: SandboxSetupProgress | null;
   isSandboxSetupComplete: boolean;
@@ -204,6 +209,12 @@ interface AppState {
   // Working directory actions
   setWorkingDir: (path: string | null) => void;
 
+  // Background task actions
+  setBackgroundTasks: (tasks: BackgroundTask[]) => void;
+  upsertBackgroundTask: (task: BackgroundTask) => void;
+  appendBackgroundTaskLog: (taskId: string, text: string) => void;
+  setBackgroundTaskLog: (taskId: string, text: string) => void;
+
   // Sandbox setup actions
   setSandboxSetupProgress: (progress: SandboxSetupProgress | null) => void;
   setSandboxSetupComplete: (complete: boolean) => void;
@@ -271,6 +282,8 @@ export const useAppStore = create<AppState>((set) => ({
   hasSeenInitialConfigStatus: false,
   globalNotice: null,
   workingDir: null,
+  backgroundTasks: [],
+  backgroundTaskLogs: {},
   sandboxSetupProgress: null,
   isSandboxSetupComplete: false,
   sandboxSyncStatus: null,
@@ -633,6 +646,43 @@ export const useAppStore = create<AppState>((set) => ({
 
   // Working directory actions
   setWorkingDir: (path) => set({ workingDir: path }),
+
+  // Background task actions
+  setBackgroundTasks: (tasks) => set({ backgroundTasks: tasks }),
+  upsertBackgroundTask: (task) =>
+    set((state) => {
+      const existingIndex = state.backgroundTasks.findIndex((item) => item.id === task.id);
+      if (existingIndex === -1) {
+        return {
+          backgroundTasks: [task, ...state.backgroundTasks].sort(
+            (left, right) => right.updatedAt - left.updatedAt
+          ),
+        };
+      }
+
+      const nextTasks = state.backgroundTasks.map((item) => (item.id === task.id ? task : item));
+      nextTasks.sort((left, right) => right.updatedAt - left.updatedAt);
+      return { backgroundTasks: nextTasks };
+    }),
+  appendBackgroundTaskLog: (taskId, text) =>
+    set((state) => {
+      const previous = state.backgroundTaskLogs[taskId] || '';
+      const next = `${previous}${text}`;
+      const capped = next.length > 20000 ? next.slice(-20000) : next;
+      return {
+        backgroundTaskLogs: {
+          ...state.backgroundTaskLogs,
+          [taskId]: capped,
+        },
+      };
+    }),
+  setBackgroundTaskLog: (taskId, text) =>
+    set((state) => ({
+      backgroundTaskLogs: {
+        ...state.backgroundTaskLogs,
+        [taskId]: text,
+      },
+    })),
 
   // Sandbox setup actions
   setSandboxSetupProgress: (progress) => set({ sandboxSetupProgress: progress }),

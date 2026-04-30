@@ -50,6 +50,7 @@ import { extractArtifactsFromText, buildArtifactTraceSteps } from '../utils/arti
 import { getDefaultShell } from '../utils/shell-resolver';
 import { PluginRuntimeService } from '../skills/plugin-runtime-service';
 import type { SkillsAdapter } from '../skills/skills-adapter';
+import type { BackgroundTaskService } from '../background/background-task-service';
 import { configStore } from '../config/config-store';
 import { normalizeOpenAICompatibleBaseUrl } from '../config/auth-utils';
 import { resolveMessageEndPayload, toUserFacingErrorText } from './agent-runner-message-end';
@@ -696,6 +697,7 @@ export class ClaudeAgentRunner {
   // @ts-expect-error stored for future plugin support
   private _pluginRuntimeService?: PluginRuntimeService;
   private _skillsAdapter?: SkillsAdapter;
+  private backgroundTaskService?: BackgroundTaskService;
   private projectMemoryService = new ProjectMemoryService();
   private activeControllers: Map<string, AbortController> = new Map();
   private piSessions: Map<string, CachedPiSession> = new Map();
@@ -783,7 +785,7 @@ ${hints.join('\n')}
   }
 
   /** Fallback skill path resolution when SkillsAdapter is not provided. */
-  private legacySkillPaths(): string[] {
+  private legacySkillPaths(projectPath?: string): string[] {
     const paths: string[] = [];
     const builtin = resolveBuiltinSkillsPath({
       onFound: (skillsPath) => log('[ClaudeAgentRunner] Found built-in skills at:', skillsPath),
@@ -792,6 +794,20 @@ ${hints.join('\n')}
     if (builtin && fs.existsSync(builtin)) paths.push(builtin);
     const global = this.getConfiguredGlobalSkillsDir();
     if (global && fs.existsSync(global)) paths.push(global);
+
+    // Project-level skills
+    if (projectPath) {
+      const projectSkillsDirs = [
+        path.join(projectPath, '.skills'),
+        path.join(projectPath, 'skills'),
+      ];
+      for (const dir of projectSkillsDirs) {
+        if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
+          paths.push(dir);
+        }
+      }
+    }
+
     return paths;
   }
 
@@ -846,7 +862,8 @@ ${hints.join('\n')}
     pathResolver: PathResolver,
     mcpManager?: MCPManager,
     pluginRuntimeService?: PluginRuntimeService,
-    skillsAdapter?: SkillsAdapter
+    skillsAdapter?: SkillsAdapter,
+    backgroundTaskService?: BackgroundTaskService
   ) {
     this.sendToRenderer = options.sendToRenderer;
     this.saveMessage = options.saveMessage;
@@ -855,6 +872,7 @@ ${hints.join('\n')}
     this.mcpManager = mcpManager;
     this._pluginRuntimeService = pluginRuntimeService;
     this._skillsAdapter = skillsAdapter;
+    this.backgroundTaskService = backgroundTaskService;
 
     log('[ClaudeAgentRunner] Initialized with pi-coding-agent SDK');
     log('[ClaudeAgentRunner] Skills enabled: settingSources=[user, project], Skill tool enabled');
@@ -870,6 +888,49 @@ ${hints.join('\n')}
     return /\bsudo\b/.test(command);
   }
 
+  private static hasBackgroundShellSyntax(command: string): boolean {
+    const normalized = command.replace(/\r\n?/g, '\n');
+    return (
+      /(?:^|[\n;\s])&(?=$|[\n;\s])/.test(normalized) ||
+      /\bnohup\b/i.test(normalized) ||
+      /\bdisown\b/i.test(normalized) ||
+      /\bpm2\s+start\b/i.test(normalized) ||
+      /\bstart\s+\/b\b/i.test(normalized) ||
+      /\bstart-process\b/i.test(normalized)
+    );
+  }
+
+  private static splitBackgroundCommand(command: string): {
+    backgroundCommand: string;
+    followupCommand: string | null;
+  } | null {
+    const normalized = command.replace(/\r\n?/g, '\n').trim();
+    const ampIndex = normalized.indexOf('2>&1 &');
+    if (ampIndex !== -1) {
+      const backgroundCommand = normalized.slice(0, ampIndex).trim();
+      const followupCommand = normalized.slice(ampIndex + '2>&1 &'.length).trim();
+      if (backgroundCommand) {
+        return {
+          backgroundCommand,
+          followupCommand: followupCommand || null,
+        };
+      }
+    }
+
+    const lines = normalized
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (lines.length >= 2 && /(?:^|[\s;])&$/.test(lines[0])) {
+      return {
+        backgroundCommand: lines[0].replace(/&$/, '').trim(),
+        followupCommand: lines.slice(1).join(' && ') || null,
+      };
+    }
+
+    return null;
+  }
+
   private static formatBashToolText(result: {
     stdout: string;
     stderr: string;
@@ -882,6 +943,107 @@ ${hints.join('\n')}
     ]
       .filter(Boolean)
       .join('\n\n');
+  }
+
+  private buildBackgroundTaskTool(
+    sessionId: string,
+    effectiveCwd: string
+  ): ToolDefinition<TSchema, unknown>[] {
+    if (!this.backgroundTaskService) {
+      return [];
+    }
+
+    return [
+      {
+        name: 'execute_background_command',
+        label: 'Execute Background Command',
+        description:
+          'Start a long-running local command in the background so it does not block the current workflow. Use this for dev servers, preview servers, Electron apps, and other persistent processes.',
+        parameters: Type.Object({
+          command: Type.String({
+            description:
+              'The shell command to run in the background, for example "npm run dev" or "python -m http.server 8000".',
+          }),
+          title: Type.Optional(
+            Type.String({
+              description: 'Optional short label shown in the background tasks panel.',
+            })
+          ),
+          cwd: Type.Optional(
+            Type.String({
+              description:
+                'Optional working directory. Defaults to the current session working directory.',
+            })
+          ),
+          waitForPort: Type.Optional(
+            Type.Number({
+              description:
+                'Optional local TCP port to wait for after starting the task. Use this when the workflow must confirm a dev server or API server is ready before continuing.',
+            })
+          ),
+          waitTimeoutMs: Type.Optional(
+            Type.Number({
+              description:
+                'Optional timeout in milliseconds for waitForPort. Defaults to 10000.',
+            })
+          ),
+        }),
+        execute: async (_toolCallId, params) => {
+          const typedParams = params as {
+            command: string;
+            title?: string;
+            cwd?: string;
+            waitForPort?: number;
+            waitTimeoutMs?: number;
+          };
+          const task = await this.backgroundTaskService!.startTask({
+            command: typedParams.command,
+            title: typedParams.title,
+            cwd: typedParams.cwd?.trim() || effectiveCwd,
+            sourceSessionId: sessionId,
+            waitForPort: typedParams.waitForPort,
+            waitTimeoutMs: typedParams.waitTimeoutMs,
+          });
+
+          let readinessLine = 'Readiness: not requested';
+          if (typedParams.waitForPort) {
+            const ready = await this.backgroundTaskService!.waitForPort(
+              task.id,
+              typedParams.waitForPort,
+              typedParams.waitTimeoutMs ?? 10000
+            );
+            readinessLine = ready
+              ? `Readiness: port ${typedParams.waitForPort} is accepting connections`
+              : `Readiness: timed out waiting for port ${typedParams.waitForPort}`;
+          }
+
+          const latestTask = this.backgroundTaskService!.getTask(task.id) || task;
+          const logTail =
+            typedParams.waitForPort && readinessLine.includes('timed out')
+              ? this.backgroundTaskService!.getLogTail(task.id, 2000)
+              : '';
+
+          const lines = [
+            `Background task started: ${latestTask.title}`,
+            `Status: ${latestTask.status}`,
+            `PID: ${latestTask.pid ?? 'unknown'}`,
+            `Working directory: ${latestTask.cwd}`,
+            `Log: ${latestTask.logPath}`,
+            latestTask.detectedUrl ? `Detected URL: ${latestTask.detectedUrl}` : 'Detected URL: pending',
+            readinessLine,
+            'Use the sidebar Background Tasks panel to inspect logs or stop it later.',
+          ];
+          if (logTail) {
+            lines.push('', 'Recent log tail:', logTail);
+          }
+
+          return {
+            content: [{ type: 'text' as const, text: lines.join('\n') }],
+            details: undefined as unknown,
+          };
+        },
+      } as ToolDefinition<TSchema, unknown>,
+    ];
   }
 
   private replaceBashToolForWindows(
@@ -1073,6 +1235,88 @@ ${hints.join('\n')}
           const effectiveParams =
             params.timeout != null ? params : { ...params, timeout: DEFAULT_BASH_TIMEOUT_SECONDS };
           return originalExecute(toolCallId, effectiveParams, signal, onUpdate, ctx);
+        },
+      } as ToolDefinition;
+    });
+  }
+
+  private static wrapBashToolForBackgroundSyntax(tools: ToolDefinition[]): ToolDefinition[] {
+    return tools.map((tool) => {
+      if (tool.name !== 'bash') return tool;
+
+      const originalExecute = tool.execute;
+      return {
+        ...tool,
+        execute: async (
+          toolCallId: string,
+          params: { command: string; timeout?: number },
+          signal: AbortSignal | undefined,
+          onUpdate: ((update: unknown) => void) | undefined,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ctx: any
+        ) => {
+          if (ClaudeAgentRunner.hasBackgroundShellSyntax(params.command || '')) {
+            const split = ClaudeAgentRunner.splitBackgroundCommand(params.command || '');
+            if (
+              split &&
+              ctx &&
+              typeof ctx.callTool === 'function'
+            ) {
+              const backgroundResult = await ctx.callTool('execute_background_command', {
+                command: split.backgroundCommand,
+              });
+
+              if (!split.followupCommand) {
+                return backgroundResult;
+              }
+
+              const followupResult = await originalExecute(
+                toolCallId,
+                { ...params, command: split.followupCommand },
+                signal,
+                onUpdate,
+                ctx
+              );
+
+              const backgroundText =
+                Array.isArray((backgroundResult as { content?: Array<{ text?: string }> }).content)
+                  ? ((backgroundResult as { content: Array<{ text?: string }> }).content
+                      .map((item) => item.text || '')
+                      .filter(Boolean)
+                      .join('\n'))
+                  : '';
+              const followupText =
+                Array.isArray((followupResult as { content?: Array<{ text?: string }> }).content)
+                  ? ((followupResult as { content: Array<{ text?: string }> }).content
+                      .map((item) => item.text || '')
+                      .filter(Boolean)
+                      .join('\n'))
+                  : '';
+
+              return {
+                content: [
+                  {
+                    type: 'text' as const,
+                    text: [backgroundText, followupText].filter(Boolean).join('\n\n'),
+                  },
+                ],
+                details: undefined as unknown,
+              };
+            }
+
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text:
+                    'This command contains background shell syntax (for example &, nohup, disown, pm2, or Start-Process). Do not run it through the normal synchronous bash tool. Use execute_background_command instead, and if the workflow depends on readiness, pass waitForPort so the command runs in the background while the workflow waits only for the service to become ready.',
+                },
+              ],
+              details: undefined as unknown,
+            };
+          }
+
+          return originalExecute(toolCallId, params, signal, onUpdate, ctx);
         },
       } as ToolDefinition;
     });
@@ -2037,18 +2281,23 @@ Tool routing:
       // SkillsAdapter handles path resolution, disabled skill filtering,
       // and compatibility with Claude Code / OpenClaw ecosystems.
       const skillPaths = this._skillsAdapter
-        ? this._skillsAdapter.getSkillPaths()
-        : this.legacySkillPaths();
+        ? this._skillsAdapter.getSkillPaths(effectiveCwd)
+        : this.legacySkillPaths(effectiveCwd);
       log('[ClaudeAgentRunner] Skill paths for pi ResourceLoader:', skillPaths);
 
       // Bridge MCP tools as customTools for pi-coding-agent.
       // Re-read every query so newly added/removed MCP servers take effect immediately.
       const mcpCustomTools = this.mcpManager ? buildMcpCustomTools(this.mcpManager) : [];
+      const backgroundTaskTools = this.buildBackgroundTaskTool(session.id, effectiveCwd);
+      const customTools = [...backgroundTaskTools, ...mcpCustomTools];
       if (mcpCustomTools.length > 0) {
         log(
           `[ClaudeAgentRunner] Registered ${mcpCustomTools.length} MCP tools as customTools:`,
           mcpCustomTools.map((t) => t.name).join(', ')
         );
+      }
+      if (backgroundTaskTools.length > 0) {
+        log('[ClaudeAgentRunner] Registered background task tool');
       }
 
       // Enrich process.env.PATH for build mode — ensures Skill commands (python3, node)
@@ -2065,13 +2314,14 @@ Tool routing:
 
       // Inject a default 120s timeout for bash commands when the model omits one
       const withTimeout = ClaudeAgentRunner.wrapBashToolWithDefaultTimeout(windowsBashTools);
+      const withBackgroundGuard = ClaudeAgentRunner.wrapBashToolForBackgroundSyntax(withTimeout);
 
       // Wrap the bash tool to intercept sudo commands and request passwords
       // Note: wrapBashToolForSudo returns ToolDefinition[] (5-param execute) but
       // createAgentSession.tools expects Tool[] (4-param execute). The extra ctx
       // parameter is simply not passed by the session runner — safe to cast.
       const wrappedTools = this.wrapBashToolForSudo(
-        withTimeout,
+        withBackgroundGuard,
         session.id,
         effectiveCwd,
         sanitizeOutputPaths
@@ -2089,7 +2339,7 @@ Tool routing:
 
       const toolFingerprintInput = {
         builtIn: wrappedTools.map((tool) => describeToolForFingerprint(tool)),
-        mcp: mcpCustomTools.map((tool) => describeToolForFingerprint(tool)),
+        custom: customTools.map((tool) => describeToolForFingerprint(tool)),
       };
       const cacheDiagnostics: CacheDiagnosticsPayload = {
         version: 1,
@@ -2169,6 +2419,7 @@ Tool routing:
         const { DefaultResourceLoader } = await import('@mariozechner/pi-coding-agent');
         const resourceLoader = new DefaultResourceLoader({
           cwd: effectiveCwd,
+          noSkills: true, // Disable pi's default skill discovery; Open Cowork controls all skill paths
           additionalSkillPaths: skillPaths,
           appendSystemPrompt: coworkAppendPrompt,
         });
@@ -2212,7 +2463,7 @@ Tool routing:
           authStorage,
           modelRegistry,
           tools: wrappedTools as unknown as ReturnType<typeof createCodingTools>,
-          customTools: mcpCustomTools,
+          customTools,
           sessionManager: PiSessionManager.inMemory(),
           settingsManager: PiSettingsManager.inMemory({
             compaction: compactionSettings,

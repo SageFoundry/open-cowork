@@ -18,6 +18,8 @@ import type {
   ScheduleUpdateInput,
   ProviderModelInfo,
   LocalOllamaDiscoveryResult,
+  BackgroundTask,
+  BackgroundTaskStartInput,
 } from '../renderer/types';
 import type { DiagnosticInput, DiagnosticResult } from '../renderer/types';
 import type {
@@ -413,6 +415,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('schedule.toggle', id, enabled),
     runNow: (id: string): Promise<ScheduleTask | null> => ipcRenderer.invoke('schedule.runNow', id),
   },
+
+  tasks: {
+    list: (): Promise<BackgroundTask[]> => ipcRenderer.invoke('tasks.list'),
+    start: (payload: BackgroundTaskStartInput): Promise<BackgroundTask> =>
+      ipcRenderer.invoke('tasks.start', payload),
+    stop: (taskId: string): Promise<BackgroundTask | null> => ipcRenderer.invoke('tasks.stop', taskId),
+    getLogTail: (taskId: string, maxChars = 8000): Promise<string> =>
+      ipcRenderer.invoke('tasks.getLogTail', taskId, maxChars),
+    openLog: (taskId: string): Promise<boolean> => ipcRenderer.invoke('tasks.openLog', taskId),
+    openDetectedUrl: (taskId: string): Promise<boolean> =>
+      ipcRenderer.invoke('tasks.openDetectedUrl', taskId),
+  },
 });
 
 // Type declaration for the renderer process
@@ -634,6 +648,14 @@ declare global {
         delete: (id: string) => Promise<{ success: boolean }>;
         toggle: (id: string, enabled: boolean) => Promise<ScheduleTask | null>;
         runNow: (id: string) => Promise<ScheduleTask | null>;
+      };
+      tasks: {
+        list: () => Promise<BackgroundTask[]>;
+        start: (payload: BackgroundTaskStartInput) => Promise<BackgroundTask>;
+        stop: (taskId: string) => Promise<BackgroundTask | null>;
+        getLogTail: (taskId: string, maxChars?: number) => Promise<string>;
+        openLog: (taskId: string) => Promise<boolean>;
+        openDetectedUrl: (taskId: string) => Promise<boolean>;
       };
     };
   }

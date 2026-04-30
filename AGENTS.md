@@ -7,6 +7,7 @@ Open Cowork is an Electron + React desktop app. Main process code lives in `src/
 Important main-process areas:
 
 - `src/main/claude/` - agent runner, model/provider compatibility, thinking payload handling
+- `src/main/background/` - background task service for long-running processes (dev servers, etc.)
 - `src/main/ipc/` - focused IPC handler registration modules
 - `src/main/session/` - session persistence, context tracking, history restoration
 - `src/main/context/` - context budget and compaction logic
@@ -52,6 +53,7 @@ For `v3.3.1`, the release baseline was commit `2a282b1 release: v3.3.0 stable` b
 
 ## Known Pitfalls
 
+- `BackgroundTaskService` uses async `execFile` for process-liveness checks and `readFile` for log tailing. All `isProcessAlive`, `reconcileTasks`, `terminateProcess`, and `forceKillProcess` are now async. Never call them synchronously — they will return `Promise<boolean>` / `Promise<void>`.
 - `rg` can fail in this Windows environment with WindowsApps access denied. Use PowerShell `Get-ChildItem` and `Select-String` as fallback.
 - `electron-builder` NSIS downloads can fail to rename extracted cache directories. If so, inspect `.build-cache\electron-builder\nsis` and copy numeric extraction directories to the expected `nsis-...` / `nsis-resources-...` cache directory names before rerunning `npm run build:win`.
 - GitHub Release assets must match `latest.yml`. Local installer names contain spaces, but uploaded assets should use hyphenated names such as `Open-Cowork-3.3.1-win-x64.exe`.
@@ -64,3 +66,4 @@ For `v3.3.1`, the release baseline was commit `2a282b1 release: v3.3.0 stable` b
 - Keep IPC registration split under `src/main/ipc/`; avoid growing `src/main/index.ts` with new handler bodies.
 - Keep skill path logic centralized in `src/main/skills/skill-paths.ts`.
 - Do not commit generated build output from `dist*`, `.bundle-resources`, `.build-cache`, or `release`.
+- Temporary files (research scripts, test data, scratch notes) must go under `tmp/`, never in the project root. The `tmp/` directory is gitignored.

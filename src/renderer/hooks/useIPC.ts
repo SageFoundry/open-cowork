@@ -10,6 +10,8 @@ import type {
   TraceStep,
   ContentBlock,
   SessionMessagesPage,
+  BackgroundTask,
+  BackgroundTaskStartInput,
 } from '../types';
 import i18n from '../i18n/config';
 
@@ -269,6 +271,14 @@ export function useIPC() {
             store.setWorkingDir(event.payload.path || null);
             break;
 
+          case 'tasks.updated':
+            store.upsertBackgroundTask(event.payload.task);
+            break;
+
+          case 'tasks.logAppended':
+            store.appendBackgroundTaskLog(event.payload.taskId, event.payload.text);
+            break;
+
           case 'session.contextInfo':
             store.setSessionContextWindow(event.payload.sessionId, event.payload.contextWindow);
             break;
@@ -358,6 +368,17 @@ export function useIPC() {
         applyConfigSnapshot(config, Boolean(isConfigured));
       } catch (error) {
         console.error('[useIPC] Failed to bootstrap config/theme state:', error);
+      }
+    })();
+
+    void (async () => {
+      try {
+        const tasks = await window.electronAPI.tasks.list();
+        if (!disposed) {
+          useAppStore.getState().setBackgroundTasks(tasks || []);
+        }
+      } catch (error) {
+        console.error('[useIPC] Failed to bootstrap background tasks:', error);
       }
     })();
 
@@ -823,6 +844,53 @@ export function useIPC() {
     [invoke]
   );
 
+  const listBackgroundTasks = useCallback(async (): Promise<BackgroundTask[]> => {
+    if (!isElectron) {
+      return [];
+    }
+    return window.electronAPI.tasks.list();
+  }, []);
+
+  const startBackgroundTask = useCallback(
+    async (payload: BackgroundTaskStartInput): Promise<BackgroundTask | null> => {
+      if (!isElectron) {
+        return null;
+      }
+      const task = await window.electronAPI.tasks.start(payload);
+      if (task) {
+        useAppStore.getState().upsertBackgroundTask(task);
+      }
+      return task;
+    },
+    []
+  );
+
+  const stopBackgroundTask = useCallback(
+    async (taskId: string): Promise<BackgroundTask | null> => {
+      if (!isElectron) {
+        return null;
+      }
+      const task = await window.electronAPI.tasks.stop(taskId);
+      if (task) {
+        useAppStore.getState().upsertBackgroundTask(task);
+      }
+      return task;
+    },
+    []
+  );
+
+  const getBackgroundTaskLogTail = useCallback(
+    async (taskId: string, maxChars = 8000): Promise<string> => {
+      if (!isElectron) {
+        return '';
+      }
+      const content = await window.electronAPI.tasks.getLogTail(taskId, maxChars);
+      useAppStore.getState().setBackgroundTaskLog(taskId, content || '');
+      return content || '';
+    },
+    []
+  );
+
   return {
     send,
     invoke,
@@ -841,6 +909,10 @@ export function useIPC() {
     changeWorkingDir,
     getMCPServers,
     compactSession,
+    listBackgroundTasks,
+    startBackgroundTask,
+    stopBackgroundTask,
+    getBackgroundTaskLogTail,
     isElectron,
   };
 }

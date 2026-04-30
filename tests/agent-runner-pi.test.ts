@@ -124,4 +124,25 @@ describe('ClaudeAgentRunner pi-coding-agent integration', () => {
     );
     expect(agentRunnerContent).toContain('START DOING IT');
   });
+
+  it('provides an explicit background command tool with readiness waiting', () => {
+    expect(agentRunnerContent).toContain("name: 'execute_background_command'");
+    expect(agentRunnerContent).toContain('waitForPort');
+    expect(agentRunnerContent).toContain('waitTimeoutMs');
+    expect(agentRunnerContent).toContain('timed out waiting for port');
+    expect(agentRunnerContent).toContain('port ${typedParams.waitForPort} is accepting connections');
+  });
+
+  it('blocks background shell syntax in the normal bash tool', () => {
+    expect(agentRunnerContent).toContain('hasBackgroundShellSyntax');
+    expect(agentRunnerContent).toContain('wrapBashToolForBackgroundSyntax');
+    expect(agentRunnerContent).toContain('Use execute_background_command instead');
+  });
+
+  it('auto-splits mixed background shell commands into background plus follow-up execution', () => {
+    expect(agentRunnerContent).toContain('splitBackgroundCommand');
+    expect(agentRunnerContent).toContain("const ampIndex = normalized.indexOf('2>&1 &');");
+    expect(agentRunnerContent).toContain("ctx.callTool('execute_background_command'");
+    expect(agentRunnerContent).toContain('followupCommand');
+  });
 });

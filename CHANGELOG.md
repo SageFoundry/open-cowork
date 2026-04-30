@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Background task management: AI agents can start long-running processes (dev servers, API servers, etc.) via `execute_background_command` tool with port readiness waiting, and users can monitor, view logs, and stop tasks from the Context Panel sidebar.
+- Background task shell syntax interception: bash tool automatically detects background syntax (`&`, `nohup`, `disown`, `pm2`, `Start-Process`) and routes to the background task tool.
+- Web-design-engineer, ddg-web-search, and ddg-web-search skills added to skill ecosystem.
+
+### Changed
+
+- `BackgroundTaskService` core operations (`isProcessAlive`, `reconcileTasks`, `terminateProcess`, `forceKillProcess`) are now fully async using `execFile` instead of synchronous `execFileSync`, preventing main-process blocking during task reconciliation.
+- `SkillsAdapter.getSkillPaths()` now accepts optional `projectPath` to support per-project skill directories (`.skills/`, `skills/`).
+- `DefaultResourceLoader` now uses `noSkills: true`; Open Cowork controls all skill path resolution.
+
 ## [3.3.1] - 2026-04-28
 
 ### Added

@@ -402,13 +402,14 @@ export function Sidebar() {
       </div>
 
       <div className="flex-1 overflow-y-auto px-3 py-4">
-        {filteredProjects.length === 0 ? (
-          <div className="px-3 py-6">
-            <p className="text-sm text-text-secondary">{t('sidebar.noProjects')}</p>
-            <p className="mt-1 text-xs leading-5 text-text-muted">{t('sidebar.noProjectsHint')}</p>
-          </div>
-        ) : (
-          <div className="space-y-2">
+        <div className="space-y-2">
+          {filteredProjects.length === 0 ? (
+            <div className="px-3 py-6">
+              <p className="text-sm text-text-secondary">{t('sidebar.noProjects')}</p>
+              <p className="mt-1 text-xs leading-5 text-text-muted">{t('sidebar.noProjectsHint')}</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
             {filteredProjects.map((project) => (
               <ProjectSection
                 key={project.id}
@@ -433,8 +434,9 @@ export function Sidebar() {
                 t={t}
               />
             ))}
-          </div>
-        )}
+            </div>
+          )}
+        </div>
       </div>
 
       {isSelectMode ? (

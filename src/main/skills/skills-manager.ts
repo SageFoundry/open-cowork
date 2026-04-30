@@ -185,6 +185,41 @@ export class SkillsManager {
     return resolveBuiltinSkillsPath();
   }
 
+  /**
+   * SkillsAdapter implementation: return all Open Cowork managed skill directories.
+   * Used by ClaudeAgentRunner to pass to pi's DefaultResourceLoader via additionalSkillPaths.
+   */
+  getSkillPaths(projectPath?: string): string[] {
+    const paths: string[] = [];
+
+    // 1. Built-in skills (.claude/skills)
+    const builtin = this.getBuiltinSkillsPath();
+    if (builtin && fs.existsSync(builtin)) {
+      paths.push(builtin);
+    }
+
+    // 2. Global skills (userData/claude/skills)
+    const global = this.getGlobalSkillsPath();
+    if (global && fs.existsSync(global)) {
+      paths.push(global);
+    }
+
+    // 3. Project-level skills
+    if (projectPath) {
+      const projectSkillsDirs = [
+        path.join(projectPath, '.skills'),
+        path.join(projectPath, 'skills'),
+      ];
+      for (const dir of projectSkillsDirs) {
+        if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
+          paths.push(dir);
+        }
+      }
+    }
+
+    return paths;
+  }
+
   private getDefaultGlobalSkillsPath(): string {
     return getDefaultGlobalSkillsPath();
   }

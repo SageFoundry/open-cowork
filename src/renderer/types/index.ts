@@ -240,6 +240,49 @@ export interface ScheduleUpdateInput {
   lastError?: string | null;
 }
 
+export type BackgroundTaskStatus =
+  | 'queued'
+  | 'starting'
+  | 'running'
+  | 'stopping'
+  | 'completed'
+  | 'failed'
+  | 'lost';
+
+export interface BackgroundTask {
+  id: string;
+  title: string;
+  command: string;
+  args: string[];
+  cwd: string;
+  status: BackgroundTaskStatus;
+  pid: number | null;
+  startedAt: number;
+  endedAt: number | null;
+  exitCode: number | null;
+  logPath: string;
+  detectedUrl?: string;
+  sourceSessionId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface BackgroundTaskLogChunk {
+  taskId: string;
+  stream: 'stdout' | 'stderr';
+  text: string;
+  timestamp: number;
+}
+
+export interface BackgroundTaskStartInput {
+  command: string;
+  cwd: string;
+  title?: string;
+  sourceSessionId?: string;
+  waitForPort?: number;
+  waitTimeoutMs?: number;
+}
+
 // Skills types
 export interface Skill {
   id: string;
@@ -466,6 +509,8 @@ export type ServerEvent =
   | { type: 'session.compactionState'; payload: { sessionId: string; state: SessionCompactionState | null } }
   | { type: 'session.compaction'; payload: { sessionId: string; info: SessionCompactionInfo } }
   | { type: 'session.compactionNotice'; payload: { sessionId: string; level: 'info' | 'warning' | 'error'; message: string } }
+  | { type: 'tasks.updated'; payload: { task: BackgroundTask } }
+  | { type: 'tasks.logAppended'; payload: BackgroundTaskLogChunk }
   | { type: 'navigate.to'; payload: { page: 'welcome' | 'settings' | 'session'; tab?: string; sessionId?: string } }
   | { type: 'native-theme.changed'; payload: { shouldUseDarkColors: boolean } }
   | { type: 'new-session' }
