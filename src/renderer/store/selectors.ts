@@ -211,6 +211,31 @@ export function useAppConfig(): AppConfig | null {
   return useAppStore((s) => s.appConfig);
 }
 
+/** Returns available model options for the current provider profile,
+ *  including all models configured in user profiles. */
+export function useModelOptions(): Array<{ id: string; name: string }> {
+  return useAppStore((s) => {
+    const config = s.appConfig;
+    const presets = s.providerPresets;
+    if (!config || !presets) return [];
+    const key = config.activeProfileKey;
+    const presetKey = key.startsWith('custom:') ? 'custom' : key;
+    const preset = presets[presetKey as keyof typeof presets];
+    const baseOptions = preset ? [...preset.models] : [];
+
+    // Add any user-configured model names from all profiles
+    if (config.profiles) {
+      for (const [, profile] of Object.entries(config.profiles)) {
+        if (profile?.model && !baseOptions.some((m) => m.id === profile.model)) {
+          baseOptions.push({ id: profile.model, name: profile.model });
+        }
+      }
+    }
+
+    return baseOptions;
+  });
+}
+
 /** Returns whether the app has been configured with valid API credentials. */
 export function useIsConfigured(): boolean {
   return useAppStore((s) => s.isConfigured);

@@ -60,6 +60,7 @@ export interface ProviderProfile {
   apiKey: string;
   baseUrl?: string;
   model: string;
+  models?: string[];
   contextWindow?: number;
   maxTokens?: number;
 }
@@ -519,6 +520,12 @@ export class ConfigStore {
     }
     if (typeof profile?.maxTokens === 'number' && profile.maxTokens > 0) {
       result.maxTokens = profile.maxTokens;
+    }
+    if (Array.isArray(profile?.models)) {
+      const cleaned = profile.models.filter((m) => typeof m === 'string' && m.trim()).map((m) => m.trim());
+      if (cleaned.length > 0) {
+        result.models = [...new Set(cleaned)];
+      }
     }
     return result;
   }

@@ -103,16 +103,7 @@ export const API_PROVIDER_PRESETS: SharedProviderPresets = {
   custom: {
     name: '更多模型',
     baseUrl: '',
-    models: [
-      { id: 'deepseek-chat', name: 'deepseek-chat' },
-      { id: 'deepseek-reasoner', name: 'deepseek-reasoner' },
-      { id: 'kimi-k2-thinking', name: 'kimi-k2-thinking' },
-      { id: 'glm-5', name: 'glm-5' },
-      { id: 'MiniMax-M2.5', name: 'MiniMax-M2.5' },
-      { id: 'qwen-max', name: 'qwen-max' },
-      { id: 'grok-code-fast-1', name: 'grok-code-fast-1' },
-      { id: 'mistral-large-latest', name: 'mistral-large-latest' },
-    ],
+    models: [],
     keyPlaceholder: 'sk-xxx',
     keyHint: '输入你的 API Key',
   },

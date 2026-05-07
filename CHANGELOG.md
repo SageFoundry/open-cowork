@@ -29,6 +29,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Multi-model support per config set: `ProviderProfile` now has an optional `models: string[]` field for user-added custom models. The model picker in ChatView displays preset models merged with user-added models, enabling quick switching within a single config set.
+- Model management UI in Settings: unified model dropdown (preset + custom) with an "add custom model" input and removable chips for user-added models.
+- `removeModel` callback in `useApiConfigState` for deleting user-added custom models.
+
+### Changed
+
+- Removed the `useCustomModel` / `customModel` / toggle system — model selection is now a single unified dropdown. Old configs with `useCustomModel` + `customModel` are auto-migrated to `models[]` on load.
+- Custom provider ("更多模型") now has an empty preset model list; only user-added models appear.
+- `modelPresetForProfile` now returns the `custom` preset for all `custom:*` protocol keys instead of mapping to provider-specific presets.
+- ChatView model picker now correctly switches config sets when selecting a model from a non-active set (previously it incorrectly saved the model to the current set).
+- Model picker dropdown now closes when clicking outside (previously required clicking the toggle button).
+
 ## [3.3.1] - 2026-04-28
 
 ### Added

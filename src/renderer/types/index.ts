@@ -565,6 +565,7 @@ export interface ProviderProfile {
   apiKey: string;
   baseUrl?: string;
   model: string;
+  models?: string[];
   contextWindow?: number;
   maxTokens?: number;
 }

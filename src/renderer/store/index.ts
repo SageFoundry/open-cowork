@@ -14,6 +14,7 @@ import type {
   SessionCompactionState,
   TokenBudgetSnapshot,
   BackgroundTask,
+  ProviderPresets,
 } from '../types';
 import { applySessionUpdate } from '../utils/session-update';
 import { getProjectIdForCwd } from '../utils/projects';
@@ -127,6 +128,9 @@ interface AppState {
   isConfigured: boolean;
   showConfigModal: boolean;
   hasSeenInitialConfigStatus: boolean;
+
+  // Provider model presets (loaded once at startup)
+  providerPresets: ProviderPresets | null;
   globalNotice: GlobalNotice | null;
 
   // Working directory
@@ -205,6 +209,7 @@ interface AppState {
   markInitialConfigStatusSeen: () => void;
   setGlobalNotice: (notice: GlobalNotice | null) => void;
   clearGlobalNotice: () => void;
+  setProviderPresets: (presets: ProviderPresets) => void;
 
   // Working directory actions
   setWorkingDir: (path: string | null) => void;
@@ -280,6 +285,7 @@ export const useAppStore = create<AppState>((set) => ({
   isConfigured: false,
   showConfigModal: false,
   hasSeenInitialConfigStatus: false,
+  providerPresets: null,
   globalNotice: null,
   workingDir: null,
   backgroundTasks: [],
@@ -643,6 +649,7 @@ export const useAppStore = create<AppState>((set) => ({
   markInitialConfigStatusSeen: () => set({ hasSeenInitialConfigStatus: true }),
   setGlobalNotice: (notice) => set({ globalNotice: notice }),
   clearGlobalNotice: () => set({ globalNotice: null }),
+  setProviderPresets: (presets) => set({ providerPresets: presets }),
 
   // Working directory actions
   setWorkingDir: (path) => set({ workingDir: path }),

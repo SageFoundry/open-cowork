@@ -8,6 +8,7 @@ import type {
   CustomProtocolType,
   DiagnosticResult,
   ProviderModelInfo,
+  ProviderPreset,
   ProviderProfile,
   ProviderProfileKey,
   ProviderPresets,
@@ -40,8 +41,7 @@ interface UIProviderProfile {
   apiKey: string;
   baseUrl: string;
   model: string;
-  customModel: string;
-  useCustomModel: boolean;
+  models: string[];
   contextWindow: string;
   maxTokens: string;
 }
@@ -171,20 +171,14 @@ function isLegacyOllamaConfig(
   }
 }
 
-function modelPresetForProfile(profileKey: ProviderProfileKey, presets: ProviderPresets) {
+function modelPresetForProfile(profileKey: ProviderProfileKey, presets: ProviderPresets): ProviderPreset {
   if (profileKey === 'ollama') {
     return presets.ollama;
   }
-  if (profileKey === 'custom:openai') {
-    return presets.openai;
-  }
-  if (profileKey === 'custom:gemini') {
-    return presets.gemini;
-  }
-  if (profileKey === 'custom:anthropic') {
+  if (profileKey.startsWith('custom:')) {
     return presets.custom;
   }
-  return presets[profileKey];
+  return presets[profileKey as keyof ProviderPresets];
 }
 
 function defaultProfileForKey(
@@ -192,13 +186,11 @@ function defaultProfileForKey(
   presets: ProviderPresets
 ): UIProviderProfile {
   const preset = modelPresetForProfile(profileKey, presets);
-  const prefersCustomInput = profileKey.startsWith('custom:');
   return {
     apiKey: '',
     baseUrl: preset.baseUrl,
     model: profileKey === 'ollama' ? '' : (preset.models[0]?.id || ''),
-    customModel: '',
-    useCustomModel: prefersCustomInput,
+    models: [],
     contextWindow: '',
     maxTokens: '',
   };
@@ -251,8 +243,6 @@ function normalizeProfile(
       ...fallback,
       apiKey: '',
       baseUrl: fallback.baseUrl,
-      customModel: '',
-      useCustomModel: true,
       contextWindow: '',
       maxTokens: '',
     };
@@ -260,17 +250,34 @@ function normalizeProfile(
 
   const modelValue = profile?.model?.trim() || fallback.model;
   const rawBaseUrl = profile?.baseUrl?.trim() || fallback.baseUrl;
-  const hasPresetModel = modelPresetForProfile(profileKey, presets).models.some(
-    (item) => item.id === modelValue
-  );
+  const models = Array.isArray(profile?.models)
+    ? profile.models.filter((m): m is string => typeof m === 'string' && m.trim().length > 0).map((m) => m.trim())
+    : [];
+
+  // Migration: old useCustomModel + customModel → models[]
+  const legacyUseCustom = (profile as Record<string, unknown>).useCustomModel;
+  const legacyCustomModel = (profile as Record<string, unknown>).customModel;
+  if (legacyUseCustom && typeof legacyCustomModel === 'string' && legacyCustomModel.trim()) {
+    const customVal = legacyCustomModel.trim();
+    if (!models.includes(customVal)) {
+      models.push(customVal);
+    }
+  }
+
+  const dedupedModels = [...new Set(models)];
+  // If the current model is custom (not in presets and not the profile default), ensure it's in models[]
+  const presetModelIds = modelPresetForProfile(profileKey, presets).models.map((m) => m.id);
+  if (modelValue && !presetModelIds.includes(modelValue) && !dedupedModels.includes(modelValue) && modelValue !== fallback.model) {
+    dedupedModels.push(modelValue);
+  }
+
   return {
     apiKey: profile?.apiKey || '',
     baseUrl: profileKey === 'ollama'
       ? (normalizeOllamaBaseUrl(rawBaseUrl) || fallback.baseUrl)
       : rawBaseUrl,
-    model: hasPresetModel ? modelValue : fallback.model,
-    customModel: hasPresetModel ? '' : modelValue,
-    useCustomModel: !hasPresetModel,
+    model: modelValue,
+    models: dedupedModels,
     contextWindow: profile?.contextWindow ? String(profile.contextWindow) : '',
     maxTokens: profile?.maxTokens ? String(profile.maxTokens) : '',
   };
@@ -342,13 +349,11 @@ function toPersistedProfiles(
   const persisted: Partial<Record<ProviderProfileKey, ProviderProfile>> = {};
   for (const key of PROFILE_KEYS) {
     const profile = profiles[key];
-    const finalModel = profile.useCustomModel
-      ? profile.customModel.trim() || profile.model
-      : profile.model;
     persisted[key] = {
       apiKey: profile.apiKey,
       baseUrl: profile.baseUrl.trim() || undefined,
-      model: finalModel,
+      model: profile.model,
+      models: profile.models.length > 0 ? profile.models : undefined,
       contextWindow: profile.contextWindow ? Number(profile.contextWindow) : undefined,
       maxTokens: profile.maxTokens ? Number(profile.maxTokens) : undefined,
     };
@@ -370,6 +375,7 @@ export function buildApiConfigDraftSignature(
       apiKey: persisted[key]?.apiKey || '',
       baseUrl: persisted[key]?.baseUrl || '',
       model: persisted[key]?.model || '',
+      models: persisted[key]?.models || [],
     })),
   });
 }
@@ -410,9 +416,8 @@ export function buildApiConfigSets(
         normalizedProfiles[key] = {
           apiKey: uiProfile.apiKey,
           baseUrl: uiProfile.baseUrl,
-          model: uiProfile.useCustomModel
-            ? uiProfile.customModel.trim() || uiProfile.model
-            : uiProfile.model,
+          model: uiProfile.model,
+          models: uiProfile.models.length > 0 ? uiProfile.models : undefined,
         };
       }
 
@@ -425,9 +430,8 @@ export function buildApiConfigSets(
         normalizedProfiles.ollama = {
           apiKey: ollamaProfile.apiKey,
           baseUrl: ollamaProfile.baseUrl,
-          model: ollamaProfile.useCustomModel
-            ? ollamaProfile.customModel.trim() || ollamaProfile.model
-            : ollamaProfile.model,
+          model: ollamaProfile.model,
+          models: ollamaProfile.models.length > 0 ? ollamaProfile.models : undefined,
         };
       }
 
@@ -542,13 +546,11 @@ function buildSetupModelState(
   setup: CommonProviderSetup,
   profileKey: ProviderProfileKey,
   presets: ProviderPresets
-): Pick<UIProviderProfile, 'model' | 'customModel' | 'useCustomModel'> {
+): Pick<UIProviderProfile, 'model'> {
   const preset = modelPresetForProfile(profileKey, presets);
   const hasPresetModel = preset.models.some((item) => item.id === setup.exampleModel);
   return {
     model: hasPresetModel ? setup.exampleModel : preset.models[0]?.id || setup.exampleModel,
-    customModel: hasPresetModel ? '' : setup.exampleModel,
-    useCustomModel: !hasPresetModel,
   };
 }
 
@@ -953,13 +955,7 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
   const apiKey = currentProfile.apiKey;
   const baseUrl = currentProfile.baseUrl;
   const model = currentProfile.model;
-  const customModel = currentProfile.customModel;
-  const useCustomModel = currentProfile.useCustomModel;
-  const shouldShowOllamaManualModelToggle =
-    provider !== 'ollama'
-      || useCustomModel
-      || Boolean(error)
-      || modelOptions.length === 0;
+  const models = currentProfile.models;
   const contextWindow = currentProfile.contextWindow;
   const maxTokens = currentProfile.maxTokens;
   const detectedProviderSetup = useMemo(
@@ -1200,14 +1196,7 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
 
   const setModel = useCallback(
     (value: string) => {
-      updateActiveProfile((prev) => ({ ...prev, model: value, useCustomModel: false }));
-    },
-    [updateActiveProfile]
-  );
-
-  const setCustomModel = useCallback(
-    (value: string) => {
-      updateActiveProfile((prev) => ({ ...prev, customModel: value, useCustomModel: true }));
+      updateActiveProfile((prev) => ({ ...prev, model: value }));
     },
     [updateActiveProfile]
   );
@@ -1222,6 +1211,37 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
   const setMaxTokens = useCallback(
     (value: string) => {
       updateActiveProfile((prev) => ({ ...prev, maxTokens: value }));
+    },
+    [updateActiveProfile]
+  );
+
+  const setModels = useCallback(
+    (models: string[]) => {
+      updateActiveProfile((prev) => ({ ...prev, models }));
+    },
+    [updateActiveProfile]
+  );
+
+  const addModel = useCallback(
+    (modelId: string) => {
+      const trimmed = modelId.trim();
+      if (!trimmed) return;
+      updateActiveProfile((prev) => ({
+        ...prev,
+        model: trimmed,
+        models: prev.models.includes(trimmed) ? prev.models : [...prev.models, trimmed],
+      }));
+    },
+    [updateActiveProfile]
+  );
+
+  const removeModel = useCallback(
+    (modelId: string) => {
+      updateActiveProfile((prev) => ({
+        ...prev,
+        models: prev.models.filter((m) => m !== modelId),
+        model: prev.model === modelId ? prev.models[0] || '' : prev.model,
+      }));
     },
     [updateActiveProfile]
   );
@@ -1254,22 +1274,6 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
     },
     [presets]
   );
-
-  const toggleCustomModel = useCallback(() => {
-    updateActiveProfile((prev) => {
-      if (!prev.useCustomModel) {
-        return {
-          ...prev,
-          useCustomModel: true,
-          customModel: prev.customModel || prev.model,
-        };
-      }
-      return {
-        ...prev,
-        useCustomModel: false,
-      };
-    });
-  }, [updateActiveProfile]);
 
   // Public setter exposed to consumers — wraps dispatch so the interface stays stable
   const setEnableThinking = useCallback((value: boolean) => {
@@ -1322,9 +1326,7 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
     apiKey,
     baseUrl,
     clearError,
-    customModel,
     model,
-    useCustomModel,
   ]);
 
   useEffect(() => {
@@ -1349,9 +1351,10 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
       type: 'UPDATE_PROFILE_FN',
       profileKey: activeProfileKey,
       updater: (current) => {
-        if (current && !current.useCustomModel && current.model) {
+        if (current && current.model) {
           const inPreset = preset.models.some((m) => m.id === current.model);
-          if (!inPreset) {
+          const inModels = current.models.includes(current.model);
+          if (!inPreset && !inModels) {
             return {
               ...current,
               model: provider === 'ollama' ? '' : (preset.models[0]?.id || ''),
@@ -1369,8 +1372,7 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
       return;
     }
 
-    const finalModel = useCustomModel ? customModel.trim() : model;
-    if (!finalModel) {
+    if (!model) {
       showErrorKey('api.selectModelRequired');
       return;
     }
@@ -1394,7 +1396,7 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
         apiKey: apiKey.trim(),
         baseUrl: resolvedBaseUrl || undefined,
         customProtocol,
-        model: finalModel,
+        model,
       });
       dispatch({ type: 'SET_TEST_RESULT', payload: result });
       if (result.ok && hasUnsavedChanges) {
@@ -1417,7 +1419,6 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
     apiKey,
     baseUrl,
     currentPreset.baseUrl,
-    customModel,
     customProtocol,
     model,
     provider,
@@ -1425,7 +1426,6 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
     hasUnsavedChanges,
     clearError,
     clearSuccessMessage,
-    useCustomModel,
     showErrorKey,
     showSuccessKey,
   ]);
@@ -1446,14 +1446,12 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
           ? baseUrl.trim()
           : (baseUrl.trim() || currentPreset.baseUrl || '').trim();
 
-      const finalModel = useCustomModel ? customModel.trim() : model;
-
       const result = await window.electronAPI.config.diagnose({
         provider,
         apiKey: apiKey.trim(),
         baseUrl: resolvedBaseUrl || undefined,
         customProtocol,
-        model: finalModel || undefined,
+        model: model || undefined,
         verificationLevel,
       });
       dispatch({ type: 'SET_DIAGNOSTIC_RESULT', payload: result });
@@ -1469,8 +1467,6 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
     provider,
     customProtocol,
     model,
-    customModel,
-    useCustomModel,
     currentPreset.baseUrl,
     clearError,
     showErrorKey,
@@ -1515,18 +1511,15 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
         type: 'UPDATE_PROFILE_FN',
         profileKey: requestedProfileKey,
         updater: (current) => {
-          const explicitManualModel = current.useCustomModel ? current.customModel.trim() : '';
-          const currentModel = explicitManualModel || current.model.trim();
+          const currentModel = current.model.trim();
           const hasDiscoveredMatch = models.some((item) => item.id === currentModel);
           const shouldAutoSelectModel =
             Boolean(models[0]?.id) &&
-            !explicitManualModel &&
             (!currentModel || !hasDiscoveredMatch);
 
           return {
             ...current,
             model: shouldAutoSelectModel ? models[0]!.id : current.model,
-            useCustomModel: shouldAutoSelectModel ? false : current.useCustomModel,
           };
         },
       });
@@ -1579,19 +1572,16 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
         profileKey: targetProfileKey,
         updater: (current) => {
           const autoSelectModelId = options?.autoSelectModelId?.trim() || '';
-          const explicitManualModel = current.useCustomModel ? current.customModel.trim() : '';
-          const currentModel = explicitManualModel || current.model.trim();
+          const currentModel = current.model.trim();
           const hasDiscoveredMatch = models.some((item) => item.id === currentModel);
           const shouldAutoSelectModel =
             Boolean(autoSelectModelId) &&
-            !explicitManualModel &&
             (!currentModel || !hasDiscoveredMatch);
 
           return {
             ...current,
             baseUrl: normalizedBaseUrl,
             model: shouldAutoSelectModel ? autoSelectModelId : current.model,
-            useCustomModel: shouldAutoSelectModel ? false : current.useCustomModel,
           };
         },
       });
@@ -1712,8 +1702,7 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
         return false;
       }
 
-      const finalModel = useCustomModel ? customModel.trim() : model;
-      if (!finalModel) {
+      if (!model) {
         showErrorKey('api.selectModelRequired');
         return false;
       }
@@ -1738,7 +1727,7 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
           apiKey: apiKey.trim(),
           baseUrl: resolvedBaseUrl || undefined,
           customProtocol,
-          model: finalModel,
+          model,
           activeProfileKey,
           profiles: persistedProfiles,
           activeConfigSetId,
@@ -1778,7 +1767,6 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
       baseUrl,
       currentDraftSignature,
       currentPreset.baseUrl,
-      customModel,
       customProtocol,
       enableThinking,
       model,
@@ -1793,7 +1781,6 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
       showErrorText,
       showSuccessKey,
       t,
-      useCustomModel,
     ]
   );
 
@@ -2051,8 +2038,7 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
     apiKey,
     baseUrl,
     model,
-    customModel,
-    useCustomModel,
+    models,
     contextWindow,
     maxTokens,
     modelInputPlaceholder: modelInputGuidance.placeholder,
@@ -2072,7 +2058,6 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
     handleDiagnose,
     handleDeepDiagnose,
     isOllamaMode: provider === 'ollama',
-    shouldShowOllamaManualModelToggle,
     requiresApiKey,
     detectedProviderSetup,
     protocolGuidanceText,
@@ -2091,10 +2076,11 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
     setApiKey,
     setBaseUrl,
     setModel,
-    setCustomModel,
+    addModel,
+    removeModel,
     setContextWindow,
     setMaxTokens,
-    toggleCustomModel,
+    setModels,
     setEnableThinking,
     applyCommonProviderSetup,
     changeProvider,

@@ -382,6 +382,17 @@ export function useIPC() {
       }
     })();
 
+    void (async () => {
+      try {
+        const presets = await window.electronAPI.config.getPresets();
+        if (!disposed) {
+          useAppStore.getState().setProviderPresets(presets);
+        }
+      } catch (error) {
+        console.error('[useIPC] Failed to bootstrap provider presets:', error);
+      }
+    })();
+
     // Cleanup on unmount only
     return () => {
       disposed = true;

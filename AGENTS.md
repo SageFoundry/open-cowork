@@ -59,6 +59,7 @@ For `v3.3.1`, the release baseline was commit `2a282b1 release: v3.3.0 stable` b
 - GitHub Release assets must match `latest.yml`. Local installer names contain spaces, but uploaded assets should use hyphenated names such as `Open-Cowork-3.3.1-win-x64.exe`.
 - OpenAI-compatible/DeepSeek thinking mode requires preserving and replaying provider-specific thinking/reasoning fields across turns. See `src/main/claude/thinking-compat.ts` and its tests before changing this path.
 - Custom model context windows are resolved through config plus model metadata. Check `src/main/claude/pi-model-resolution.ts`, `src/main/config/config-store.ts`, and context tests when touching this area.
+- Model selection uses `ProviderProfile.models?: string[]` for user-added custom models. The UI merges preset models (from `API_PROVIDER_PRESETS` in `src/shared/api-model-presets.ts`) with `models[]` for display. When changing model-related logic, update both `useApiConfigState.ts` (hook) and `ChatView.tsx` (picker). Custom provider ("更多模型") has empty presets — only user-added models appear. Old `useCustomModel`/`customModel` fields are auto-migrated to `models[]` in `normalizeProfile`.
 
 ## Editing Rules
 

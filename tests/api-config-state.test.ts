@@ -161,11 +161,8 @@ describe('api config state helpers', () => {
     const snapshot = buildApiConfigSnapshot(config, FALLBACK_PROVIDER_PRESETS);
     expect(snapshot.profiles.openai.apiKey).toBe('sk-openai');
     expect(snapshot.profiles.openrouter.baseUrl).toBe(FALLBACK_PROVIDER_PRESETS.openrouter.baseUrl);
-    expect(snapshot.profiles['custom:anthropic'].model).toBe(
-      FALLBACK_PROVIDER_PRESETS.custom.models[0]?.id
-    );
-    expect(snapshot.profiles['custom:anthropic'].useCustomModel).toBe(true);
-    expect(snapshot.profiles['custom:anthropic'].customModel).toBe('');
+    expect(snapshot.profiles['custom:anthropic'].model).toBe('');
+    expect(snapshot.profiles['custom:anthropic'].models).toEqual([]);
   });
 
   it('detects local custom anthropic loopback gateway url', () => {
@@ -240,9 +237,8 @@ describe('api config state helpers', () => {
     } as AppConfig;
 
     const snapshot = buildApiConfigSnapshot(config, FALLBACK_PROVIDER_PRESETS);
-    expect(snapshot.profiles['custom:openai'].useCustomModel).toBe(true);
-    expect(snapshot.profiles['custom:openai'].customModel).toBe('');
     expect(snapshot.profiles['custom:openai'].model).toBe('gpt-5.4');
+    expect(snapshot.profiles['custom:openai'].models).toEqual(['gpt-5.4']);
   });
 
   it('exposes updated preset lists and custom guidance', () => {
@@ -257,19 +253,7 @@ describe('api config state helpers', () => {
     expect(FALLBACK_PROVIDER_PRESETS.gemini.models.map((item) => item.id)).toContain(
       'gemini-3.1-pro-preview'
     );
-    expect(FALLBACK_PROVIDER_PRESETS.custom.models.map((item) => item.id)).toContain(
-      'kimi-k2-thinking'
-    );
-    expect(FALLBACK_PROVIDER_PRESETS.custom.models.map((item) => item.id)).toContain('glm-5');
-    expect(FALLBACK_PROVIDER_PRESETS.custom.models.map((item) => item.id)).toContain(
-      'MiniMax-M2.5'
-    );
-    expect(FALLBACK_PROVIDER_PRESETS.custom.models.map((item) => item.id)).toContain(
-      'grok-code-fast-1'
-    );
-    expect(FALLBACK_PROVIDER_PRESETS.custom.models.map((item) => item.id)).toContain(
-      'mistral-large-latest'
-    );
+    expect(FALLBACK_PROVIDER_PRESETS.custom.models).toEqual([]);
 
     expect(getModelInputGuidance('custom', 'openai').placeholder).toContain('deepseek-chat');
     expect(getModelInputGuidance('custom', 'openai').placeholder).not.toContain('kimi');

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Key,
@@ -5,37 +6,31 @@ import {
   Server,
   Cpu,
   Loader2,
-  Edit3,
   AlertCircle,
   CheckCircle,
   RefreshCw,
+  Plus,
+  X,
 } from 'lucide-react';
 import { useApiConfigState } from '../../hooks/useApiConfigState';
 import { ApiConfigSetManager } from '../ApiConfigSetManager';
 import { CommonProviderSetupsCard, GuidanceInlineHint } from '../ProviderGuidance';
 import ApiDiagnosticsPanel from '../ApiDiagnosticsPanel';
 
-interface ModelOptionItem {
-  id: string;
-  name: string;
-}
-
 // ==================== API Settings Tab ====================
 
 export function SettingsAPI() {
   const { t } = useTranslation();
+  const [newModelInput, setNewModelInput] = useState('');
   const {
     provider,
     customProtocol,
     apiKey,
     baseUrl,
     model,
-    customModel,
-    useCustomModel,
+    models,
     contextWindow,
     maxTokens,
-    modelInputPlaceholder,
-    modelInputHint,
     presets,
     currentPreset,
     modelOptions,
@@ -63,10 +58,10 @@ export function SettingsAPI() {
     setApiKey,
     setBaseUrl,
     setModel,
-    setCustomModel,
+    addModel,
+    removeModel,
     setContextWindow,
     setMaxTokens,
-    toggleCustomModel,
     setEnableThinking,
     applyCommonProviderSetup,
     changeProvider,
@@ -85,7 +80,6 @@ export function SettingsAPI() {
     isDiagnosing,
     handleDiagnose,
     handleDeepDiagnose,
-    shouldShowOllamaManualModelToggle,
   } = useApiConfigState();
 
   if (isLoadingConfig) {
@@ -288,58 +282,92 @@ export function SettingsAPI() {
                 {isRefreshingModels ? t('api.refreshingModels') : t('api.refreshModels')}
               </button>
             )}
-            {shouldShowOllamaManualModelToggle && (
-              <button
-                type="button"
-                onClick={toggleCustomModel}
-                className={`flex items-center gap-1 text-xs px-2 py-1 rounded-md transition-colors active:scale-95 ${
-                  useCustomModel
-                    ? 'bg-accent-muted text-accent'
-                    : 'border border-border-muted bg-background text-text-secondary hover:bg-surface-hover'
-                }`}
-              >
-                <Edit3 className="w-3 h-3" />
-                {isOllamaMode
-                  ? useCustomModel
-                    ? t('api.useDetectedModels')
-                    : t('api.manualModel')
-                  : useCustomModel
-                    ? t('api.usePreset')
-                    : t('api.custom')}
-              </button>
-            )}
           </div>
         </div>
-        {useCustomModel ? (
-          <input
-            id="api-model-input"
-            type="text"
-            value={customModel}
-            onChange={(e) => setCustomModel(e.target.value)}
-            placeholder={modelInputPlaceholder}
-            className="w-full px-4 py-3 rounded-lg bg-background border border-border text-text-primary placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent transition-all"
-          />
-        ) : (
-          <select
-            id="api-model-input"
-            value={modelOptions.length ? model : ''}
-            onChange={(e) => setModel(e.target.value)}
-            className="w-full px-4 py-3 rounded-lg bg-background border border-border text-text-primary focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent transition-all appearance-none cursor-pointer"
-          >
-            {modelOptions.length ? (
-              (modelOptions as ModelOptionItem[]).map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name}
+
+        {/* Unified model dropdown: preset models + user-added models */}
+        {(() => {
+          const presetIds = modelOptions.map((m) => m.id);
+          const merged = [...new Set([...presetIds, ...models])].filter(Boolean);
+          return (
+            <select
+              id="api-model-input"
+              value={model || ''}
+              onChange={(e) => setModel(e.target.value)}
+              className="w-full px-4 py-3 rounded-lg bg-background border border-border text-text-primary focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent transition-all appearance-none cursor-pointer"
+            >
+              {merged.length > 0 ? (
+                merged.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))
+              ) : (
+                <option value="" disabled>
+                  {t('api.noModelsAvailable')}
                 </option>
-              ))
-            ) : (
-              <option value="" disabled>
-                {t('api.noModelsAvailable')}
-              </option>
-            )}
-          </select>
-        )}
-        {useCustomModel && <p className="text-xs text-text-muted">{modelInputHint}</p>}
+              )}
+            </select>
+          );
+        })()}
+
+        {/* User-added custom models - removable chips */}
+        {(() => {
+          const presetIds = modelOptions.map((m) => m.id);
+          const customModels = models.filter((m) => !presetIds.includes(m));
+          if (customModels.length === 0) return null;
+          return (
+            <div className="flex flex-wrap gap-1.5">
+              {customModels.map((m) => (
+                <span
+                  key={m}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-accent/10 text-xs text-accent border border-accent/20"
+                >
+                  <span className="max-w-[180px] truncate">{m}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeModel(m)}
+                    className="text-accent/60 hover:text-error transition-colors"
+                    title={t('api.removeCustomModel')}
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          );
+        })()}
+
+        {/* Add custom model */}
+        <div className="flex gap-1.5">
+          <input
+            type="text"
+            value={newModelInput}
+            onChange={(e) => setNewModelInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && newModelInput.trim()) {
+                e.preventDefault();
+                addModel(newModelInput.trim());
+                setNewModelInput('');
+              }
+            }}
+            placeholder={t('api.addCustomModelPlaceholder')}
+            className="flex-1 px-3 py-1.5 rounded-lg bg-background border border-border text-text-primary text-sm placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent transition-all"
+          />
+          <button
+            type="button"
+            onClick={() => {
+              addModel(newModelInput.trim());
+              setNewModelInput('');
+            }}
+            disabled={!newModelInput.trim()}
+            className="px-2 py-1.5 rounded-lg border border-border-muted bg-surface-hover text-text-secondary hover:bg-surface-active disabled:opacity-40 transition-colors"
+            title={t('api.addCustomModel')}
+          >
+            <Plus className="w-4 h-4" />
+          </button>
+        </div>
+        <p className="text-xs text-text-muted">{t('api.addCustomModelHint')}</p>
 
         {/* Context Window & Max Tokens — only for non-registry providers */}
         {(provider === 'ollama' || provider === 'custom') && (
