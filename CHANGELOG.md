@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Image ContentBlock conversion (Open Cowork `source.data`/`source.media_type` → pi-ai `data`/`mimeType`) for passing images to models.
 - Temporary files now enforced to go under `tmp/` directory; root-level junk files cleaned up.
 
-## [Unreleased]
+## [3.3.3] - 2026-05-08
 
 ### Added
 
@@ -55,6 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chinese characters in bash tool commands no longer cause "No such file or directory" errors on Windows Git Bash.
 - Python stdout encoding now defaults to UTF-8 across all Windows execution paths, preventing `UnicodeEncodeError` from GBK/CP936 code pages.
+
+## [Unreleased]
 
 ## [3.3.1] - 2026-04-28
 
@@ -205,7 +207,8 @@ First stable release of the 3.3.x series. Graduated from 9 beta releases with 30
 
 - Initial release of Open Cowork — open-source AI agent desktop app with one-click install for Windows and macOS
 
-[Unreleased]: https://github.com/SageFoundry/open-cowork/compare/v3.3.2...HEAD
+[Unreleased]: https://github.com/SageFoundry/open-cowork/compare/v3.3.3...HEAD
+[3.3.3]: https://github.com/SageFoundry/open-cowork/compare/v3.3.2...v3.3.3
 [3.3.2]: https://github.com/SageFoundry/open-cowork/compare/v3.3.1...v3.3.2
 [3.3.1]: https://github.com/SageFoundry/open-cowork/compare/2a282b1...v3.3.1
 [3.3.0]: https://github.com/SageFoundry/open-cowork/commit/2a282b1
