@@ -5,27 +5,7 @@ All notable changes to the Open Cowork AI agent desktop app will be documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.3.2] - 2026-04-30
-
-### Added
-
-- Background task management: AI agents can start long-running processes (dev servers, API servers, etc.) via `execute_background_command` tool with port readiness waiting, and users can monitor, view logs, and stop tasks from the Context Panel sidebar.
-- Background task shell syntax interception: bash tool automatically detects background syntax (`&`, `nohup`, `disown`, `pm2`, `Start-Process`) and routes to the background task tool.
-- Web-design-engineer and ddg-web-search skills added to skill ecosystem.
-- Image attachments are now passed to pi-ai models via `PromptOptions.images` (images were previously stored in messages but never sent to the model).
-
-### Changed
-
-- `BackgroundTaskService` core operations (`isProcessAlive`, `reconcileTasks`, `terminateProcess`, `forceKillProcess`) are now fully async using `execFile` instead of synchronous `execFileSync`, preventing main-process blocking during task reconciliation.
-- `SkillsAdapter.getSkillPaths()` now accepts optional `projectPath` to support per-project skill directories (`.skills/`, `skills/`).
-- `DefaultResourceLoader` now uses `noSkills: true`; Open Cowork controls all skill path resolution.
-- Thinking/reasoning content is always displayed in the UI — the `enableThinking` toggle now only controls whether thinking is requested from the API, not whether it is shown.
-
-### Fixed
-
-- Thinking toggle now works for DeepSeek and other OpenAI-compatible providers via `thinking: { type: 'disabled' }` in the API payload (previously only Anthropic protocol was handled).
-- Image ContentBlock conversion (Open Cowork `source.data`/`source.media_type` → pi-ai `data`/`mimeType`) for passing images to models.
-- Temporary files now enforced to go under `tmp/` directory; root-level junk files cleaned up.
+## [Unreleased]
 
 ## [3.3.3] - 2026-05-08
 
@@ -55,8 +35,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chinese characters in bash tool commands no longer cause "No such file or directory" errors on Windows Git Bash.
 - Python stdout encoding now defaults to UTF-8 across all Windows execution paths, preventing `UnicodeEncodeError` from GBK/CP936 code pages.
+- Windows release packaging now clears Electron build output directories before rebuilding, preventing stale `dist-electron/main` bundles from accumulating into oversized installers.
 
-## [Unreleased]
+### Release
+
+- Published Windows installer `Open-Cowork-3.3.3-win-x64.exe` with corrected asset naming, `.blockmap`, `latest.yml`, and legacy cleanup helpers for auto-update.
+- GitHub Release: https://github.com/SageFoundry/open-cowork/releases/tag/v3.3.3
+
+## [3.3.2] - 2026-04-30
+
+### Added
+
+- Background task management: AI agents can start long-running processes (dev servers, API servers, etc.) via `execute_background_command` tool with port readiness waiting, and users can monitor, view logs, and stop tasks from the Context Panel sidebar.
+- Background task shell syntax interception: bash tool automatically detects background syntax (`&`, `nohup`, `disown`, `pm2`, `Start-Process`) and routes to the background task tool.
+- Web-design-engineer and ddg-web-search skills added to skill ecosystem.
+- Image attachments are now passed to pi-ai models via `PromptOptions.images` (images were previously stored in messages but never sent to the model).
+
+### Changed
+
+- `BackgroundTaskService` core operations (`isProcessAlive`, `reconcileTasks`, `terminateProcess`, `forceKillProcess`) are now fully async using `execFile` instead of synchronous `execFileSync`, preventing main-process blocking during task reconciliation.
+- `SkillsAdapter.getSkillPaths()` now accepts optional `projectPath` to support per-project skill directories (`.skills/`, `skills/`).
+- `DefaultResourceLoader` now uses `noSkills: true`; Open Cowork controls all skill path resolution.
+- Thinking/reasoning content is always displayed in the UI — the `enableThinking` toggle now only controls whether thinking is requested from the API, not whether it is shown.
+
+### Fixed
+
+- Thinking toggle now works for DeepSeek and other OpenAI-compatible providers via `thinking: { type: 'disabled' }` in the API payload (previously only Anthropic protocol was handled).
+- Image ContentBlock conversion (Open Cowork `source.data`/`source.media_type` → pi-ai `data`/`mimeType`) for passing images to models.
+- Temporary files now enforced to go under `tmp/` directory; root-level junk files cleaned up.
 
 ## [3.3.1] - 2026-04-28
 
