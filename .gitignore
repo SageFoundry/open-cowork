@@ -105,6 +105,10 @@ DEV_LOG.md
 tmp/
 .cowork-user-data/
 .codex-runtime/
+.uploads/
+
+# Local manual output staging
+local-output/
 
 # Windows reserved name artifacts
 nul
