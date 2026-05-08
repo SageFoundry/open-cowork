@@ -26,12 +26,14 @@ interface ConfigModalProps {
 }
 
 const PROVIDER_LABELS: Record<
-  'openrouter' | 'anthropic' | 'openai' | 'gemini' | 'ollama' | 'custom',
+  'openrouter' | 'anthropic' | 'openai' | 'lingerai' | 'deepseek' | 'gemini' | 'ollama' | 'custom',
   string
 > = {
   openrouter: 'OpenRouter',
   anthropic: 'Anthropic',
   openai: 'OpenAI',
+  lingerai: '灵儿AI',
+  deepseek: 'DeepSeek',
   gemini: 'Gemini',
   ollama: 'Ollama',
   custom: 'Custom',
@@ -198,7 +200,7 @@ export function ConfigModal({
               {t('api.provider')}
             </label>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-              {(['openrouter', 'anthropic', 'openai', 'gemini', 'ollama', 'custom'] as const).map(
+              {(['anthropic', 'openai', 'lingerai', 'deepseek', 'ollama', 'custom'] as const).map(
                 (p) => (
                   <button
                     key={p}

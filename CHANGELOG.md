@@ -31,17 +31,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- New built-in `lingerai` provider (`灵儿AI`) with OpenAI-compatible routing, default base URL `https://xc.lifesecretary.com:8000/v1`, and preset model `gpt-5.4`.
+- New built-in `deepseek` provider (`DeepSeek`) with OpenAI-compatible routing, default base URL `https://api.deepseek.com`, and preset models `deepseek-v4-flash`, `deepseek-v4-pro`.
 - Multi-model support per config set: `ProviderProfile` now has an optional `models: string[]` field for user-added custom models. The model picker in ChatView displays preset models merged with user-added models, enabling quick switching within a single config set.
 - Model management UI in Settings: unified model dropdown (preset + custom) with an "add custom model" input and removable chips for user-added models.
 - `removeModel` callback in `useApiConfigState` for deleting user-added custom models.
+- New `pwsh` tool for PowerShell 7 / Windows PowerShell 5.1 execution on Windows, complementing the existing `bash` tool. Registered in `agent-runner.ts` on Windows only.
+- `PYTHONIOENCODING=utf-8` and `PYTHONUTF8=1` injected across all Windows command execution paths (`windows-bash-executor.ts`, `windows-powershell-executor.ts`, `background-task-service.ts`, `tool-executor.ts`, `native-executor.ts`, `plugin-runtime-service.ts`, `gui-operate-server.ts`) to prevent GBK/CP936 encoding errors.
 
 ### Changed
 
 - Removed the `useCustomModel` / `customModel` / toggle system — model selection is now a single unified dropdown. Old configs with `useCustomModel` + `customModel` are auto-migrated to `models[]` on load.
 - Custom provider ("更多模型") now has an empty preset model list; only user-added models appear.
 - `modelPresetForProfile` now returns the `custom` preset for all `custom:*` protocol keys instead of mapping to provider-specific presets.
+- Provider tabs now include `灵儿AI`, treated as a first-class OpenAI-compatible provider instead of a custom protocol variant.
 - ChatView model picker now correctly switches config sets when selecting a model from a non-active set (previously it incorrectly saved the model to the current set).
 - Model picker dropdown now closes when clicking outside (previously required clicking the toggle button).
+- Git Bash command execution on Windows now uses temp `.sh` scripts with base64-encoded command content, bypassing MSYS2 argument-level encoding mangling that broke Chinese characters and other non-ASCII input.
+- `chcp 65001` UTF-8 code page injection centralized into `executeWindowsPowerShell()`; removed from individual callers in `tool-executor.ts`.
+- `runtime-resolver.ts`: `resolvePythonFromPath()` now skips WindowsApps alias entries and falls back to `py -3` launcher to find real Python installations.
+
+### Fixed
+
+- Chinese characters in bash tool commands no longer cause "No such file or directory" errors on Windows Git Bash.
+- Python stdout encoding now defaults to UTF-8 across all Windows execution paths, preventing `UnicodeEncodeError` from GBK/CP936 code pages.
 
 ## [3.3.1] - 2026-04-28
 

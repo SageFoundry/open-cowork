@@ -67,6 +67,8 @@ function resolveProbeApiKey(
 
   if (
     input.provider === 'openai' ||
+    input.provider === 'lingerai' ||
+    input.provider === 'deepseek' ||
     input.provider === 'openrouter' ||
     (input.provider === 'custom' && resolvedCustomProtocol === 'openai')
   ) {

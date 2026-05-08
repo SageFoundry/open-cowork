@@ -261,6 +261,7 @@ const defaultSettings: Settings = {
     { tool: 'write', action: 'ask' },
     { tool: 'edit', action: 'ask' },
     { tool: 'bash', action: 'ask' },
+    { tool: 'pwsh', action: 'ask' },
   ],
   globalSkillsPath: '',
   memoryStrategy: 'auto',

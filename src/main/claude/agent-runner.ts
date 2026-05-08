@@ -17,6 +17,7 @@ import {
   SessionManager as PiSessionManager,
   SettingsManager as PiSettingsManager,
   createCodingTools,
+  type BashOperations,
   type AgentSession as PiAgentSession,
   type ToolDefinition,
 } from '@mariozechner/pi-coding-agent';
@@ -37,6 +38,7 @@ import {
   logCtxError,
   logTiming,
 } from '../utils/logger';
+import { executeWindowsPowerShell } from '../tools/windows-powershell-executor';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -1091,7 +1093,39 @@ ${hints.join('\n')}
           };
         },
       } as ToolDefinition;
-    });
+      });
+  }
+
+  private createWindowsBashOperations(sessionId: string): BashOperations {
+    return {
+      exec: async (
+        command: string,
+        cwd: string,
+        options: {
+          onData: (data: Buffer) => void;
+          signal?: AbortSignal;
+          timeout?: number;
+          env?: NodeJS.ProcessEnv;
+        }
+      ) => {
+        const result = await executeWindowsBash({
+          sessionId,
+          command,
+          cwd,
+          timeout: options.timeout,
+          signal: options.signal,
+        });
+
+        if (result.stdout) {
+          options.onData(Buffer.from(result.stdout, 'utf8'));
+        }
+        if (result.stderr) {
+          options.onData(Buffer.from(result.stderr, 'utf8'));
+        }
+
+        return { exitCode: result.exitCode };
+      },
+    };
   }
 
   /**
@@ -2318,7 +2352,16 @@ Tool routing:
       // executed via Pi SDK's Bash tool can find bundled and user-installed executables.
       await enrichProcessPathForBuild();
 
-      const codingTools = createCodingTools(effectiveCwd);
+      const codingTools = createCodingTools(
+        effectiveCwd,
+        process.platform === 'win32'
+          ? {
+              bash: {
+                operations: this.createWindowsBashOperations(session.id),
+              },
+            }
+          : undefined
+      );
       const windowsBashTools = this.replaceBashToolForWindows(
         codingTools as ToolDefinition[],
         session.id,
@@ -2340,6 +2383,51 @@ Tool routing:
         effectiveCwd,
         sanitizeOutputPaths
       );
+
+      // On Windows, add a pwsh tool for PowerShell execution
+      if (process.platform === 'win32') {
+        const pwshTool: ToolDefinition = {
+          name: 'pwsh',
+          label: 'PowerShell',
+          description:
+            'Execute a PowerShell command on Windows. Use this instead of bash for Windows-native tasks (file operations, registry, services, WMI, etc.). Supports PowerShell 7 (pwsh) and Windows PowerShell 5.1.',
+          parameters: Type.Object({
+            command: Type.String({
+              description:
+                'The PowerShell command to execute. Supports all PowerShell syntax including pipelines, objects, and .NET calls.',
+            }),
+            timeout: Type.Optional(
+              Type.Number({
+                description:
+                  'Optional timeout in seconds. Defaults to 120 seconds.',
+              })
+            ),
+          }),
+          execute: async (
+            _toolCallId: string,
+            params: { command: string; timeout?: number },
+            signal: AbortSignal | undefined
+          ) => {
+            const timeout = (params.timeout ?? 120) * 1000;
+            const result = await executeWindowsPowerShell({
+              script: params.command || '',
+              cwd: effectiveCwd,
+              timeoutMs: Math.max(1, timeout),
+              signal,
+            });
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: ClaudeAgentRunner.formatBashToolText(result),
+                },
+              ],
+              details: undefined as unknown,
+            };
+          },
+        };
+        wrappedTools.push(pwshTool);
+      }
 
       // Diagnostic: log tools being passed to SDK (helps debug Ollama tool use)
       logCtx(`[ClaudeAgentRunner] Session reuse check: cached=${!!cachedSession}`);
@@ -2693,7 +2781,7 @@ Tool routing:
           if (event.type === 'message_update') {
             const updateType = event.assistantMessageEvent.type;
             recordStreamEvent(updateType);
-            if (updateType !== 'text_delta' && updateType !== 'thinking_delta') {
+            if (updateType !== 'text_delta' && updateType !== 'thinking_delta' && updateType !== 'toolcall_delta') {
               log(`[ClaudeAgentRunner] Event: ${event.type} → ${updateType}`);
             }
           } else if (event.type === 'message_start') {

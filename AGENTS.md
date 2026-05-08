@@ -60,6 +60,24 @@ For `v3.3.1`, the release baseline was commit `2a282b1 release: v3.3.0 stable` b
 - OpenAI-compatible/DeepSeek thinking mode requires preserving and replaying provider-specific thinking/reasoning fields across turns. See `src/main/claude/thinking-compat.ts` and its tests before changing this path.
 - Custom model context windows are resolved through config plus model metadata. Check `src/main/claude/pi-model-resolution.ts`, `src/main/config/config-store.ts`, and context tests when touching this area.
 - Model selection uses `ProviderProfile.models?: string[]` for user-added custom models. The UI merges preset models (from `API_PROVIDER_PRESETS` in `src/shared/api-model-presets.ts`) with `models[]` for display. When changing model-related logic, update both `useApiConfigState.ts` (hook) and `ChatView.tsx` (picker). Custom provider ("更多模型") has empty presets — only user-added models appear. Old `useCustomModel`/`customModel` fields are auto-migrated to `models[]` in `normalizeProfile`.
+- `lingerai` (`灵儿AI`) is a first-class OpenAI-compatible provider with default base URL `https://xc.lifesecretary.com:8000/v1` and preset model `gpt-5.4`. Treat it like `openai` for protocol routing, diagnostics, and auth checks.
+- `deepseek` (`DeepSeek`) is a first-class OpenAI-compatible provider with default base URL `https://api.deepseek.com` and preset models `deepseek-v4-flash`, `deepseek-v4-pro`. Treat it like `openai` for protocol routing, diagnostics, and auth checks.
+
+## Windows Execution Infrastructure
+
+The agent exposes two command execution tools on Windows:
+
+- `bash` — routes to WSL sandbox (if enabled) or Git Bash. On Git Bash, commands are written into a temp `.sh` script (100% ASCII via base64-encoded command content) and executed with `bash --noprofile --norc <scriptPath>`, bypassing MSYS2's argument-level encoding mangling.
+- `pwsh` — uses PowerShell 7 (pwsh) or Windows PowerShell 5.1. The `executeWindowsPowerShell` function in `src/main/tools/windows-powershell-executor.ts` injects `chcp 65001`, `$OutputEncoding`, and `[Console]::InputEncoding`/`[Console]::OutputEncoding` as `UTF-8` into every execution.
+
+All Windows command execution paths (`windows-bash-executor.ts`, `windows-powershell-executor.ts`, `background-task-service.ts`, `tool-executor.ts`, `native-executor.ts`, `plugin-runtime-service.ts`, `gui-operate-server.ts`) inject `PYTHONIOENCODING=utf-8` and `PYTHONUTF8=1` into process and script environments to prevent GBK/CP936 encoding errors.
+
+**Runtime resolver** (`src/main/runtime/runtime-resolver.ts`):
+- `resolvePythonFromPath()` skips WindowsApps alias entries on Windows and prefers real Python installations.
+- Falls back to `py -3 -c "import sys; print(sys.executable)"` to locate Python when only WindowsApps aliases exist on PATH.
+- Both `executeWindowsPowerShell` and `executeViaGitBash` prepend the resolved Python directory to PATH before execution.
+
+**pwsh tool** is registered in `agent-runner.ts` only on Windows. It uses `executeWindowsPowerShell` under the hood. UI support includes `toolHelpers.tsx` icon/label, `context-compaction.ts` compactable tools list, and `store/index.ts` default permission rule.
 
 ## Editing Rules
 

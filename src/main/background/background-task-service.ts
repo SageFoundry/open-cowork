@@ -1,8 +1,9 @@
 import { app, shell } from 'electron';
 import { spawn, execFile } from 'node:child_process';
-import { mkdirSync, existsSync, openSync, closeSync, readFile, readFileSync, watchFile, unwatchFile } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, existsSync, openSync, closeSync, readFile, readFileSync, watchFile, unwatchFile, writeFileSync } from 'node:fs';
+import { join, delimiter as pathDelimiter } from 'node:path';
 import net from 'node:net';
+import os from 'node:os';
 import { v4 as uuidv4 } from 'uuid';
 import type {
   BackgroundTask,
@@ -14,6 +15,7 @@ import type { BackgroundTaskRow, DatabaseInstance } from '../db/database';
 import { logWarn } from '../utils/logger';
 import { detectGitBash } from '../tools/windows-bash-executor';
 import { getSandboxAdapter } from '../sandbox/sandbox-adapter';
+import { resolvePythonFromPath } from '../runtime/runtime-resolver';
 
 interface BackgroundTaskServiceOptions {
   watchIntervalMs?: number;
@@ -299,6 +301,15 @@ export class BackgroundTaskService {
     if (process.platform === 'win32') {
       const sandbox = getSandboxAdapter();
       const gitBashPath = detectGitBash();
+      const resolvedPython = resolvePythonFromPath();
+      const resolvedPythonDir = resolvedPython
+        ? resolvedPython.path.replace(/[\\/][^\\/]+$/, '')
+        : null;
+
+      const windowsEncodingEnv = {
+        PYTHONIOENCODING: 'utf-8' as const,
+        PYTHONUTF8: '1' as const,
+      };
 
       if (sandbox.isWSL && sandbox.wslStatus?.distro) {
         return spawn(
@@ -309,19 +320,45 @@ export class BackgroundTaskService {
             detached: true,
             stdio: ['ignore', stdoutFd, stderrFd],
             windowsHide: true,
-            env: { ...process.env, OPEN_COWORK_BASH_BACKEND: 'wsl' },
+            env: { ...process.env, OPEN_COWORK_BASH_BACKEND: 'wsl', ...windowsEncodingEnv },
           }
         );
       }
 
       if (gitBashPath) {
-        const bashCommand = `cd '${cwd.replace(/\\/g, '/').replace(/'/g, `'\"'\"'`)}' && ${command}`;
-        return spawn(gitBashPath, ['-lc', bashCommand], {
+        const scriptPath = join(
+          os.tmpdir(),
+          `oc-git-bash-bg-${Date.now()}-${Math.random().toString(16).slice(2)}.sh`
+        );
+        const normalizedCwd = cwd.replace(/\\/g, '/');
+        const cmdBase64 = Buffer.from(command, 'utf-8').toString('base64');
+        const scriptBody = [
+          '#!/usr/bin/env bash',
+          "trap 'rm -f -- \"$0\"' EXIT",
+          'export PYTHONIOENCODING=utf-8',
+          'export PYTHONUTF8=1',
+          resolvedPythonDir ? `export PATH='${resolvedPythonDir.replace(/'/g, `"'"'`)}':"$PATH"` : '',
+          `cd '${normalizedCwd.replace(/'/g, `"'"'`)}'`,
+          `eval "$(printf '%s' '${cmdBase64}' | base64 -d)"`,
+          '',
+        ].join('\n');
+        writeFileSync(scriptPath, scriptBody, 'utf8');
+        return spawn(gitBashPath, ['--noprofile', '--norc', scriptPath], {
           cwd,
           detached: true,
           stdio: ['ignore', stdoutFd, stderrFd],
           windowsHide: true,
-          env: { ...process.env, OPEN_COWORK_BASH_BACKEND: 'git-bash' },
+          env: {
+            ...process.env,
+            OPEN_COWORK_BASH_BACKEND: 'git-bash',
+            MSYS2_ARG_CONV_EXCL: '*',
+            ...(resolvedPythonDir
+              ? {
+                  PATH: `${resolvedPythonDir}${pathDelimiter}${process.env.PATH || ''}`,
+                }
+              : {}),
+            ...windowsEncodingEnv,
+          },
         });
       }
 
@@ -333,7 +370,7 @@ export class BackgroundTaskService {
           detached: true,
           stdio: ['ignore', stdoutFd, stderrFd],
           windowsHide: true,
-          env: { ...process.env },
+          env: { ...process.env, ...windowsEncodingEnv },
         }
       );
     }

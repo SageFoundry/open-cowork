@@ -530,7 +530,7 @@ export interface Settings {
 }
 
 // Tool types
-export type ToolName = 'read' | 'write' | 'edit' | 'glob' | 'grep' | 'bash' | 'webFetch' | 'webSearch';
+export type ToolName = 'read' | 'write' | 'edit' | 'glob' | 'grep' | 'bash' | 'pwsh' | 'webFetch' | 'webSearch';
 
 export interface ToolResult {
   success: boolean;
@@ -547,13 +547,23 @@ export interface ExecutionContext {
 }
 
 // App Config types
-export type ProviderType = 'openrouter' | 'anthropic' | 'custom' | 'openai' | 'gemini' | 'ollama';
+export type ProviderType =
+  | 'openrouter'
+  | 'anthropic'
+  | 'custom'
+  | 'openai'
+  | 'lingerai'
+  | 'deepseek'
+  | 'gemini'
+  | 'ollama';
 export type CustomProtocolType = 'anthropic' | 'openai' | 'gemini';
 export type AppTheme = 'dark' | 'light' | 'system';
 export type ProviderProfileKey =
   | 'openrouter'
   | 'anthropic'
   | 'openai'
+  | 'lingerai'
+  | 'deepseek'
   | 'gemini'
   | 'ollama'
   | 'custom:anthropic'
@@ -624,6 +634,8 @@ export interface ProviderPresets {
   anthropic: ProviderPreset;
   custom: ProviderPreset;
   openai: ProviderPreset;
+  lingerai: ProviderPreset;
+  deepseek: ProviderPreset;
   gemini: ProviderPreset;
   ollama: ProviderPreset;
 }

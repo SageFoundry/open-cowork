@@ -1036,6 +1036,7 @@ async function resolvePythonExec(): Promise<PythonExec | null> {
       PYTHONNOUSERSITE: '1',
       PYTHONDONTWRITEBYTECODE: '1',
       PYTHONUTF8: '1',
+      PYTHONIOENCODING: 'utf-8',
     };
     if (await pathExists(extraSite)) {
       env.PYTHONPATH = [extraSite, baseEnv.PYTHONPATH].filter(Boolean).join(path.delimiter);
@@ -1085,6 +1086,7 @@ async function resolvePythonExec(): Promise<PythonExec | null> {
             PYTHONNOUSERSITE: '1',
             PYTHONDONTWRITEBYTECODE: '1',
             PYTHONUTF8: '1',
+      PYTHONIOENCODING: 'utf-8',
           },
         };
         writeMCPLog(
@@ -1156,6 +1158,7 @@ async function resolvePythonExec(): Promise<PythonExec | null> {
             PYTHONNOUSERSITE: '1',
             PYTHONDONTWRITEBYTECODE: '1',
             PYTHONUTF8: '1',
+      PYTHONIOENCODING: 'utf-8',
           },
         };
         writeMCPLog(
@@ -1204,6 +1207,7 @@ async function resolvePythonExec(): Promise<PythonExec | null> {
         PYTHONNOUSERSITE: '1',
         PYTHONDONTWRITEBYTECODE: '1',
         PYTHONUTF8: '1',
+      PYTHONIOENCODING: 'utf-8',
       };
       if (await pathExists(extraSite)) {
         env.PYTHONPATH = [extraSite, baseEnv.PYTHONPATH].filter(Boolean).join(path.delimiter);
@@ -1230,6 +1234,7 @@ async function resolvePythonExec(): Promise<PythonExec | null> {
           PYTHONNOUSERSITE: '1',
           PYTHONDONTWRITEBYTECODE: '1',
           PYTHONUTF8: '1',
+      PYTHONIOENCODING: 'utf-8',
         },
       };
       writeMCPLog(`[resolvePythonExec] Using system Python: ${systemPython}`, 'Python Resolve');
@@ -1258,6 +1263,7 @@ async function resolvePythonExec(): Promise<PythonExec | null> {
           PYTHONNOUSERSITE: '1',
           PYTHONDONTWRITEBYTECODE: '1',
           PYTHONUTF8: '1',
+      PYTHONIOENCODING: 'utf-8',
         },
       };
       writeMCPLog(`[resolvePythonExec] Using PATH Python: ${p}`, 'Python Resolve');

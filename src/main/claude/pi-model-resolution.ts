@@ -49,6 +49,7 @@ export function resolvePiRouteProtocol(provider?: string, customProtocol?: strin
   }
   if (provider === 'ollama') return 'openai';
   if (provider === 'openai') return 'openai';
+  if (provider === 'lingerai' || provider === 'deepseek') return 'openai';
   if (provider === 'openrouter') return 'openai';
   if (provider === 'gemini') return 'gemini';
   return provider || 'anthropic';
@@ -765,6 +766,8 @@ export function resolveSyntheticPiModelFallback(
     rawModel.includes('/') &&
     (input.rawProvider === 'openrouter' ||
       input.rawProvider === 'custom' ||
+      input.rawProvider === 'lingerai' ||
+      input.rawProvider === 'deepseek' ||
       (input.rawProvider === 'openai' && !!baseUrl && !isOfficialOpenAIBaseUrl(baseUrl))) &&
     input.routeProtocol === 'openai';
 
@@ -776,7 +779,7 @@ export function resolveSyntheticPiModelFallback(
   }
 
   const fallbackProvider =
-    input.rawProvider === 'custom' || input.rawProvider === 'ollama'
+    input.rawProvider === 'custom' || input.rawProvider === 'ollama' || input.rawProvider === 'lingerai' || input.rawProvider === 'deepseek'
       ? input.routeProtocol || 'anthropic'
       : parsedProvider || input.rawProvider || input.routeProtocol || 'anthropic';
 
@@ -874,7 +877,9 @@ export function applyPiModelRuntimeOverrides(
   }
 
   const isCustomProvider = options.rawProvider === 'custom' || options.configProvider === 'custom';
-  const shouldHonorConfiguredBaseUrl = options.rawProvider === 'openai' || isCustomProvider;
+  const isCustomOpenAICompatibleProvider = isCustomProvider || options.rawProvider === 'lingerai' || options.rawProvider === 'deepseek';
+  const shouldHonorConfiguredBaseUrl =
+    options.rawProvider === 'openai' || isCustomOpenAICompatibleProvider;
   const modelHasBaseUrl = Boolean(nextModel.baseUrl);
 
   if (options.customBaseUrl && (shouldHonorConfiguredBaseUrl || !modelHasBaseUrl)) {
@@ -882,7 +887,11 @@ export function applyPiModelRuntimeOverrides(
   }
 
   const effectiveProvider = options.rawProvider || options.configProvider;
-  if (options.customBaseUrl && isCustomProvider && nextModel.api === 'openai-responses') {
+  if (
+    options.customBaseUrl &&
+    isCustomOpenAICompatibleProvider &&
+    nextModel.api === 'openai-responses'
+  ) {
     // Most custom OpenAI-compatible relays only implement chat/completions.
     nextModel = { ...nextModel, api: 'openai-completions' } as typeof nextModel;
   }

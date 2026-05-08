@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { spawn } from 'child_process';
+import { resolvePythonFromPath } from '../runtime/runtime-resolver';
 import { getSandboxAdapter } from '../sandbox/sandbox-adapter';
 import type { ExecutionResult } from '../sandbox/types';
 import { log } from '../utils/logger';
@@ -55,10 +56,14 @@ function detectGitBashFromPath(): string | null {
     .split(delimiter)
     .map((entry) => entry.trim())
     .filter(Boolean)
-    .flatMap((entry) => [
-      `${entry.replace(/[\\/]+$/, '')}\\bash.exe`,
-      `${entry.replace(/[\\/]+$/, '')}\\..\\bin\\bash.exe`,
-    ]);
+    .flatMap((entry) => {
+      const trimmedEntry = entry.replace(/[\\/]+$/, '');
+      return [
+        path.resolve(trimmedEntry, 'bash.exe'),
+        path.resolve(trimmedEntry, '..', 'bin', 'bash.exe'),
+      ];
+    })
+    .map((candidate) => path.normalize(candidate));
 
   for (const candidate of candidates) {
     try {
@@ -192,14 +197,42 @@ async function executeViaGitBash({
   signal?: AbortSignal;
   stdin?: string;
 }): Promise<WindowsBashExecutionResult> {
-  const bashCommand = `cd ${shellEscapeSingleQuoted(cwd.replace(/\\/g, '/'))} && ${command}`;
+  // Normalize Windows absolute paths in command for Git Bash compatibility,
+  // preventing backslashes from being interpreted as escape sequences.
+  command = command.replace(/([A-Za-z]:[\\/][^\s"'|;&<>]*)/g, (match) =>
+    match.replace(/\\/g, '/')
+  );
+  const normalizedCwd = cwd.replace(/\\/g, '/');
+  const resolvedPython = resolvePythonFromPath();
+  const resolvedPythonDir = resolvedPython ? path.dirname(resolvedPython.path).replace(/\\/g, '/') : null;
+  const scriptPath = path.join(
+    os.tmpdir(),
+    `oc-git-bash-${Date.now()}-${Math.random().toString(16).slice(2)}.sh`
+  );
+  // Base64-encode the command so the script file is 100% ASCII,
+  // avoiding any Git Bash/MSYS2 locale-dependent encoding issues.
+  const cmdBase64 = Buffer.from(command, 'utf-8').toString('base64');
+  const scriptBody = [
+    '#!/usr/bin/env bash',
+    'export PYTHONIOENCODING=utf-8',
+    'export PYTHONUTF8=1',
+    resolvedPythonDir ? `export PATH='${resolvedPythonDir.replace(/'/g, `"'"'`)}':"$PATH"` : '',
+    `cd ${shellEscapeSingleQuoted(normalizedCwd)}`,
+    `eval "$(printf '%s' '${cmdBase64}' | base64 -d)"`,
+    '',
+  ].join('\n');
+  fs.writeFileSync(scriptPath, scriptBody, 'utf8');
+  log(`[WindowsBashExecutor] Git Bash script: ${scriptPath}`);
 
   return await new Promise<WindowsBashExecutionResult>((resolve, reject) => {
-    const child = spawn(gitBashPath, ['-lc', bashCommand], {
+    const child = spawn(gitBashPath, ['--noprofile', '--norc', scriptPath], {
       cwd,
       env: {
         ...process.env,
         OPEN_COWORK_BASH_BACKEND: 'git-bash',
+        MSYS2_ARG_CONV_EXCL: '*',
+        PYTHONIOENCODING: 'utf-8',
+        PYTHONUTF8: '1',
       },
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
@@ -210,22 +243,29 @@ async function executeViaGitBash({
     let settled = false;
     let timedOut = false;
 
-    const cleanup = () => {
+    const cleanup = (removeScript: boolean) => {
       clearTimeout(timeoutId);
       if (abortHandler) signal?.removeEventListener('abort', abortHandler);
+      if (removeScript) {
+        try {
+          fs.unlinkSync(scriptPath);
+        } catch {
+          // best-effort cleanup
+        }
+      }
     };
 
     const finish = (result: WindowsBashExecutionResult) => {
       if (settled) return;
       settled = true;
-      cleanup();
+      cleanup(result.exitCode === 0 && !result.timedOut);
       resolve(result);
     };
 
     const fail = (error: Error) => {
       if (settled) return;
       settled = true;
-      cleanup();
+      cleanup(false);
       reject(error);
     };
 
@@ -260,7 +300,11 @@ async function executeViaGitBash({
     child.on('close', (code) => {
       finish({
         stdout,
-        stderr: timedOut ? `${stderr}${stderr ? '\n' : ''}Command timed out after ${timeout}ms` : stderr,
+        stderr: timedOut
+          ? `${stderr}${stderr ? '\n' : ''}Command timed out after ${timeout}ms\n[Git Bash script preserved at ${scriptPath}]`
+          : code === 0 || !scriptPath
+            ? stderr
+            : `${stderr}${stderr ? '\n' : ''}[Git Bash script preserved at ${scriptPath}]`,
         exitCode: timedOut ? 124 : (code ?? 1),
         backend: 'git-bash',
         timedOut,

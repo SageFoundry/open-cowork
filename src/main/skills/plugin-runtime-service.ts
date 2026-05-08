@@ -313,7 +313,9 @@ export class PluginRuntimeService {
       } catch {
         /* use process.env.PATH */
       }
-    } else if (process.platform === 'win32') {
+    } else     if (process.platform === 'win32') {
+      env.PYTHONIOENCODING = 'utf-8';
+      env.PYTHONUTF8 = '1';
       try {
         const winPaths = getWindowsRegistryPathEntries();
         if (winPaths.length > 0) {

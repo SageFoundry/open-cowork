@@ -4,7 +4,7 @@ import { Terminal, FileCode, FileText, Pencil, Search, Globe, FolderSearch } fro
 /** Map a tool name to a small icon element */
 export function getToolIcon(name: string) {
   const n = name.toLowerCase();
-  if (n === 'bash' || n === 'execute_command') return <Terminal className="w-3.5 h-3.5" />;
+  if (n === 'bash' || n === 'pwsh' || n === 'execute_command') return <Terminal className="w-3.5 h-3.5" />;
   if (n === 'read' || n === 'read_file') return <FileCode className="w-3.5 h-3.5" />;
   if (n === 'write' || n === 'write_file') return <FileText className="w-3.5 h-3.5" />;
   if (n === 'edit' || n === 'edit_file') return <Pencil className="w-3.5 h-3.5" />;
@@ -45,7 +45,7 @@ export function getToolLabel(name: string, input: Record<string, unknown>): stri
     const p = String(inp.file_path || inp.path || '');
     return p ? `Edit ${shortenPath(p)}` : 'Edit file';
   }
-  if (nameLower === 'bash' || nameLower === 'execute_command') {
+  if (nameLower === 'bash' || nameLower === 'pwsh' || nameLower === 'execute_command') {
     const cmd = String(inp.command || inp.cmd || '');
     if (cmd) {
       const short = cmd.length > 60 ? cmd.substring(0, 57) + '...' : cmd;

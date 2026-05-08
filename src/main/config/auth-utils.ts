@@ -41,6 +41,8 @@ export function shouldUseAnthropicAuthToken(
 export function isOpenAIProvider(config: Pick<AppConfig, 'provider' | 'customProtocol'>): boolean {
   return (
     config.provider === 'openai' ||
+    config.provider === 'lingerai' ||
+    config.provider === 'deepseek' ||
     config.provider === 'ollama' ||
     (config.provider === 'custom' && config.customProtocol === 'openai')
   );

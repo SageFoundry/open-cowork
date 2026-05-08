@@ -122,7 +122,7 @@ export function SettingsAPI() {
         </label>
         <p className="text-xs leading-5 text-text-muted">{t('api.providerDescription')}</p>
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-2">
-          {(['openrouter', 'anthropic', 'openai', 'gemini', 'ollama', 'custom'] as const).map(
+          {(['anthropic', 'openai', 'lingerai', 'deepseek', 'ollama', 'custom'] as const).map(
             (p) => (
               <button
                 key={p}

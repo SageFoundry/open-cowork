@@ -36,7 +36,7 @@ function getToolLabel(name: string, input: unknown): string {
     const p = String(inp.file_path || inp.path || '');
     return p ? `Edit ${shortenPath(p)}` : 'Edit file';
   }
-  if (nameLower === 'bash' || nameLower === 'execute_command') {
+  if (nameLower === 'bash' || nameLower === 'pwsh' || nameLower === 'execute_command') {
     const cmd = String(inp.command || inp.cmd || '');
     if (cmd) {
       const short = cmd.length > 60 ? cmd.substring(0, 57) + '...' : cmd;

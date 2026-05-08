@@ -40,6 +40,30 @@ function findExecutableInPath(executableNames: string[]): string | null {
   return null;
 }
 
+function findExecutablesInPath(executableNames: string[]): string[] {
+  const entries = splitPathEntries(process.env.PATH);
+  const results: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    for (const executableName of executableNames) {
+      const candidate = path.join(entry, executableName);
+      const normalized = process.platform === 'win32' ? candidate.toLowerCase() : candidate;
+      if (seen.has(normalized)) {
+        continue;
+      }
+      try {
+        if (fs.existsSync(candidate)) {
+          seen.add(normalized);
+          results.push(candidate);
+        }
+      } catch {
+        // ignore invalid path entry
+      }
+    }
+  }
+  return results;
+}
+
 function resolveExisting(candidates: string[]): string | null {
   for (const candidate of candidates) {
     try {
@@ -56,6 +80,22 @@ function resolveExisting(candidates: string[]): string | null {
 export function isWindowsStoreAliasPath(executablePath: string | null | undefined): boolean {
   if (!executablePath) return false;
   return /\\AppData\\Local\\Microsoft\\WindowsApps\\/i.test(executablePath);
+}
+
+function resolvePythonViaPyLauncher(): string | null {
+  if (process.platform !== 'win32') {
+    return null;
+  }
+  try {
+    const output = execFileSync(
+      'py',
+      ['-3', '-c', 'import sys; print(sys.executable)'],
+      { encoding: 'utf-8', timeout: 5000 }
+    ).trim();
+    return output && fs.existsSync(output) ? output : null;
+  } catch {
+    return null;
+  }
 }
 
 export function resolvePreferredWindowsShell(): ResolvedRuntime | null {
@@ -144,12 +184,25 @@ export function getWindowsRegistryPathEntries(): string[] {
 }
 
 export function resolvePythonFromPath(): ResolvedRuntime | null {
-  const executableName = process.platform === 'win32' ? 'python.exe' : 'python3';
-  const found = findExecutableInPath([executableName, 'python']);
+  const executableNames = process.platform === 'win32'
+    ? ['python.exe', 'python3.exe', 'python3', 'python']
+    : ['python3', 'python'];
+  const candidates = findExecutablesInPath(executableNames);
+  const found = candidates.find((candidate) => !isWindowsStoreAliasPath(candidate)) || candidates[0] || null;
   if (!found) return null;
 
   const warnings: string[] = [];
   if (process.platform === 'win32' && isWindowsStoreAliasPath(found)) {
+    const launcherResolved = resolvePythonViaPyLauncher();
+    if (launcherResolved && !isWindowsStoreAliasPath(launcherResolved)) {
+      warnings.push('Resolved python via py launcher because PATH points to WindowsApps alias.');
+      return {
+        kind: 'python',
+        path: launcherResolved,
+        source: 'system',
+        warnings,
+      };
+    }
     warnings.push('Resolved python points to WindowsApps alias and may not be executable in agent sub-processes.');
   }
 

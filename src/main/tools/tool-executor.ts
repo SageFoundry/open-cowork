@@ -6,7 +6,7 @@ import { PathResolver } from '../sandbox/path-resolver';
 import type { ToolResult, ExecutionContext, MountedPath } from '../../renderer/types';
 import { isUncPath } from '../../shared/local-file-path';
 import { isPathWithinRoot } from '../../shared/path-containment';
-import { executeWindowsPowerShell } from './windows-powershell-executor';
+import { executeWindowsBash } from './windows-bash-executor';
 
 /**
  * ToolExecutor - Secure tool execution framework
@@ -398,9 +398,11 @@ export class ToolExecutor {
     this.validateCommandSandbox(sessionId, command, cwd);
 
     if (process.platform === 'win32') {
-      const result = await executeWindowsPowerShell({
-        script: `chcp 65001 > $null\n${command}`,
+      const result = await executeWindowsBash({
+        sessionId,
+        command,
         cwd,
+        timeout: 60,
       });
       if (result.exitCode === 0) {
         return result.stdout || 'Command completed successfully';
@@ -906,10 +908,11 @@ export class ToolExecutor {
 
     if (process.platform === 'win32') {
       try {
-        const result = await executeWindowsPowerShell({
-          script: `chcp 65001 > $null\n${command}`,
+        const result = await executeWindowsBash({
+          sessionId: context.sessionId,
+          command,
           cwd,
-          timeoutMs: 30000,
+          timeout: 30,
         });
         if (result.exitCode === 0) {
           return { success: true, output: result.stdout || 'Command completed' };

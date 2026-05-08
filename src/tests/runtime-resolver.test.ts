@@ -126,4 +126,36 @@ describe('runtime-resolver', () => {
     expect(resolved?.path).toBe(path.join(windowsApps, 'python.exe'));
     expect(resolved?.warnings[0]).toContain('WindowsApps alias');
   });
+
+  it('prefers a real python over WindowsApps alias on PATH', async () => {
+    Object.defineProperty(process, 'platform', {
+      value: 'win32',
+      writable: true,
+      configurable: true,
+    });
+
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-runtime-'));
+    const windowsApps = path.join(
+      tmpDir,
+      'Users',
+      'user',
+      'AppData',
+      'Local',
+      'Microsoft',
+      'WindowsApps'
+    );
+    const realPythonDir = path.join(tmpDir, 'Python311');
+    fs.mkdirSync(windowsApps, { recursive: true });
+    fs.mkdirSync(realPythonDir, { recursive: true });
+    fs.writeFileSync(path.join(windowsApps, 'python.exe'), '');
+    fs.writeFileSync(path.join(realPythonDir, 'python.exe'), '');
+
+    process.env.PATH = `${windowsApps};${realPythonDir}`;
+
+    const { resolvePythonFromPath } = await import('../main/runtime/runtime-resolver');
+    const resolved = resolvePythonFromPath();
+
+    expect(resolved?.path).toBe(path.join(realPythonDir, 'python.exe'));
+    expect(resolved?.warnings).toEqual([]);
+  });
 });

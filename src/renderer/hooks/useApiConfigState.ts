@@ -72,6 +72,8 @@ const PROFILE_KEYS: ProviderProfileKey[] = [
   'openrouter',
   'anthropic',
   'openai',
+  'lingerai',
+  'deepseek',
   'gemini',
   'ollama',
   'custom:anthropic',
@@ -89,6 +91,8 @@ function isProviderType(value: unknown): value is ProviderType {
     value === 'anthropic' ||
     value === 'custom' ||
     value === 'openai' ||
+    value === 'lingerai' ||
+    value === 'deepseek' ||
     value === 'gemini' ||
     value === 'ollama'
   );
@@ -132,6 +136,12 @@ export function profileKeyToProvider(profileKey: ProviderProfileKey): {
   }
   if (profileKey === 'openai') {
     return { provider: 'openai', customProtocol: 'openai' };
+  }
+  if (profileKey === 'lingerai') {
+    return { provider: 'lingerai', customProtocol: 'openai' };
+  }
+  if (profileKey === 'deepseek') {
+    return { provider: 'deepseek', customProtocol: 'openai' };
   }
   if (profileKey === 'gemini') {
     return { provider: 'gemini', customProtocol: 'gemini' };

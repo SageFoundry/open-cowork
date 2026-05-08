@@ -50,7 +50,7 @@ describe('ClaudeAgentRunner pi-coding-agent integration', () => {
   it('summarizes noisy SDK message updates instead of logging every text delta', () => {
     expect(agentRunnerContent).toContain('const streamEventCounts = new Map<string, number>();');
     expect(agentRunnerContent).toContain(
-      "if (updateType !== 'text_delta' && updateType !== 'thinking_delta') {"
+      "if (updateType !== 'text_delta' && updateType !== 'thinking_delta' && updateType !== 'toolcall_delta') {"
     );
     expect(agentRunnerContent).toContain("'[ClaudeAgentRunner] Event: message_end'");
     expect(agentRunnerContent).toContain('messageUpdateCounts: getStreamEventSummary()');

@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { spawn } from 'child_process';
-import { resolvePreferredWindowsShell } from '../runtime/runtime-resolver';
+import { resolvePreferredWindowsShell, resolvePythonFromPath } from '../runtime/runtime-resolver';
 
 export interface PowerShellExecutionParams {
   script: string;
@@ -43,9 +43,17 @@ export async function executeWindowsPowerShell({
   }
 
   const shellFlavor = flavor;
+  const resolvedPython = resolvePythonFromPath();
+  const resolvedPythonDir = resolvedPython ? path.dirname(resolvedPython.path) : null;
 
   const scriptPath = path.join(os.tmpdir(), `oc-pwsh-${Date.now()}-${Math.random().toString(16).slice(2)}.ps1`);
-  fs.writeFileSync(scriptPath, script, 'utf-8');
+  const encodingPrelude = [
+    'chcp 65001 > $null',
+    "$OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
+    "[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)",
+    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
+  ].join('\n');
+  fs.writeFileSync(scriptPath, `${encodingPrelude}\n${script}`, 'utf-8');
 
   return await new Promise<PowerShellExecutionResult>((resolve, reject) => {
     const child = spawn(
@@ -56,6 +64,13 @@ export async function executeWindowsPowerShell({
         env: {
           ...process.env,
           ...env,
+          PYTHONIOENCODING: 'utf-8',
+          PYTHONUTF8: '1',
+          ...(resolvedPythonDir
+            ? {
+                PATH: `${resolvedPythonDir}${path.delimiter}${env?.PATH || process.env.PATH || ''}`,
+              }
+            : {}),
         },
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,

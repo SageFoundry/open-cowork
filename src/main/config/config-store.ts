@@ -34,7 +34,15 @@ import { API_PROVIDER_PRESETS, PI_AI_CURATED_PRESETS } from '../../shared/api-mo
 /**
  * Application configuration schema
  */
-export type ProviderType = 'openrouter' | 'anthropic' | 'custom' | 'openai' | 'gemini' | 'ollama';
+export type ProviderType =
+  | 'openrouter'
+  | 'anthropic'
+  | 'custom'
+  | 'openai'
+  | 'lingerai'
+  | 'deepseek'
+  | 'gemini'
+  | 'ollama';
 export type CustomProtocolType = 'anthropic' | 'openai' | 'gemini';
 export type AppTheme = 'dark' | 'light' | 'system';
 export type MemoryStrategy = 'auto' | 'manual' | 'rolling';
@@ -42,6 +50,8 @@ export type ProviderProfileKey =
   | 'openrouter'
   | 'anthropic'
   | 'openai'
+  | 'lingerai'
+  | 'deepseek'
   | 'gemini'
   | 'ollama'
   | 'custom:anthropic'
@@ -166,6 +176,16 @@ const defaultProfiles: Record<ProviderProfileKey, ProviderProfile> = {
     baseUrl: 'https://api.openai.com/v1',
     model: 'gpt-5.4',
   },
+  lingerai: {
+    apiKey: '',
+    baseUrl: 'https://xc.lifesecretary.com:8000/v1',
+    model: 'gpt-5.4',
+  },
+  deepseek: {
+    apiKey: '',
+    baseUrl: 'https://api.deepseek.com',
+    model: 'deepseek-v4-flash',
+  },
   ollama: {
     apiKey: '',
     baseUrl: 'http://localhost:11434/v1',
@@ -283,6 +303,8 @@ const PROFILE_KEYS: ProviderProfileKey[] = [
   'openrouter',
   'anthropic',
   'openai',
+  'lingerai',
+  'deepseek',
   'gemini',
   'ollama',
   'custom:anthropic',
@@ -298,6 +320,8 @@ function isProviderType(value: unknown): value is ProviderType {
     value === 'anthropic' ||
     value === 'custom' ||
     value === 'openai' ||
+    value === 'lingerai' ||
+    value === 'deepseek' ||
     value === 'gemini' ||
     value === 'ollama'
   );
@@ -351,6 +375,12 @@ function profileKeyToProvider(profileKey: ProviderProfileKey): {
   if (profileKey === 'openai') {
     return { provider: 'openai', customProtocol: 'openai' };
   }
+  if (profileKey === 'lingerai') {
+    return { provider: 'lingerai', customProtocol: 'openai' };
+  }
+  if (profileKey === 'deepseek') {
+    return { provider: 'deepseek', customProtocol: 'openai' };
+  }
   if (profileKey === 'gemini') {
     return { provider: 'gemini', customProtocol: 'gemini' };
   }
@@ -403,7 +433,7 @@ function normalizeCustomProtocol(
 }
 
 function defaultProtocolForProvider(provider: ProviderType): CustomProtocolType {
-  if (provider === 'openai' || provider === 'ollama') {
+  if (provider === 'openai' || provider === 'lingerai' || provider === 'deepseek' || provider === 'ollama') {
     return 'openai';
   }
   if (provider === 'gemini') {
@@ -1496,6 +1526,8 @@ export class ConfigStore {
 
     const useOpenAI =
       projectedConfig.provider === 'openai' ||
+      projectedConfig.provider === 'lingerai' ||
+      projectedConfig.provider === 'deepseek' ||
       projectedConfig.provider === 'ollama' ||
       (projectedConfig.provider === 'custom' && projectedConfig.customProtocol === 'openai');
     const useGemini =

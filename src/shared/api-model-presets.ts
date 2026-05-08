@@ -3,6 +3,8 @@ export type SharedProviderType =
   | 'anthropic'
   | 'custom'
   | 'openai'
+  | 'lingerai'
+  | 'deepseek'
   | 'gemini'
   | 'ollama';
 
@@ -21,6 +23,8 @@ export interface SharedProviderPresets {
   anthropic: SharedProviderPreset;
   custom: SharedProviderPreset;
   openai: SharedProviderPreset;
+  lingerai: SharedProviderPreset;
+  deepseek: SharedProviderPreset;
   gemini: SharedProviderPreset;
   ollama: SharedProviderPreset;
 }
@@ -74,6 +78,23 @@ export const API_PROVIDER_PRESETS: SharedProviderPresets = {
     ],
     keyPlaceholder: 'sk-...',
     keyHint: '从 platform.openai.com 获取',
+  },
+  lingerai: {
+    name: '灵儿AI',
+    baseUrl: 'https://xc.lifesecretary.com:8000/v1',
+    models: [{ id: 'gpt-5.4', name: 'gpt-5.4' }],
+    keyPlaceholder: 'sk-...',
+    keyHint: '输入你的 API Key',
+  },
+  deepseek: {
+    name: 'DeepSeek',
+    baseUrl: 'https://api.deepseek.com',
+    models: [
+      { id: 'deepseek-v4-flash', name: 'deepseek-v4-flash' },
+      { id: 'deepseek-v4-pro', name: 'deepseek-v4-pro' },
+    ],
+    keyPlaceholder: 'sk-...',
+    keyHint: '从 platform.deepseek.com 获取',
   },
   gemini: {
     name: 'Gemini',
@@ -145,6 +166,14 @@ export const PI_AI_CURATED_PRESETS: Record<string, { piProvider: string; pick: s
       'o4-mini',
     ],
   },
+  lingerai: {
+    piProvider: 'openai',
+    pick: ['gpt-5.4'],
+  },
+  deepseek: {
+    piProvider: 'openai',
+    pick: ['deepseek-v4-flash', 'deepseek-v4-pro'],
+  },
   gemini: {
     piProvider: 'google',
     pick: [
@@ -172,6 +201,20 @@ export function getModelInputGuidance(
   if (provider === 'custom' && customProtocol === 'openai') {
     return {
       placeholder: 'deepseek-chat, deepseek-reasoner, qwen-max, gpt-5.4-mini',
+      hint: 'Use the exact model ID for the selected protocol or endpoint.',
+    };
+  }
+
+  if (provider === 'lingerai') {
+    return {
+      placeholder: 'gpt-5.4',
+      hint: 'Use the exact model ID for the selected protocol or endpoint.',
+    };
+  }
+
+  if (provider === 'deepseek') {
+    return {
+      placeholder: 'deepseek-v4-flash, deepseek-v4-pro',
       hint: 'Use the exact model ID for the selected protocol or endpoint.',
     };
   }

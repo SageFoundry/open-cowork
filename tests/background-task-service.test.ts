@@ -221,7 +221,7 @@ describe('BackgroundTaskService', () => {
   it('prefers Git Bash or WSL semantics over PowerShell for detached Windows commands', () => {
     expect(backgroundTaskServiceContent).toContain("const gitBashPath = detectGitBash();");
     expect(backgroundTaskServiceContent).toContain("if (sandbox.isWSL && sandbox.wslStatus?.distro)");
-    expect(backgroundTaskServiceContent).toContain("env: { ...process.env, OPEN_COWORK_BASH_BACKEND: 'git-bash' }");
-    expect(backgroundTaskServiceContent).toContain("['-lc', bashCommand]");
+    expect(backgroundTaskServiceContent).toContain("OPEN_COWORK_BASH_BACKEND: 'git-bash'");
+    expect(backgroundTaskServiceContent).toContain("['--noprofile', '--norc', scriptPath]");
   });
 });

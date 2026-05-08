@@ -99,6 +99,8 @@ function defaultPort(
 function isOpenAICompatible(input: DiagnosticInput): boolean {
   return (
     input.provider === 'openai' ||
+    input.provider === 'lingerai' ||
+    input.provider === 'deepseek' ||
     input.provider === 'ollama' ||
     input.provider === 'openrouter' ||
     (input.provider === 'custom' && input.customProtocol === 'openai')
