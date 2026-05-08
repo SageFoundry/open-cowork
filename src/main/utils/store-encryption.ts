@@ -214,6 +214,30 @@ export function createEncryptedStoreWithKeyRotation<T extends Record<string, unk
 
     const storePath = resolveStorePath(options.storeOptions);
     if (storePath && fs.existsSync(storePath)) {
+      // Before backing up and recreating, try reading the file as
+      // unencrypted plain JSON.  This handles the case where an earlier
+      // version of the app wrote the store without encryption (e.g. the
+      // `conf` encryptionKey option was not yet active).  On macOS the
+      // store file is sometimes plain JSON and the encryption-key
+      // mismatch causes a silent backup-and-recreate that drops user
+      // configSets.
+      try {
+        const raw = fs.readFileSync(storePath, 'utf-8');
+        const parsed = JSON.parse(raw) as T;
+        const stableStore = new Store<T>({
+          ...(options.storeOptions as StoreOptions<T>),
+          encryptionKey: stableKey,
+        });
+        stableStore.store = parsed;
+        options.log?.(
+          `${options.logPrefix} Recovered unencrypted store and re-saved with stable key`,
+          { storePath }
+        );
+        return stableStore;
+      } catch {
+        // Not valid plain JSON — fall through to backup-and-recreate.
+      }
+
       const backupPath = moveUnreadableStoreToBackup(storePath);
       options.warn?.(
         `${options.logPrefix} Backed up unreadable encrypted store and recreated defaults`,

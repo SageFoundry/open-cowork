@@ -1732,6 +1732,9 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
 
         const persistedProfiles = toPersistedProfiles(profiles);
 
+        // Include configSets so the main process update() can
+        // preserve user-created config sets even when legacy
+        // normalization would otherwise collapse them.
         const payload: Partial<AppConfig> = {
           provider,
           apiKey: apiKey.trim(),
@@ -1742,6 +1745,7 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
           profiles: persistedProfiles,
           activeConfigSetId,
           enableThinking,
+          configSets,
         };
 
         if (onSave) {
@@ -1775,6 +1779,7 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
       apiKey,
       applyPersistedConfigToStore,
       baseUrl,
+      configSets,
       currentDraftSignature,
       currentPreset.baseUrl,
       customProtocol,

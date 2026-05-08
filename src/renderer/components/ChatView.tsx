@@ -16,7 +16,7 @@ import { groupMessagesByTurn } from '../utils/conversation-turns';
 import { AssistantTurnGroup } from './AssistantTurnGroup';
 import { MessageCard } from './MessageCard';
 import type { Message, ContentBlock } from '../types';
-import { Send, Square, Plus, Loader2, Plug, X, Clock, ChevronUp, Settings } from 'lucide-react';
+import { Send, Square, Plus, Loader2, Plug, X, Clock, ChevronUp, Settings, Brain } from 'lucide-react';
 import { API_PROVIDER_PRESETS } from '../../shared/api-model-presets';
 
 const CHAT_INPUT_MIN_ROWS = 2;
@@ -75,6 +75,35 @@ export function ChatView() {
     });
   }, [appConfig]);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [enableThinking, setEnableThinking] = useState(() => appConfig?.enableThinking ?? false);
+  const isSavingThinking = useRef(false);
+
+  // Sync enableThinking from appConfig whenever it changes
+  useEffect(() => {
+    if (!isSavingThinking.current) {
+      setEnableThinking(appConfig?.enableThinking ?? false);
+    }
+  }, [appConfig?.enableThinking]);
+
+  const toggleThinking = useCallback(async () => {
+    const next = !enableThinking;
+    setEnableThinking(next);
+    isSavingThinking.current = true;
+    try {
+      const result = await window.electronAPI.config.save({ enableThinking: next });
+      if (result.success) {
+        useAppStore.getState().setAppConfig(result.config);
+      } else {
+        // Revert on failure
+        setEnableThinking(!next);
+      }
+    } catch {
+      setEnableThinking(!next);
+    } finally {
+      isSavingThinking.current = false;
+    }
+  }, [enableThinking]);
+
   const messagePagination = useAppStore((s) =>
     activeSessionId
       ? s.sessionStates[activeSessionId]?.messagePagination ?? {
@@ -1221,6 +1250,38 @@ export function ChatView() {
                     </div>
                   )}
                 </div>
+
+                {/* Thinking mode switch */}
+                {isElectron && (
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={enableThinking}
+                    onClick={toggleThinking}
+                    disabled={isSavingThinking.current}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] transition-colors ${
+                      enableThinking
+                        ? 'bg-accent/10 border-accent/30 text-accent'
+                        : 'border-border-subtle bg-background/60 text-text-muted hover:bg-surface-hover hover:text-text-secondary'
+                    }`}
+                    title={t('chat.toggleThinking')}
+                  >
+                    <Brain className={`w-3 h-3 ${enableThinking ? '' : 'opacity-60'}`} />
+                    <span>{enableThinking ? t('chat.thinking') : t('chat.thinkingOff')}</span>
+                    {/* Switch knob */}
+                    <span
+                      className={`relative inline-block w-7 h-4 rounded-full transition-colors ${
+                        enableThinking ? 'bg-accent' : 'bg-border'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
+                          enableThinking ? 'translate-x-3' : 'translate-x-0'
+                        }`}
+                      />
+                    </span>
+                  </button>
+                )}
 
                 {canStop && (
                   <button

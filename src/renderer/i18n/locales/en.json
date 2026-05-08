@@ -615,7 +615,10 @@
     "noModelsAvailable": "No models available",
     "manageModels": "Manage models...",
     "connectorCount_one": "{{count}} connector",
-    "connectorCount_other": "{{count}} connectors"
+    "connectorCount_other": "{{count}} connectors",
+    "thinking": "Thinking",
+    "toggleThinking": "Toggle thinking mode",
+    "thinkingOff": "Off"
   },
   "context": {
     "progress": "Progress",

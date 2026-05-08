@@ -615,7 +615,10 @@
     "noModelsAvailable": "暂无可用模型",
     "manageModels": "管理模型配置...",
     "connectorCount_one": "{{count}} 个连接器",
-    "connectorCount_other": "{{count}} 个连接器"
+    "connectorCount_other": "{{count}} 个连接器",
+    "thinking": "思考",
+    "toggleThinking": "切换思考模式",
+    "thinkingOff": "关闭"
   },
   "context": {
     "progress": "进度",
