@@ -1100,214 +1100,220 @@ export function ChatView() {
             )}
 
             <div
-              className={`flex items-end gap-2 p-3.5 rounded-[1.75rem] bg-background/88 border border-border-muted shadow-soft transition-colors ${
+              className={`flex flex-col gap-3 p-3.5 rounded-[1.75rem] bg-background/88 border border-border-muted shadow-soft transition-colors ${
                 isDragging ? 'ring-2 ring-accent bg-accent/5' : ''
               }`}
             >
-              <button
-                type="button"
-                onClick={handleFileSelect}
-                className="w-9 h-9 rounded-2xl flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-surface-hover transition-colors"
-                title={t('welcome.attachFiles')}
-              >
-                <Plus className="w-5 h-5" />
-              </button>
-
-              <textarea
-                ref={textareaRef}
-                value={prompt}
-                onChange={(e) => {
-                  setPrompt(e.target.value);
-                  adjustTextareaHeight();
-                }}
-                onCompositionStart={() => {
-                  isComposingRef.current = true;
-                }}
-                onCompositionEnd={() => {
-                  isComposingRef.current = false;
-                }}
-                onPaste={handlePaste}
-                onKeyDown={(e) => {
-                  // Enter to send, Shift+Enter for new line
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    if (e.nativeEvent.isComposing || isComposingRef.current || e.keyCode === 229) {
-                      return;
+              <div className="flex items-end gap-2">
+                <textarea
+                  ref={textareaRef}
+                  value={prompt}
+                  onChange={(e) => {
+                    setPrompt(e.target.value);
+                    adjustTextareaHeight();
+                  }}
+                  onCompositionStart={() => {
+                    isComposingRef.current = true;
+                  }}
+                  onCompositionEnd={() => {
+                    isComposingRef.current = false;
+                  }}
+                  onPaste={handlePaste}
+                  onKeyDown={(e) => {
+                    // Enter to send, Shift+Enter for new line
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      if (e.nativeEvent.isComposing || isComposingRef.current || e.keyCode === 229) {
+                        return;
+                      }
+                      e.preventDefault();
+                      handleSubmit();
                     }
-                    e.preventDefault();
-                    handleSubmit();
-                  }
-                }}
-                placeholder={t('chat.typeMessage')}
-                disabled={isSubmitting || isBlockingContext}
-                rows={CHAT_INPUT_MIN_ROWS}
-                style={{
-                  minHeight: `${CHAT_INPUT_MIN_HEIGHT_PX}px`,
-                  maxHeight: `${CHAT_INPUT_MAX_HEIGHT_PX}px`,
-                  lineHeight: `${CHAT_INPUT_LINE_HEIGHT_PX}px`,
-                }}
-                className="flex-1 resize-none bg-transparent border-none outline-none text-text-primary placeholder:text-text-muted text-[15px] py-2 overflow-y-hidden"
-              />
+                  }}
+                  placeholder={t('chat.typeMessage')}
+                  disabled={isSubmitting || isBlockingContext}
+                  rows={CHAT_INPUT_MIN_ROWS}
+                  style={{
+                    minHeight: `${CHAT_INPUT_MIN_HEIGHT_PX}px`,
+                    maxHeight: `${CHAT_INPUT_MAX_HEIGHT_PX}px`,
+                    lineHeight: `${CHAT_INPUT_LINE_HEIGHT_PX}px`,
+                  }}
+                  className="flex-1 resize-none bg-transparent border-none outline-none text-text-primary placeholder:text-text-muted text-[15px] py-2 overflow-y-hidden"
+                />
+              </div>
 
-              <div className="flex items-center gap-2">
-                {/* Model selector — button only, no dropdown yet */}
-                <div className="relative" ref={modelPickerRef}>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1">
                   <button
                     type="button"
-                    onClick={() => setModelPickerOpen(!modelPickerOpen)}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-border-subtle bg-background/60 text-xs text-text-muted hover:bg-surface-hover hover:text-text-secondary transition-colors"
-                    title={appConfig?.model || t('chat.noModel')}
+                    onClick={handleFileSelect}
+                    className="w-9 h-9 rounded-2xl flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-surface-hover transition-colors"
+                    title={t('welcome.attachFiles')}
                   >
-                    <span className="max-w-[120px] truncate">
-                      {appConfig?.model || t('chat.noModel')}
-                    </span>
-                    <ChevronUp className={`w-3 h-3 transition-transform ${modelPickerOpen ? 'rotate-0' : 'rotate-180'}`} />
+                    <Plus className="w-5 h-5" />
                   </button>
 
-                  {modelPickerOpen && (
-                    <div className="absolute bottom-full right-0 mb-2 w-72 max-h-80 overflow-y-auto rounded-xl border border-border-subtle bg-background shadow-lg z-50 py-1.5">
-                      <div className="px-3 py-1.5 text-[10px] font-semibold text-text-muted uppercase tracking-wider">
-                        {t('chat.selectModel')}
-                      </div>
-                      {configSets.map((cs, index) => (
-                        <div key={cs.id} className={index > 0 ? 'border-t border-border-subtle mt-1' : ''}>
-                          {cs.isActive && (
-                            <div className="px-3 pt-2 pb-0.5 text-[15px] font-semibold text-text-primary">
-                              {cs.name}
-                            </div>
-                          )}
-                          {!cs.isActive && (
-                            <div className="px-3 pt-2 pb-0.5 text-[15px] text-text-muted">
-                              {cs.name}
-                            </div>
-                          )}
-                          {cs.models.map((option) => (
-                            <button
-                              key={option.id}
-                              type="button"
-                              onClick={() => {
-                                if (option.id !== appConfig?.model || !cs.isActive) {
-                                  setModelPickerOpen(false);
-                                  const id = cs.id;
-                                  if (cs.isActive) {
-                                    // Same config set, just switch model
-                                    window.electronAPI.config
-                                      .save({ model: option.id })
-                                      .then((result) => {
-                                        if (result.success) {
-                                          useAppStore.getState().setAppConfig(result.config);
-                                        }
-                                      })
-                                      .catch((err) => console.error('[ChatView] Failed to switch model:', err));
-                                  } else {
-                                    // Different config set: switch set, then switch model
-                                    window.electronAPI.config
-                                      .switchSet({ id })
-                                      .then((switchResult) => {
-                                        if (!switchResult.success) return;
-                                        return window.electronAPI.config.save({ model: option.id });
-                                      })
-                                      .then((saveResult) => {
-                                        if (saveResult?.success) {
-                                          useAppStore.getState().setAppConfig(saveResult.config);
-                                        }
-                                      })
-                                      .catch((err) => console.error('[ChatView] Failed to switch:', err));
+                  {/* Model selector — button only, no dropdown yet */}
+                  <div className="relative" ref={modelPickerRef}>
+                    <button
+                      type="button"
+                      onClick={() => setModelPickerOpen(!modelPickerOpen)}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-border-subtle bg-background/60 text-xs text-text-muted hover:bg-surface-hover hover:text-text-secondary transition-colors"
+                      title={appConfig?.model || t('chat.noModel')}
+                    >
+                      <span className="max-w-[120px] truncate">
+                        {appConfig?.model || t('chat.noModel')}
+                      </span>
+                      <ChevronUp className={`w-3 h-3 transition-transform ${modelPickerOpen ? 'rotate-0' : 'rotate-180'}`} />
+                    </button>
+
+                    {modelPickerOpen && (
+                      <div className="absolute bottom-full left-0 mb-2 w-72 max-h-80 overflow-y-auto rounded-xl border border-border-subtle bg-background shadow-lg z-50 py-1.5">
+                        <div className="px-3 py-1.5 text-[10px] font-semibold text-text-muted uppercase tracking-wider">
+                          {t('chat.selectModel')}
+                        </div>
+                        {configSets.map((cs, index) => (
+                          <div key={cs.id} className={index > 0 ? 'border-t border-border-subtle mt-1' : ''}>
+                            {cs.isActive && (
+                              <div className="px-3 pt-2 pb-0.5 text-[15px] font-semibold text-text-primary">
+                                {cs.name}
+                              </div>
+                            )}
+                            {!cs.isActive && (
+                              <div className="px-3 pt-2 pb-0.5 text-[15px] text-text-muted">
+                                {cs.name}
+                              </div>
+                            )}
+                            {cs.models.map((option) => (
+                              <button
+                                key={option.id}
+                                type="button"
+                                onClick={() => {
+                                  if (option.id !== appConfig?.model || !cs.isActive) {
+                                    setModelPickerOpen(false);
+                                    const id = cs.id;
+                                    if (cs.isActive) {
+                                      // Same config set, just switch model
+                                      window.electronAPI.config
+                                        .save({ model: option.id })
+                                        .then((result) => {
+                                          if (result.success) {
+                                            useAppStore.getState().setAppConfig(result.config);
+                                          }
+                                        })
+                                        .catch((err) => console.error('[ChatView] Failed to switch model:', err));
+                                    } else {
+                                      // Different config set: switch set, then switch model
+                                      window.electronAPI.config
+                                        .switchSet({ id })
+                                        .then((switchResult) => {
+                                          if (!switchResult.success) return;
+                                          return window.electronAPI.config.save({ model: option.id });
+                                        })
+                                        .then((saveResult) => {
+                                          if (saveResult?.success) {
+                                            useAppStore.getState().setAppConfig(saveResult.config);
+                                          }
+                                        })
+                                        .catch((err) => console.error('[ChatView] Failed to switch:', err));
+                                    }
                                   }
-                                }
-                              }}
-                              className={`w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors ${
-                                option.id === appConfig?.model && cs.isActive
-                                  ? 'bg-accent/10 text-accent'
-                                  : 'text-text-primary hover:bg-surface-hover'
-                              }`}
-                            >
-                              <span className="flex-1 truncate">{option.name}</span>
-                              {option.id === appConfig?.model && cs.isActive && (
-                                <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
-                              )}
-                            </button>
-                          ))}
+                                }}
+                                className={`w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors ${
+                                  option.id === appConfig?.model && cs.isActive
+                                    ? 'bg-accent/10 text-accent'
+                                    : 'text-text-primary hover:bg-surface-hover'
+                                }`}
+                              >
+                                <span className="flex-1 truncate">{option.name}</span>
+                                {option.id === appConfig?.model && cs.isActive && (
+                                  <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        ))}
+                        {configSets.length === 0 && (
+                          <div className="px-3 py-3 text-xs text-text-muted">
+                            {t('chat.noModelsAvailable')}
+                          </div>
+                        )}
+                        <div className="border-t border-border-subtle mt-1.5 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setModelPickerOpen(false);
+                              useAppStore.getState().setShowSettings(true);
+                            }}
+                            className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-text-muted hover:bg-surface-hover transition-colors"
+                          >
+                            <Settings className="w-3 h-3" />
+                            {t('chat.manageModels')}
+                          </button>
                         </div>
-                      ))}
-                      {configSets.length === 0 && (
-                        <div className="px-3 py-3 text-xs text-text-muted">
-                          {t('chat.noModelsAvailable')}
-                        </div>
-                      )}
-                      <div className="border-t border-border-subtle mt-1.5 pt-1">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setModelPickerOpen(false);
-                            useAppStore.getState().setShowSettings(true);
-                          }}
-                          className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-text-muted hover:bg-surface-hover transition-colors"
-                        >
-                          <Settings className="w-3 h-3" />
-                          {t('chat.manageModels')}
-                        </button>
                       </div>
-                    </div>
+                    )}
+                  </div>
+
+                  {/* Thinking mode switch */}
+                  {isElectron && (
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={enableThinking}
+                      onClick={toggleThinking}
+                      disabled={isSavingThinking.current}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] transition-colors ${
+                        enableThinking
+                          ? 'bg-accent/10 border-accent/30 text-accent'
+                          : 'border-border-subtle bg-background/60 text-text-muted hover:bg-surface-hover hover:text-text-secondary'
+                      }`}
+                      title={t('chat.toggleThinking')}
+                    >
+                      <Brain className={`w-3 h-3 ${enableThinking ? '' : 'opacity-60'}`} />
+                      <span>{enableThinking ? t('chat.thinking') : t('chat.thinkingOff')}</span>
+                      {/* Switch knob */}
+                      <span
+                        className={`relative inline-block w-7 h-4 rounded-full transition-colors ${
+                          enableThinking ? 'bg-accent' : 'bg-border'
+                        }`}
+                      >
+                        <span
+                          className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
+                            enableThinking ? 'translate-x-3' : 'translate-x-0'
+                          }`}
+                        />
+                      </span>
+                    </button>
                   )}
                 </div>
 
-                {/* Thinking mode switch */}
-                {isElectron && (
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={enableThinking}
-                    onClick={toggleThinking}
-                    disabled={isSavingThinking.current}
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] transition-colors ${
-                      enableThinking
-                        ? 'bg-accent/10 border-accent/30 text-accent'
-                        : 'border-border-subtle bg-background/60 text-text-muted hover:bg-surface-hover hover:text-text-secondary'
-                    }`}
-                    title={t('chat.toggleThinking')}
-                  >
-                    <Brain className={`w-3 h-3 ${enableThinking ? '' : 'opacity-60'}`} />
-                    <span>{enableThinking ? t('chat.thinking') : t('chat.thinkingOff')}</span>
-                    {/* Switch knob */}
-                    <span
-                      className={`relative inline-block w-7 h-4 rounded-full transition-colors ${
-                        enableThinking ? 'bg-accent' : 'bg-border'
-                      }`}
+                <div className="flex items-center gap-2">
+                  {canStop && (
+                    <button
+                      type="button"
+                      onClick={handleStop}
+                      className="w-9 h-9 rounded-2xl flex items-center justify-center bg-error/10 text-error hover:bg-error/20 transition-colors"
+                      title={t('chat.stop')}
                     >
-                      <span
-                        className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
-                          enableThinking ? 'translate-x-3' : 'translate-x-0'
-                        }`}
-                      />
-                    </span>
-                  </button>
-                )}
-
-                {canStop && (
+                      <Square className="w-4 h-4" />
+                    </button>
+                  )}
                   <button
-                    type="button"
-                    onClick={handleStop}
-                    className="w-9 h-9 rounded-2xl flex items-center justify-center bg-error/10 text-error hover:bg-error/20 transition-colors"
-                    title={t('chat.stop')}
+                    type="submit"
+                    disabled={
+                      (!prompt.trim() &&
+                        !textareaRef.current?.value.trim() &&
+                        pastedImages.length === 0 &&
+                        attachedFiles.length === 0) ||
+                      isSubmitting ||
+                      isBlockingContext
+                    }
+                    className="w-9 h-9 rounded-2xl flex items-center justify-center bg-accent text-background disabled:opacity-50 disabled:cursor-not-allowed hover:bg-accent-hover transition-colors"
+                    title={t('chat.sendMessage')}
                   >
-                    <Square className="w-4 h-4" />
+                    <Send className="w-4 h-4" />
                   </button>
-                )}
-                <button
-                  type="submit"
-                  disabled={
-                    (!prompt.trim() &&
-                      !textareaRef.current?.value.trim() &&
-                      pastedImages.length === 0 &&
-                      attachedFiles.length === 0) ||
-                    isSubmitting ||
-                    isBlockingContext
-                  }
-                  className="w-9 h-9 rounded-2xl flex items-center justify-center bg-accent text-background disabled:opacity-50 disabled:cursor-not-allowed hover:bg-accent-hover transition-colors"
-                  title={t('chat.sendMessage')}
-                >
-                  <Send className="w-4 h-4" />
-                </button>
+                </div>
               </div>
             </div>
 
