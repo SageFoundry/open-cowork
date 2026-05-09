@@ -216,6 +216,8 @@ async function executeViaGitBash({
     '#!/usr/bin/env bash',
     'export PYTHONIOENCODING=utf-8',
     'export PYTHONUTF8=1',
+    'export LANG=en_US.UTF-8',
+    'export LC_ALL=en_US.UTF-8',
     resolvedPythonDir ? `export PATH='${resolvedPythonDir.replace(/'/g, `"'"'`)}':"$PATH"` : '',
     `cd ${shellEscapeSingleQuoted(normalizedCwd)}`,
     `eval "$(printf '%s' '${cmdBase64}' | base64 -d)"`,
@@ -233,6 +235,8 @@ async function executeViaGitBash({
         MSYS2_ARG_CONV_EXCL: '*',
         PYTHONIOENCODING: 'utf-8',
         PYTHONUTF8: '1',
+        LANG: 'en_US.UTF-8',
+        LC_ALL: 'en_US.UTF-8',
       },
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
@@ -286,11 +290,11 @@ async function executeViaGitBash({
     }
 
     child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
+      stdout += chunk.toString('utf-8');
     });
 
     child.stderr?.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
+      stderr += chunk.toString('utf-8');
     });
 
     child.on('error', (error) => {

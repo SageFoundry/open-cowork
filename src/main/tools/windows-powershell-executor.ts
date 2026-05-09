@@ -66,6 +66,8 @@ export async function executeWindowsPowerShell({
           ...env,
           PYTHONIOENCODING: 'utf-8',
           PYTHONUTF8: '1',
+          LANG: 'en_US.UTF-8',
+          LC_ALL: 'en_US.UTF-8',
           ...(resolvedPythonDir
             ? {
                 PATH: `${resolvedPythonDir}${path.delimiter}${env?.PATH || process.env.PATH || ''}`,
@@ -125,11 +127,13 @@ export async function executeWindowsPowerShell({
     }
 
     child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
+      // Explicit UTF-8 decoding prevents encoding corruption
+      // when Windows terminal defaults to GBK/CP936.
+      stdout += chunk.toString('utf-8');
     });
 
     child.stderr?.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
+      stderr += chunk.toString('utf-8');
     });
 
     child.on('error', (error) => {

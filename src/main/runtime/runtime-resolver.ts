@@ -82,6 +82,21 @@ export function isWindowsStoreAliasPath(executablePath: string | null | undefine
   return /\\AppData\\Local\\Microsoft\\WindowsApps\\/i.test(executablePath);
 }
 
+/**
+ * Common Python installation directories on Windows to use as fallback.
+ * These are searched when PATH resolution and py launcher both fail.
+ */
+const WINDOWS_PYTHON_FALLBACK_PATHS: string[] = [
+  'D:\\pythonsdk\\python.exe',
+  'C:\\Python312\\python.exe',
+  'C:\\Python311\\python.exe',
+  'C:\\Python310\\python.exe',
+  path.join(process.env.LOCALAPPDATA || 'C:\\Users\\Default\\AppData\\Local', 'Programs', 'Python', 'Python312', 'python.exe'),
+  path.join(process.env.LOCALAPPDATA || 'C:\\Users\\Default\\AppData\\Local', 'Programs', 'Python', 'Python311', 'python.exe'),
+  path.join(process.env.LOCALAPPDATA || 'C:\\Users\\Default\\AppData\\Local', 'Programs', 'Python', 'Python310', 'python.exe'),
+  'C:\\Users\\user\\AppData\\Local\\Microsoft\\WindowsApps\\python3.exe',
+];
+
 function resolvePythonViaPyLauncher(): string | null {
   if (process.platform !== 'win32') {
     return null;
@@ -92,9 +107,27 @@ function resolvePythonViaPyLauncher(): string | null {
       ['-3', '-c', 'import sys; print(sys.executable)'],
       { encoding: 'utf-8', timeout: 5000 }
     ).trim();
-    return output && fs.existsSync(output) ? output : null;
+    return output && fs.existsSync(output) && !isWindowsStoreAliasPath(output) ? output : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Execute a short Python -c command to check if a given python.exe resolves
+ * correctly. This is used to validate candidates found in PATH that might
+ * be non-functional WindowsApps aliases.
+ */
+function validatePythonExecutable(executablePath: string): boolean {
+  try {
+    const output = execFileSync(executablePath, ['-c', 'import sys; print("OK")'], {
+      encoding: 'utf-8',
+      timeout: 5000,
+      windowsHide: true,
+    }).trim();
+    return output === 'OK';
+  } catch {
+    return false;
   }
 }
 
@@ -187,15 +220,31 @@ export function resolvePythonFromPath(): ResolvedRuntime | null {
   const executableNames = process.platform === 'win32'
     ? ['python.exe', 'python3.exe', 'python3', 'python']
     : ['python3', 'python'];
-  const candidates = findExecutablesInPath(executableNames);
-  const found = candidates.find((candidate) => !isWindowsStoreAliasPath(candidate)) || candidates[0] || null;
-  if (!found) return null;
 
   const warnings: string[] = [];
-  if (process.platform === 'win32' && isWindowsStoreAliasPath(found)) {
-    const launcherResolved = resolvePythonViaPyLauncher();
-    if (launcherResolved && !isWindowsStoreAliasPath(launcherResolved)) {
-      warnings.push('Resolved python via py launcher because PATH points to WindowsApps alias.');
+
+  // Phase 1: Search PATH for non-WindowsApps python executables
+  const candidates = findExecutablesInPath(executableNames);
+  const realPython = candidates.find((candidate) => !isWindowsStoreAliasPath(candidate));
+
+  if (realPython) {
+    // Validate the candidate actually works
+    if (validatePythonExecutable(realPython)) {
+      return {
+        kind: 'python',
+        path: realPython,
+        source: 'system',
+        warnings,
+      };
+    }
+    warnings.push(`Found ${realPython} on PATH but failed to validate; trying other methods.`);
+  }
+
+  // Phase 2: Try py launcher
+  const launcherResolved = resolvePythonViaPyLauncher();
+  if (launcherResolved) {
+    if (validatePythonExecutable(launcherResolved)) {
+      warnings.push('Resolved python via py launcher (PATH entries were invalid or WindowsApps aliases).');
       return {
         kind: 'python',
         path: launcherResolved,
@@ -203,15 +252,43 @@ export function resolvePythonFromPath(): ResolvedRuntime | null {
         warnings,
       };
     }
-    warnings.push('Resolved python points to WindowsApps alias and may not be executable in agent sub-processes.');
+    warnings.push(`py launcher returned ${launcherResolved} but it failed validation.`);
   }
 
-  return {
-    kind: 'python',
-    path: found,
-    source: 'system',
-    warnings,
-  };
+  // Phase 3: Try common fallback installation paths
+  if (process.platform === 'win32') {
+    for (const fallbackPath of WINDOWS_PYTHON_FALLBACK_PATHS) {
+      if (fs.existsSync(fallbackPath)) {
+        try {
+          const testPath = path.resolve(fallbackPath);
+          if (validatePythonExecutable(testPath)) {
+            warnings.push(`Resolved python via fallback path: ${testPath}`);
+            return {
+              kind: 'python',
+              path: testPath,
+              source: 'system',
+              warnings,
+            };
+          }
+        } catch {
+          continue;
+        }
+      }
+    }
+  }
+
+  // Phase 4: If we found a WindowsApps candidate earlier, at least surface it
+  const windowsAppsCandidate = candidates.find((c) => isWindowsStoreAliasPath(c));
+  if (windowsAppsCandidate) {
+    warnings.push(
+      'Only WindowsApps python alias found on PATH. ' +
+      'This may fail with "Permission denied" in sub-processes. ' +
+      'Consider installing a real Python distribution or configuring the path explicitly.'
+    );
+    // Don't return it — better to let the caller know there's no usable Python
+  }
+
+  return null;
 }
 
 export function resolveNodeFromPath(): ResolvedRuntime | null {

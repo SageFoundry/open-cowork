@@ -261,6 +261,60 @@ function getBundledNodePaths(): { node: string; npx: string } | null {
 }
 
 /**
+ * On Windows, the bundled Node.js binary lives in `resources/node/win32-x64/`
+ * with a `node.exe` and `npx.cmd`, but no npm module (lib/node_modules/npm).
+ * If a user's global npm.cmd picks up this bundled `node.exe`, npm will fail
+ * with "Cannot find module npm-cli.js" because the npm module tree is absent.
+ *
+ * This function restores the user's global npm/npx entries to the front of PATH
+ * over the bundled node bin dir, ensuring `npm run` and `npx` resolve correctly.
+ */
+function restoreWindowsUserNodeModulesPaths(delimiter: string, merged: string[]): void {
+  const nodePathSegments: string[] = [];
+  const currentPath = (process.env.PATH || '').split(delimiter).filter((p: string) => p.trim());
+
+  // Collect the first user-level npm/npx.cmd path entry found
+  for (const entry of currentPath) {
+    const npmCmd = path.join(entry, 'npm.cmd');
+    const npxCmd = path.join(entry, 'npx.cmd');
+    if (fs.existsSync(npmCmd) || fs.existsSync(npxCmd)) {
+      // Read the npm.cmd to check if it points to the bundled node
+      try {
+        const content = fs.readFileSync(npmCmd, 'utf8');
+        // User-level npm.cmd typically uses "%~dp0..\node.exe" which resolves
+        // to something outside the bundled node tree. If the path in the script
+        // points to our resources/node/ path, DON'T add it — it will break.
+        if (!content.includes('resources' + path.sep + 'node')) {
+          nodePathSegments.push(entry);
+        }
+      } catch {
+        nodePathSegments.push(entry);
+      }
+    }
+  }
+
+  if (nodePathSegments.length === 0) return;
+
+  // Prepend the user's npm/npx directory so npm and npx resolve correctly
+  // even when PATH enrichment placed bundled node bin dir first.
+  merged.unshift(...nodePathSegments.reverse());
+
+  // Deduplicate: keep first occurrence, remove subsequent ones
+  const seen = new Set<string>();
+  let writeIdx = 0;
+  for (let i = 0; i < merged.length; i++) {
+    const normalized = process.platform === 'win32' ? merged[i].toLowerCase() : merged[i];
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+      merged[writeIdx++] = merged[i];
+    }
+  }
+  merged.length = writeIdx;
+
+  log(`[ClaudeAgentRunner] Restored user npm/npx paths (${nodePathSegments.length} segments) before bundled node bin`);
+}
+
+/**
  * Resolve bundled Python bin directory path (if available).
  * Checks packaged and dev layouts, returns the bin dir containing python3.
  */
@@ -404,6 +458,13 @@ async function enrichProcessPathForBuild(): Promise<void> {
       seen.add(normalized);
       merged.push(p);
     }
+  }
+
+  // On Windows, ensure user-level npm/npx paths come before the bundled node
+  // bin dir so that `npm run` commands (which recursively invoke npm) work
+  // correctly. The bundled node bin dir has node.exe + npx.cmd but no npm module.
+  if (platform === 'win32') {
+    restoreWindowsUserNodeModulesPaths(delimiter, merged);
   }
 
   process.env.PATH = merged.join(delimiter);

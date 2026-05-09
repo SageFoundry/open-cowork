@@ -309,6 +309,8 @@ export class BackgroundTaskService {
       const windowsEncodingEnv = {
         PYTHONIOENCODING: 'utf-8' as const,
         PYTHONUTF8: '1' as const,
+        LANG: 'en_US.UTF-8' as const,
+        LC_ALL: 'en_US.UTF-8' as const,
       };
 
       if (sandbox.isWSL && sandbox.wslStatus?.distro) {
@@ -337,6 +339,8 @@ export class BackgroundTaskService {
           "trap 'rm -f -- \"$0\"' EXIT",
           'export PYTHONIOENCODING=utf-8',
           'export PYTHONUTF8=1',
+          'export LANG=en_US.UTF-8',
+          'export LC_ALL=en_US.UTF-8',
           resolvedPythonDir ? `export PATH='${resolvedPythonDir.replace(/'/g, `"'"'`)}':"$PATH"` : '',
           `cd '${normalizedCwd.replace(/'/g, `"'"'`)}'`,
           `eval "$(printf '%s' '${cmdBase64}' | base64 -d)"`,
