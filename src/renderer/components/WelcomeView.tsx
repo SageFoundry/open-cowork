@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAppStore } from '../store';
 import { useIPC } from '../hooks/useIPC';
+import { useAppConfig } from '../store/selectors';
 import type { ContentBlock } from '../types';
 import { getInitialSessionTitle } from '../../shared/session-title';
 import { buildProjectSummaries } from '../utils/projects';
@@ -15,6 +16,8 @@ import {
   Paperclip,
   BookOpen,
   FileSearch,
+  ChevronDown,
+  Settings,
 } from 'lucide-react';
 
 type AttachedFile = {
@@ -38,6 +41,8 @@ export function WelcomeView() {
   >([]);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   const [isDragging, setIsDragging] = useState(false);
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const modelPickerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { startSession, changeWorkingDir, isElectron } = useIPC();
   const workingDir = useAppStore((state) => state.workingDir);
@@ -48,6 +53,14 @@ export function WelcomeView() {
   const isConfigured = useAppStore((state) => state.isConfigured);
   const setShowSettings = useAppStore((state) => state.setShowSettings);
   const setSettingsTab = useAppStore((state) => state.setSettingsTab);
+  const appConfig = useAppConfig();
+  const configSets = useMemo(() => {
+    if (!appConfig) return [];
+    return appConfig.configSets.map((cs) => ({
+      ...cs,
+      isActive: cs.id === appConfig.activeConfigSetId,
+    }));
+  }, [appConfig]);
   const canSubmit = prompt.trim().length > 0 || pastedImages.length > 0 || attachedFiles.length > 0;
   const activeProject = useMemo(() => {
     if (!activeProjectId) return null;
@@ -410,6 +423,18 @@ export function WelcomeView() {
     adjustTextareaHeight();
   }, [prompt]);
 
+  // Click outside model picker to close
+  useEffect(() => {
+    if (!modelPickerOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      if (modelPickerRef.current && !modelPickerRef.current.contains(e.target as Node)) {
+        setModelPickerOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [modelPickerOpen]);
+
   const quickTags = [
     {
       id: 'create',
@@ -614,18 +639,18 @@ export function WelcomeView() {
 
           {/* Bottom Actions */}
           <div className="flex items-center justify-between pt-3 border-t border-border-muted">
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={handleSelectFolder}
-                className={`flex items-center gap-2 text-sm transition-colors ${
+                className={`flex items-center gap-1.5 text-xs transition-colors ${
                   effectiveWorkingDir
                     ? 'text-text-secondary hover:text-text-primary'
                     : 'text-accent hover:text-accent-hover'
                 }`}
                 title={effectiveWorkingDir || t('welcome.selectWorkingFolder')}
               >
-                <FolderOpen className="w-4 h-4" />
+                <FolderOpen className="w-3.5 h-3.5" />
                 <span>
                   {effectiveWorkingDir
                     ? effectiveWorkingDir.split(/[/\\]/).pop()
@@ -637,12 +662,112 @@ export function WelcomeView() {
                 <button
                   type="button"
                   onClick={handleFileSelect}
-                  className="flex items-center gap-2 text-sm text-text-secondary hover:text-text-primary transition-colors"
+                  className="flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary transition-colors"
                 >
-                  <Paperclip className="w-4 h-4" />
+                  <Paperclip className="w-3.5 h-3.5" />
                   <span>{t('welcome.attachFiles')}</span>
                 </button>
               )}
+
+              {/* Model selector */}
+              <div className="relative" ref={modelPickerRef}>
+                <button
+                  type="button"
+                  onClick={() => setModelPickerOpen(!modelPickerOpen)}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-full border border-border-subtle bg-background/60 text-[11px] text-text-muted hover:bg-surface-hover hover:text-text-secondary transition-colors"
+                  title={appConfig?.model || t('chat.noModel')}
+                >
+                  <span className="max-w-[100px] truncate">
+                    {appConfig?.model || t('chat.noModel')}
+                  </span>
+                  <ChevronDown className={`w-3 h-3 transition-transform ${modelPickerOpen ? 'rotate-180' : ''}`} />
+                </button>
+
+                {modelPickerOpen && (
+                  <div className="absolute bottom-full left-0 mb-2 w-64 max-h-72 overflow-y-auto rounded-xl border border-border-subtle bg-background shadow-lg z-50 py-1.5">
+                    <div className="px-3 py-1.5 text-[10px] font-semibold text-text-muted uppercase tracking-wider">
+                      {t('chat.selectModel')}
+                    </div>
+                    {configSets.map((cs, index) => (
+                      <div key={cs.id} className={index > 0 ? 'border-t border-border-subtle mt-1' : ''}>
+                        {cs.isActive && (
+                          <div className="px-3 pt-2 pb-0.5 text-[13px] font-semibold text-text-primary">
+                            {cs.name}
+                          </div>
+                        )}
+                        {!cs.isActive && (
+                          <div className="px-3 pt-2 pb-0.5 text-[13px] text-text-muted">
+                            {cs.name}
+                          </div>
+                        )}
+                        {cs.models.map((option) => (
+                          <button
+                            key={option.id}
+                            type="button"
+                            onClick={() => {
+                              if (option.id !== appConfig?.model || !cs.isActive) {
+                                setModelPickerOpen(false);
+                                if (cs.isActive) {
+                                  window.electronAPI.config
+                                    .save({ model: option.id })
+                                    .then((result) => {
+                                      if (result.success) {
+                                        useAppStore.getState().setAppConfig(result.config);
+                                      }
+                                    })
+                                    .catch((err) => console.error('[WelcomeView] Failed to switch model:', err));
+                                } else {
+                                  window.electronAPI.config
+                                    .switchSet({ id: cs.id })
+                                    .then((switchResult) => {
+                                      if (!switchResult.success) return;
+                                      return window.electronAPI.config.save({ model: option.id });
+                                    })
+                                    .then((saveResult) => {
+                                      if (saveResult?.success) {
+                                        useAppStore.getState().setAppConfig(saveResult.config);
+                                      }
+                                    })
+                                    .catch((err) => console.error('[WelcomeView] Failed to switch:', err));
+                                }
+                              }
+                            }}
+                            className={`w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors ${
+                              option.id === appConfig?.model && cs.isActive
+                                ? 'bg-accent/10 text-accent'
+                                : 'text-text-primary hover:bg-surface-hover'
+                            }`}
+                          >
+                            <span className="flex-1 truncate">{option.name}</span>
+                            {option.id === appConfig?.model && cs.isActive && (
+                              <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    ))}
+                    {configSets.length === 0 && (
+                      <div className="px-3 py-3 text-xs text-text-muted">
+                        {t('chat.noModelsAvailable')}
+                      </div>
+                    )}
+                    <div className="border-t border-border-subtle mt-1.5 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setModelPickerOpen(false);
+                          setSettingsTab('api');
+                          setShowSettings(true);
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-left text-[11px] text-text-muted hover:bg-surface-hover transition-colors"
+                      >
+                        <Settings className="w-3 h-3" />
+                        {t('chat.manageModels')}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
 
             <button
