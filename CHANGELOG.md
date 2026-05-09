@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.4] - 2026-05-09
+
+### Added
+
+- Chat view now includes a quick thinking-mode toggle switch next to the model picker, with localized labels in English and Chinese.
+
+### Fixed
+
+- Saving API configuration from the renderer now preserves `configSets`, preventing user-created config sets from being collapsed during the main-process save flow.
+- Encrypted config store recovery now detects legacy plain-JSON stores and re-saves them with the stable encryption key instead of backing them up as unreadable data, avoiding config-set loss on upgrade.
+
 ## [3.3.3] - 2026-05-08
 
 ### Added
