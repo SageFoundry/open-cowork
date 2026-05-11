@@ -141,8 +141,8 @@ describe('ClaudeAgentRunner pi-coding-agent integration', () => {
 
   it('auto-splits mixed background shell commands into background plus follow-up execution', () => {
     expect(agentRunnerContent).toContain('splitBackgroundCommand');
-    expect(agentRunnerContent).toContain("const ampIndex = normalized.indexOf('2>&1 &');");
-    expect(agentRunnerContent).toContain("ctx.callTool('execute_background_command'");
+    expect(agentRunnerContent).toContain('findShellBackgroundOperator');
+    expect(agentRunnerContent).toContain('backgroundTaskService.startTask');
     expect(agentRunnerContent).toContain('followupCommand');
   });
 });

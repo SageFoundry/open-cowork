@@ -196,14 +196,21 @@ export function ContextPanel() {
       task.status === 'stopping',
     []
   );
-  const projectBackgroundTasks = useMemo(() => {
-    return backgroundTasks.filter(
-      (task) => getProjectIdForCwd(task.cwd) === activeProjectId && isActiveBackgroundTask(task)
-    );
+  const visibleBackgroundTasks = useMemo(() => {
+    return backgroundTasks
+      .filter((task) => isActiveBackgroundTask(task))
+      .sort((a, b) => {
+        const aInProject = getProjectIdForCwd(a.cwd) === activeProjectId;
+        const bInProject = getProjectIdForCwd(b.cwd) === activeProjectId;
+        if (aInProject !== bInProject) {
+          return aInProject ? -1 : 1;
+        }
+        return b.updatedAt - a.updatedAt;
+      });
   }, [activeProjectId, backgroundTasks, isActiveBackgroundTask]);
-  const runningProjectTaskCount = useMemo(
-    () => projectBackgroundTasks.length,
-    [projectBackgroundTasks]
+  const runningBackgroundTaskCount = useMemo(
+    () => visibleBackgroundTasks.length,
+    [visibleBackgroundTasks]
   );
 
   useEffect(() => {
@@ -502,9 +509,9 @@ export function ContextPanel() {
           <span className="text-xs font-medium text-text-muted uppercase tracking-wider flex items-center gap-2">
             <Terminal className="w-3.5 h-3.5" />
             {t('context.backgroundTasks')}
-            {runningProjectTaskCount > 0 && (
+            {runningBackgroundTaskCount > 0 && (
               <span className="text-[10px] leading-4 px-1.5 rounded-full bg-accent-muted text-accent">
-                {runningProjectTaskCount}
+                {runningBackgroundTaskCount}
               </span>
             )}
           </span>
@@ -517,14 +524,14 @@ export function ContextPanel() {
 
         {backgroundTasksOpen && (
           <div className="pb-2 max-h-72 overflow-y-auto">
-            {projectBackgroundTasks.length === 0 ? (
+            {visibleBackgroundTasks.length === 0 ? (
               <div className="flex items-center gap-2 px-4 py-2 text-xs text-text-muted">
                 <Terminal className="w-3.5 h-3.5 shrink-0" />
                 <span>{t('context.noBackgroundTasks')}</span>
               </div>
             ) : (
               <div className="space-y-2 px-3 pb-2">
-                {projectBackgroundTasks.map((task) => {
+                {visibleBackgroundTasks.map((task) => {
                   const isExpanded = expandedTaskId === task.id;
                   const taskLog = backgroundTaskLogs[task.id] || '';
                   const isRunning = task.status === 'running' || task.status === 'starting';
@@ -561,6 +568,11 @@ export function ContextPanel() {
                         <div className="mt-1 text-[11px] text-text-muted truncate">
                           {formatTaskStatus(task)}
                         </div>
+                        {getProjectIdForCwd(task.cwd) !== activeProjectId && (
+                          <div className="mt-1 text-[11px] text-text-muted/80 truncate">
+                            {task.cwd}
+                          </div>
+                        )}
                         {task.detectedUrl && (
                           <div className="mt-1 text-[11px] text-accent truncate">
                             {task.detectedUrl}

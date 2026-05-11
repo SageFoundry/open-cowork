@@ -953,10 +953,28 @@ ${hints.join('\n')}
     return /\bsudo\b/.test(command);
   }
 
+  /**
+   * Decode HTML entities that LLMs commonly emit in tool-call arguments:
+   *   &amp;  -> &
+   *   &lt;   -> <
+   *   &gt;   -> >
+   *   &#39;  -> '
+   *   &quot; -> "
+   */
+  private static decodeHtmlEntities(command: string): string {
+    return command
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&#39;/g, "'")
+      .replace(/&quot;/g, '"');
+  }
+
   private static hasBackgroundShellSyntax(command: string): boolean {
-    const normalized = command.replace(/\r\n?/g, '\n');
+    const decoded = ClaudeAgentRunner.decodeHtmlEntities(command);
+    const normalized = decoded.replace(/\r\n?/g, '\n');
     return (
-      /(?:^|[\n;\s])&(?=$|[\n;\s])/.test(normalized) ||
+      ClaudeAgentRunner.findShellBackgroundOperator(normalized) !== -1 ||
       /\bnohup\b/i.test(normalized) ||
       /\bdisown\b/i.test(normalized) ||
       /\bpm2\s+start\b/i.test(normalized) ||
@@ -965,15 +983,61 @@ ${hints.join('\n')}
     );
   }
 
+  private static findShellBackgroundOperator(command: string): number {
+    let quote: '"' | "'" | '`' | null = null;
+    let escaped = false;
+
+    for (let i = 0; i < command.length; i += 1) {
+      const char = command[i];
+
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+
+      if (char === '\\') {
+        escaped = true;
+        continue;
+      }
+
+      if (quote) {
+        if (char === quote) {
+          quote = null;
+        }
+        continue;
+      }
+
+      if (char === '"' || char === "'" || char === '`') {
+        quote = char;
+        continue;
+      }
+
+      if (char !== '&') {
+        continue;
+      }
+
+      const previous = command[i - 1] || '';
+      const next = command[i + 1] || '';
+      if (previous === '&' || next === '&' || previous === '>' || next === '>') {
+        continue;
+      }
+
+      return i;
+    }
+
+    return -1;
+  }
+
   private static splitBackgroundCommand(command: string): {
     backgroundCommand: string;
     followupCommand: string | null;
   } | null {
-    const normalized = command.replace(/\r\n?/g, '\n').trim();
-    const ampIndex = normalized.indexOf('2>&1 &');
+    const decoded = ClaudeAgentRunner.decodeHtmlEntities(command);
+    const normalized = decoded.replace(/\r\n?/g, '\n').trim();
+    const ampIndex = ClaudeAgentRunner.findShellBackgroundOperator(normalized);
     if (ampIndex !== -1) {
       const backgroundCommand = normalized.slice(0, ampIndex).trim();
-      const followupCommand = normalized.slice(ampIndex + '2>&1 &'.length).trim();
+      const followupCommand = normalized.slice(ampIndex + 1).trim();
       if (backgroundCommand) {
         return {
           backgroundCommand,
@@ -981,18 +1045,10 @@ ${hints.join('\n')}
         };
       }
     }
-
-    const lines = normalized
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean);
-    if (lines.length >= 2 && /(?:^|[\s;])&$/.test(lines[0])) {
-      return {
-        backgroundCommand: lines[0].replace(/&$/, '').trim(),
-        followupCommand: lines.slice(1).join(' && ') || null,
-      };
-    }
-
+    // NOTE: A multiline fallback (first line ending with &) used to live here.
+    // It's dead code — findShellBackgroundOperator always finds a trailing &
+    // in any practical command, because & at end-of-line has next char=\n
+    // (not & or >), so the scanner never skips it. Removed to avoid confusion.
     return null;
   }
 
@@ -1135,9 +1191,10 @@ ${hints.join('\n')}
           params: { command: string; timeout?: number },
           signal: AbortSignal | undefined
         ) => {
+          const decodedCommand = ClaudeAgentRunner.decodeHtmlEntities(params.command || '');
           const result = await executeWindowsBash({
             sessionId,
-            command: params.command || '',
+            command: decodedCommand,
             cwd: effectiveCwd,
             timeout: params.timeout,
             signal,
@@ -1169,9 +1226,73 @@ ${hints.join('\n')}
           env?: NodeJS.ProcessEnv;
         }
       ) => {
+        const rawCommand = ClaudeAgentRunner.decodeHtmlEntities(command || '');
+        if (ClaudeAgentRunner.hasBackgroundShellSyntax(rawCommand)) {
+          logCtx(
+            '[BackgroundGuard] BashOperations intercepted background syntax:',
+            rawCommand.substring(0, 120)
+          );
+          const split = ClaudeAgentRunner.splitBackgroundCommand(rawCommand);
+          if (split && this.backgroundTaskService) {
+            const task = await this.backgroundTaskService.startTask({
+              command: split.backgroundCommand,
+              cwd,
+              sourceSessionId: sessionId,
+            });
+            const latestTask = this.backgroundTaskService.getTask(task.id) || task;
+            const lines = [
+              `Background task started: ${latestTask.title}`,
+              `Status: ${latestTask.status}`,
+              `PID: ${latestTask.pid ?? 'unknown'}`,
+              `Working directory: ${latestTask.cwd}`,
+              `Log: ${latestTask.logPath}`,
+              latestTask.detectedUrl
+                ? `Detected URL: ${latestTask.detectedUrl}`
+                : 'Detected URL: pending',
+              'Use the sidebar Background Tasks panel to inspect logs or stop it later.',
+            ];
+            options.onData(Buffer.from(`${lines.join('\n')}\n`, 'utf8'));
+
+            if (!split.followupCommand) {
+              logCtx('[BackgroundGuard] BashOperations background task started');
+              return { exitCode: 0 };
+            }
+
+            logCtx(
+              '[BackgroundGuard] BashOperations running follow-up command:',
+              split.followupCommand.substring(0, 120)
+            );
+            const followupResult = await executeWindowsBash({
+              sessionId,
+              command: split.followupCommand,
+              cwd,
+              timeout: options.timeout,
+              signal: options.signal,
+            });
+
+            if (followupResult.stdout) {
+              options.onData(Buffer.from(followupResult.stdout, 'utf8'));
+            }
+            if (followupResult.stderr) {
+              options.onData(Buffer.from(followupResult.stderr, 'utf8'));
+            }
+
+            return { exitCode: followupResult.exitCode };
+          }
+
+          logCtx('[BackgroundGuard] BashOperations could not split background command');
+          options.onData(
+            Buffer.from(
+              'This command contains background shell syntax. Use execute_background_command for long-running commands.\n',
+              'utf8'
+            )
+          );
+          return { exitCode: 1 };
+        }
+
         const result = await executeWindowsBash({
           sessionId,
-          command,
+          command: rawCommand,
           cwd,
           timeout: options.timeout,
           signal: options.signal,
@@ -1219,7 +1340,7 @@ ${hints.join('\n')}
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           ctx: any
         ) => {
-          const command = params.command;
+          const command = ClaudeAgentRunner.decodeHtmlEntities(params.command || '');
 
           if (ClaudeAgentRunner.isSudoCommand(command)) {
             log('[ClaudeAgentRunner] Sudo command detected, requesting password');
@@ -1337,9 +1458,14 @@ ${hints.join('\n')}
     });
   }
 
-  private static wrapBashToolForBackgroundSyntax(tools: ToolDefinition[]): ToolDefinition[] {
+  private wrapBashToolForBackgroundSyntax(
+    tools: ToolDefinition[],
+    sessionId: string,
+    effectiveCwd: string
+  ): ToolDefinition[] {
+    const backgroundTaskService = this.backgroundTaskService;
     return tools.map((tool) => {
-      if (tool.name !== 'bash') return tool;
+      if (tool.name !== 'bash' && tool.name !== 'pwsh') return tool;
 
       const originalExecute = tool.execute;
       return {
@@ -1352,53 +1478,69 @@ ${hints.join('\n')}
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           ctx: any
         ) => {
-          if (ClaudeAgentRunner.hasBackgroundShellSyntax(params.command || '')) {
-            const split = ClaudeAgentRunner.splitBackgroundCommand(params.command || '');
-            if (
-              split &&
-              ctx &&
-              typeof ctx.callTool === 'function'
-            ) {
-              const backgroundResult = await ctx.callTool('execute_background_command', {
-                command: split.backgroundCommand,
-              });
+          const rawCommand = ClaudeAgentRunner.decodeHtmlEntities(params.command || '');
+          if (ClaudeAgentRunner.hasBackgroundShellSyntax(rawCommand)) {
+            const split = ClaudeAgentRunner.splitBackgroundCommand(rawCommand);
+            if (split && backgroundTaskService) {
+              logCtx('[BackgroundGuard] Starting background task directly for:', split.backgroundCommand.substring(0, 80));
+              try {
+                const task = await backgroundTaskService.startTask({
+                  command: split.backgroundCommand,
+                  cwd: effectiveCwd,
+                  sourceSessionId: sessionId,
+                });
 
-              if (!split.followupCommand) {
-                return backgroundResult;
+                const latestTask = backgroundTaskService.getTask(task.id) || task;
+                const lines = [
+                  `Background task started: ${latestTask.title}`,
+                  `Status: ${latestTask.status}`,
+                  `PID: ${latestTask.pid ?? 'unknown'}`,
+                  `Working directory: ${latestTask.cwd}`,
+                  `Log: ${latestTask.logPath}`,
+                  latestTask.detectedUrl ? `Detected URL: ${latestTask.detectedUrl}` : 'Detected URL: pending',
+                  'Use the sidebar Background Tasks panel to inspect logs or stop it later.',
+                ];
+
+                const backgroundResult = {
+                  content: [{ type: 'text' as const, text: lines.join('\n') }],
+                  details: undefined as unknown,
+                };
+
+                if (!split.followupCommand) {
+                  logCtx('[BackgroundGuard] Background task started successfully');
+                  return backgroundResult;
+                }
+
+                const followupResult = await originalExecute(
+                  toolCallId,
+                  { ...params, command: split.followupCommand },
+                  signal,
+                  onUpdate,
+                  ctx
+                );
+
+                const backgroundText = backgroundResult.content.map((item) => item.text || '').filter(Boolean).join('\n');
+                const followupText =
+                  Array.isArray((followupResult as { content?: Array<{ text?: string }> }).content)
+                    ? ((followupResult as { content: Array<{ text?: string }> }).content
+                        .map((item) => item.text || '')
+                        .filter(Boolean)
+                        .join('\n'))
+                    : '';
+
+                return {
+                  content: [
+                    {
+                      type: 'text' as const,
+                      text: [backgroundText, followupText].filter(Boolean).join('\n\n'),
+                    },
+                  ],
+                  details: undefined as unknown,
+                };
+              } catch (error) {
+                logCtx('[BackgroundGuard] Background task start failed:', error);
+                throw error;
               }
-
-              const followupResult = await originalExecute(
-                toolCallId,
-                { ...params, command: split.followupCommand },
-                signal,
-                onUpdate,
-                ctx
-              );
-
-              const backgroundText =
-                Array.isArray((backgroundResult as { content?: Array<{ text?: string }> }).content)
-                  ? ((backgroundResult as { content: Array<{ text?: string }> }).content
-                      .map((item) => item.text || '')
-                      .filter(Boolean)
-                      .join('\n'))
-                  : '';
-              const followupText =
-                Array.isArray((followupResult as { content?: Array<{ text?: string }> }).content)
-                  ? ((followupResult as { content: Array<{ text?: string }> }).content
-                      .map((item) => item.text || '')
-                      .filter(Boolean)
-                      .join('\n'))
-                  : '';
-
-              return {
-                content: [
-                  {
-                    type: 'text' as const,
-                    text: [backgroundText, followupText].filter(Boolean).join('\n\n'),
-                  },
-                ],
-                details: undefined as unknown,
-              };
             }
 
             return {
@@ -2398,7 +2540,7 @@ Tool routing:
       // Re-read every query so newly added/removed MCP servers take effect immediately.
       const mcpCustomTools = this.mcpManager ? buildMcpCustomTools(this.mcpManager) : [];
       const backgroundTaskTools = this.buildBackgroundTaskTool(session.id, effectiveCwd);
-      const customTools = [...backgroundTaskTools, ...mcpCustomTools];
+      const baseCustomTools = [...backgroundTaskTools, ...mcpCustomTools];
       if (mcpCustomTools.length > 0) {
         log(
           `[ClaudeAgentRunner] Registered ${mcpCustomTools.length} MCP tools as customTools:`,
@@ -2432,14 +2574,12 @@ Tool routing:
 
       // Inject a default 120s timeout for bash commands when the model omits one
       const withTimeout = ClaudeAgentRunner.wrapBashToolWithDefaultTimeout(windowsBashTools);
-      const withBackgroundGuard = ClaudeAgentRunner.wrapBashToolForBackgroundSyntax(withTimeout);
-
       // Wrap the bash tool to intercept sudo commands and request passwords
       // Note: wrapBashToolForSudo returns ToolDefinition[] (5-param execute) but
       // createAgentSession.tools expects Tool[] (4-param execute). The extra ctx
       // parameter is simply not passed by the session runner — safe to cast.
       const wrappedTools = this.wrapBashToolForSudo(
-        withBackgroundGuard,
+        withTimeout,
         session.id,
         effectiveCwd,
         sanitizeOutputPaths
@@ -2470,8 +2610,9 @@ Tool routing:
             signal: AbortSignal | undefined
           ) => {
             const timeout = (params.timeout ?? 120) * 1000;
+            const decodedCommand = ClaudeAgentRunner.decodeHtmlEntities(params.command || '');
             const result = await executeWindowsPowerShell({
-              script: params.command || '',
+              script: decodedCommand,
               cwd: effectiveCwd,
               timeoutMs: Math.max(1, timeout),
               signal,
@@ -2490,18 +2631,31 @@ Tool routing:
         wrappedTools.push(pwshTool);
       }
 
+      const shellGuardedTools = this.wrapBashToolForBackgroundSyntax(
+        wrappedTools,
+        session.id,
+        effectiveCwd
+      );
+      const shellOverrideTools = shellGuardedTools.filter(
+        (tool) => tool.name === 'bash' || tool.name === 'pwsh'
+      );
+      const customTools = [...baseCustomTools, ...shellOverrideTools];
+
       // Diagnostic: log tools being passed to SDK (helps debug Ollama tool use)
       logCtx(`[ClaudeAgentRunner] Session reuse check: cached=${!!cachedSession}`);
       logCtx(`[ClaudeAgentRunner] Model=${piModel.id}, thinkingLevel=${thinkingLevel}`);
       log(
-        `[ClaudeAgentRunner] Built-in tools (${wrappedTools.length}): ${wrappedTools.map((t: { name?: string; type?: string }) => t.name || t.type).join(', ')}`
+        `[ClaudeAgentRunner] Built-in tools (${shellGuardedTools.length}): ${shellGuardedTools.map((t: { name?: string; type?: string }) => t.name || t.type).join(', ')}`
       );
       log(
         `[ClaudeAgentRunner] Custom MCP tools (${mcpCustomTools.length}): ${mcpCustomTools.map((t) => t.name).join(', ')}`
       );
+      log(
+        `[ClaudeAgentRunner] Shell override tools (${shellOverrideTools.length}): ${shellOverrideTools.map((t) => t.name).join(', ')}`
+      );
 
       const toolFingerprintInput = {
-        builtIn: wrappedTools.map((tool) => describeToolForFingerprint(tool)),
+        builtIn: shellGuardedTools.map((tool) => describeToolForFingerprint(tool)),
         custom: customTools.map((tool) => describeToolForFingerprint(tool)),
       };
       const cacheDiagnostics: CacheDiagnosticsPayload = {
@@ -2625,7 +2779,7 @@ Tool routing:
           thinkingLevel,
           authStorage,
           modelRegistry,
-          tools: wrappedTools as unknown as ReturnType<typeof createCodingTools>,
+          tools: shellGuardedTools as unknown as ReturnType<typeof createCodingTools>,
           customTools,
           sessionManager: PiSessionManager.inMemory(),
           settingsManager: PiSettingsManager.inMemory({

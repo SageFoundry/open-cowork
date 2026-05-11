@@ -4,6 +4,7 @@ import { useAppStore } from '../store';
 import { useIPC } from '../hooks/useIPC';
 import { useAppConfig } from '../store/selectors';
 import type { ContentBlock } from '../types';
+import { API_PROVIDER_PRESETS } from '../../shared/api-model-presets';
 import { getInitialSessionTitle } from '../../shared/session-title';
 import { buildProjectSummaries } from '../utils/projects';
 import {
@@ -56,10 +57,29 @@ export function WelcomeView() {
   const appConfig = useAppConfig();
   const configSets = useMemo(() => {
     if (!appConfig) return [];
-    return appConfig.configSets.map((cs) => ({
-      ...cs,
-      isActive: cs.id === appConfig.activeConfigSetId,
-    }));
+    return appConfig.configSets.map((cs) => {
+      const activeProfile = cs.profiles[cs.activeProfileKey];
+      // Get preset models for this provider (custom provider has no presets)
+      let presetModels: Array<{ id: string; name: string }> = [];
+      if (cs.provider !== 'custom') {
+        presetModels = API_PROVIDER_PRESETS[cs.provider]?.models || [];
+      }
+      const presetIds = presetModels.map((m) => m.id);
+      // Merge preset + user-added models
+      const userModels = activeProfile?.models || [];
+      const merged = [...new Set([...presetIds, ...userModels])].filter(Boolean);
+      const models: Array<{ id: string; name: string }> = merged.map((id) => ({ id, name: id }));
+      // Ensure current model is in the list
+      if (activeProfile?.model && !models.some((m) => m.id === activeProfile.model)) {
+        models.push({ id: activeProfile.model, name: activeProfile.model });
+      }
+      return {
+        id: cs.id,
+        name: cs.name,
+        models,
+        isActive: cs.id === appConfig.activeConfigSetId,
+      };
+    });
   }, [appConfig]);
   const canSubmit = prompt.trim().length > 0 || pastedImages.length > 0 || attachedFiles.length > 0;
   const activeProject = useMemo(() => {
@@ -669,38 +689,38 @@ export function WelcomeView() {
                 </button>
               )}
 
-              {/* Model selector */}
+              {/* Model selector — matches ChatView interaction exactly */}
               <div className="relative" ref={modelPickerRef}>
                 <button
                   type="button"
                   onClick={() => setModelPickerOpen(!modelPickerOpen)}
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded-full border border-border-subtle bg-background/60 text-[11px] text-text-muted hover:bg-surface-hover hover:text-text-secondary transition-colors"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-border-subtle bg-background/60 text-xs text-text-muted hover:bg-surface-hover hover:text-text-secondary transition-colors"
                   title={appConfig?.model || t('chat.noModel')}
                 >
-                  <span className="max-w-[100px] truncate">
+                  <span className="max-w-[120px] truncate">
                     {appConfig?.model || t('chat.noModel')}
                   </span>
                   <ChevronDown className={`w-3 h-3 transition-transform ${modelPickerOpen ? 'rotate-180' : ''}`} />
                 </button>
 
                 {modelPickerOpen && (
-                  <div className="absolute bottom-full left-0 mb-2 w-64 max-h-72 overflow-y-auto rounded-xl border border-border-subtle bg-background shadow-lg z-50 py-1.5">
+                  <div className="absolute bottom-full left-0 mb-2 w-72 max-h-80 overflow-y-auto rounded-xl border border-border-subtle bg-background shadow-lg z-50 py-1.5">
                     <div className="px-3 py-1.5 text-[10px] font-semibold text-text-muted uppercase tracking-wider">
                       {t('chat.selectModel')}
                     </div>
                     {configSets.map((cs, index) => (
                       <div key={cs.id} className={index > 0 ? 'border-t border-border-subtle mt-1' : ''}>
                         {cs.isActive && (
-                          <div className="px-3 pt-2 pb-0.5 text-[13px] font-semibold text-text-primary">
+                          <div className="px-3 pt-2 pb-0.5 text-[15px] font-semibold text-text-primary">
                             {cs.name}
                           </div>
                         )}
                         {!cs.isActive && (
-                          <div className="px-3 pt-2 pb-0.5 text-[13px] text-text-muted">
+                          <div className="px-3 pt-2 pb-0.5 text-[15px] text-text-muted">
                             {cs.name}
                           </div>
                         )}
-                        {cs.models.map((option) => (
+                        {(cs.models || []).map((option) => (
                           <button
                             key={option.id}
                             type="button"
@@ -732,7 +752,7 @@ export function WelcomeView() {
                                 }
                               }
                             }}
-                            className={`w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors ${
+                            className={`w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors ${
                               option.id === appConfig?.model && cs.isActive
                                 ? 'bg-accent/10 text-accent'
                                 : 'text-text-primary hover:bg-surface-hover'
@@ -759,7 +779,7 @@ export function WelcomeView() {
                           setSettingsTab('api');
                           setShowSettings(true);
                         }}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-left text-[11px] text-text-muted hover:bg-surface-hover transition-colors"
+                        className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-text-muted hover:bg-surface-hover transition-colors"
                       >
                         <Settings className="w-3 h-3" />
                         {t('chat.manageModels')}

@@ -1183,7 +1183,7 @@ export function ChatView() {
                                 {cs.name}
                               </div>
                             )}
-                            {cs.models.map((option) => (
+                            {(cs.models || []).map((option) => (
                               <button
                                 key={option.id}
                                 type="button"

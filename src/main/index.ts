@@ -1019,7 +1019,15 @@ async function cleanupSandboxResources(): Promise<void> {
   stopNavServer();
   skillsManager?.stopStorageMonitoring();
   scheduledTaskManager?.stop();
-  backgroundTaskService?.shutdown();
+  if (backgroundTaskService) {
+    try {
+      log('[App] Stopping background tasks...');
+      await withTimeout(backgroundTaskService.shutdown(), 8000, 'Background task shutdown');
+      log('[App] Background tasks stopped');
+    } catch (error) {
+      logError('[App] Error stopping background tasks:', error);
+    }
+  }
   tray?.destroy();
   tray = null;
 

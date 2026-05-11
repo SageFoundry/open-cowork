@@ -394,6 +394,8 @@ export class ToolExecutor {
    * Execute shell command - Public method for agent-runner
    */
   async executeCommand(sessionId: string, command: string, cwd: string): Promise<string> {
+    // Decode HTML entities that LLMs may inject (e.g. &amp;amp; → &amp;)
+    command = this.decodeHtmlEntities(command || '');
     // Sandbox validation
     this.validateCommandSandbox(sessionId, command, cwd);
 
@@ -894,6 +896,8 @@ export class ToolExecutor {
    * Execute a bash command (legacy)
    */
   private async bash(command: string, context: ExecutionContext): Promise<ToolResult> {
+    // Decode HTML entities that LLMs may inject (e.g. &amp;amp; → &amp;)
+    command = this.decodeHtmlEntities(command || '');
     const cwd = context.cwd || process.cwd();
 
     // Use the same sandbox validation as executeCommand
@@ -971,5 +975,19 @@ export class ToolExecutor {
         }
       });
     });
+  }
+
+  /**
+   * Decode HTML entities that LLMs may inject into shell commands.
+   * E.g. &amp;amp; → &amp;, &amp;lt; → &lt;, etc.
+   */
+  private decodeHtmlEntities(str: string): string {
+    return str
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&apos;/g, "'");
   }
 }

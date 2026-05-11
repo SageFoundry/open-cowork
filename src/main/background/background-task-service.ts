@@ -95,6 +95,67 @@ function detectUrl(text: string): string | null {
   return /^https?:\/\//i.test(candidate) ? candidate : `http://${candidate}`;
 }
 
+function findShellBackgroundOperator(command: string): number {
+  let quote: '"' | "'" | '`' | null = null;
+  let escaped = false;
+
+  for (let i = 0; i < command.length; i += 1) {
+    const char = command[i];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+      continue;
+    }
+
+    if (char !== '&') {
+      continue;
+    }
+
+    const previous = command[i - 1] || '';
+    const next = command[i + 1] || '';
+    if (previous === '&' || next === '&' || previous === '>' || next === '>') {
+      continue;
+    }
+
+    return i;
+  }
+
+  return -1;
+}
+
+function normalizeDetachedCommand(command: string): string {
+  const normalized = command.replace(/\r\n?/g, '\n').trim();
+  const ampIndex = findShellBackgroundOperator(normalized);
+  if (ampIndex === -1) {
+    return normalized;
+  }
+
+  const backgroundCommand = normalized.slice(0, ampIndex).trim();
+  const trailingCommand = normalized.slice(ampIndex + 1).trim();
+  if (!trailingCommand || /^;?\s*disown\b/i.test(trailingCommand)) {
+    return backgroundCommand;
+  }
+
+  return normalized;
+}
+
 export class BackgroundTaskService {
   private readonly db: DatabaseInstance;
   private readonly sendToRenderer: (event: ServerEvent) => void;
@@ -123,11 +184,22 @@ export class BackgroundTaskService {
     }, this.reconcileIntervalMs);
   }
 
-  shutdown(): void {
+  async shutdown(): Promise<void> {
     if (this.reconcileTimer) {
       clearInterval(this.reconcileTimer);
       this.reconcileTimer = null;
     }
+
+    const activeTasks = this.listTasks().filter(
+      (task) =>
+        task.pid &&
+        (task.status === 'queued' ||
+          task.status === 'starting' ||
+          task.status === 'running' ||
+          task.status === 'stopping')
+    );
+    await Promise.allSettled(activeTasks.map((task) => this.stopTask(task.id)));
+
     for (const taskId of this.runningTasks.keys()) {
       this.detachLogWatcher(taskId);
     }
@@ -138,7 +210,7 @@ export class BackgroundTaskService {
   }
 
   async startTask(input: BackgroundTaskStartInput): Promise<BackgroundTask> {
-    const command = input.command.trim();
+    const command = normalizeDetachedCommand(input.command);
     if (!command) {
       throw new Error('Command is required');
     }

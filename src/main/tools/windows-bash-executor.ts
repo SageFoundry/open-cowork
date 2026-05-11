@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { spawn } from 'child_process';
+import { spawn, execFile as _execFile } from 'child_process';
+import { promisify } from 'util';
 import { resolvePythonFromPath } from '../runtime/runtime-resolver';
 import { getSandboxAdapter } from '../sandbox/sandbox-adapter';
 import type { ExecutionResult } from '../sandbox/types';
@@ -182,6 +183,37 @@ async function executeViaSandbox(
   });
 }
 
+/**
+ * Kill a process and its entire tree via taskkill on Windows.
+ * Falls back to the node process.kill on non-Windows or if taskkill is unavailable.
+ */
+async function killProcessTree(pid: number): Promise<void> {
+  if (process.platform !== 'win32') {
+    try {
+      process.kill(-pid, 'SIGKILL');
+    } catch {
+      // best-effort
+    }
+    return;
+  }
+  // On Windows, taskkill /F /T kills the process and all descendants.
+  const execFile = promisify(_execFile);
+  try {
+    await execFile('taskkill', ['/PID', String(pid), '/T', '/F'], {
+      timeout: 4000,
+      windowsHide: true,
+      stdio: 'pipe',
+    } as any);
+  } catch {
+    // If taskkill is unavailable, fall back to the node kill.
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // best-effort
+    }
+  }
+}
+
 async function executeViaGitBash({
   gitBashPath,
   command,
@@ -247,6 +279,12 @@ async function executeViaGitBash({
     let settled = false;
     let timedOut = false;
 
+    const closePipes = () => {
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      child.stdin?.destroy();
+    };
+
     const cleanup = (removeScript: boolean) => {
       clearTimeout(timeoutId);
       if (abortHandler) signal?.removeEventListener('abort', abortHandler);
@@ -262,6 +300,7 @@ async function executeViaGitBash({
     const finish = (result: WindowsBashExecutionResult) => {
       if (settled) return;
       settled = true;
+      closePipes();
       cleanup(result.exitCode === 0 && !result.timedOut);
       resolve(result);
     };
@@ -269,18 +308,28 @@ async function executeViaGitBash({
     const fail = (error: Error) => {
       if (settled) return;
       settled = true;
+      closePipes();
       cleanup(false);
       reject(error);
     };
 
     const timeoutId = setTimeout(() => {
       timedOut = true;
-      child.kill();
+      if (child.pid) killProcessTree(child.pid).catch(() => {});
+      else child.kill();
+      finish({
+        stdout,
+        stderr: `${stderr}${stderr ? '\n' : ''}Command timed out after ${timeout}ms\n[Git Bash script preserved at ${scriptPath}]`,
+        exitCode: 124,
+        backend: 'git-bash',
+        timedOut: true,
+      });
     }, timeout);
 
     const abortHandler = signal
       ? () => {
-          child.kill();
+          if (child.pid) killProcessTree(child.pid).catch(() => {});
+          else child.kill();
           fail(new Error('Command aborted'));
         }
       : undefined;
@@ -301,7 +350,7 @@ async function executeViaGitBash({
       fail(error);
     });
 
-    child.on('close', (code) => {
+    child.on('exit', (code) => {
       finish({
         stdout,
         stderr: timedOut
