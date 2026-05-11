@@ -527,6 +527,22 @@ export function closeLogFile(): void {
   clearLogStreamState();
 }
 
+let stdoutBroken = false;
+let stderrBroken = false;
+
+// Register error handlers on stdout/stderr to detect broken pipes.
+// Once broken, flag it to avoid repeated EPIPE throws from console methods.
+process.stdout.on('error', (err: NodeJS.ErrnoException) => {
+  if (err.code === 'EPIPE') {
+    stdoutBroken = true;
+  }
+});
+process.stderr.on('error', (err: NodeJS.ErrnoException) => {
+  if (err.code === 'EPIPE') {
+    stderrBroken = true;
+  }
+});
+
 function isBrokenPipeError(error: unknown): boolean {
   return Boolean(
     error &&
@@ -537,11 +553,23 @@ function isBrokenPipeError(error: unknown): boolean {
 }
 
 function safeConsoleCall(method: (...args: unknown[]) => void, ...args: unknown[]): void {
+  // If the underlying stream is already broken, skip the write entirely.
+  // This prevents repeated EPIPE uncaught exceptions on every console.* call.
+  if ((method === console.log || method === console.info) && stdoutBroken) return;
+  if (method === console.warn && stderrBroken) return;
+  if (method === console.error && stderrBroken) return;
+
   try {
     method(...args);
   } catch (error) {
     if (!isBrokenPipeError(error)) {
       throw error;
+    }
+    // Mark the stream as broken so future calls skip the write
+    if (method === console.log || method === console.info) {
+      stdoutBroken = true;
+    } else {
+      stderrBroken = true;
     }
   }
 }

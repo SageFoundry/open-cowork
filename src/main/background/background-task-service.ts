@@ -1,6 +1,6 @@
 import { app, shell } from 'electron';
 import { spawn, execFile } from 'node:child_process';
-import { mkdirSync, existsSync, openSync, closeSync, readFile, readFileSync, watchFile, unwatchFile, writeFileSync } from 'node:fs';
+import { mkdirSync, existsSync, readFile, readFileSync, watchFile, unwatchFile, writeFileSync, appendFileSync } from 'node:fs';
 import { join, delimiter as pathDelimiter } from 'node:path';
 import net from 'node:net';
 import os from 'node:os';
@@ -241,18 +241,31 @@ export class BackgroundTaskService {
     };
     this.db.backgroundTasks.create(baseRow);
 
-    const stdoutFd = openSync(logPath, 'a');
-    const stderrFd = openSync(logPath, 'a');
-
     try {
-      const child = this.spawnDetached(command, input.cwd, stdoutFd, stderrFd);
+      const child = this.spawnDetached(command, input.cwd);
       const runningTask = this.persistTaskUpdate(id, {
         status: 'running',
         pid: child.pid ?? null,
       });
+
+      // Pipe stdout/stderr to the log file. On Windows, raw file descriptors
+      // passed to spawn stdio do not reliably work; use pipe mode and manually
+      // append to the log file.
+      if (child.stdout) {
+        child.stdout.on('data', (chunk: Buffer) => {
+          appendFileSync(logPath, chunk);
+        });
+      }
+      if (child.stderr) {
+        child.stderr.on('data', (chunk: Buffer) => {
+          appendFileSync(logPath, chunk);
+        });
+      }
+
+      child.unref();
       this.attachLogWatcher(runningTask);
       this.emitTaskUpdate(runningTask);
-      child.unref();
+
       return runningTask;
     } catch (error) {
       const failedTask = this.persistTaskUpdate(id, {
@@ -262,9 +275,6 @@ export class BackgroundTaskService {
       });
       this.emitTaskUpdate(failedTask);
       throw error;
-    } finally {
-      closeSync(stdoutFd);
-      closeSync(stderrFd);
     }
   }
 
@@ -369,7 +379,7 @@ export class BackgroundTaskService {
     return dir;
   }
 
-  private spawnDetached(command: string, cwd: string, stdoutFd: number, stderrFd: number) {
+  private spawnDetached(command: string, cwd: string) {
     if (process.platform === 'win32') {
       const sandbox = getSandboxAdapter();
       const gitBashPath = detectGitBash();
@@ -392,7 +402,7 @@ export class BackgroundTaskService {
           {
             cwd,
             detached: true,
-            stdio: ['ignore', stdoutFd, stderrFd],
+            stdio: ['ignore', 'pipe', 'pipe'],
             windowsHide: true,
             env: { ...process.env, OPEN_COWORK_BASH_BACKEND: 'wsl', ...windowsEncodingEnv },
           }
@@ -422,7 +432,7 @@ export class BackgroundTaskService {
         return spawn(gitBashPath, ['--noprofile', '--norc', scriptPath], {
           cwd,
           detached: true,
-          stdio: ['ignore', stdoutFd, stderrFd],
+          stdio: ['ignore', 'pipe', 'pipe'],
           windowsHide: true,
           env: {
             ...process.env,
@@ -444,7 +454,7 @@ export class BackgroundTaskService {
         {
           cwd,
           detached: true,
-          stdio: ['ignore', stdoutFd, stderrFd],
+          stdio: ['ignore', 'pipe', 'pipe'],
           windowsHide: true,
           env: { ...process.env, ...windowsEncodingEnv },
         }
@@ -454,7 +464,7 @@ export class BackgroundTaskService {
     return spawn('/bin/bash', ['-lc', command], {
       cwd,
       detached: true,
-      stdio: ['ignore', stdoutFd, stderrFd],
+      stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env },
     });
   }
@@ -598,18 +608,17 @@ export class BackgroundTaskService {
           [
             '-NoProfile',
             '-Command',
-            `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" | Select-Object -ExpandProperty CommandLine)`,
+            `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" | Select-Object -ExpandProperty ProcessId)`,
           ],
           { encoding: 'utf8', timeout: 3000 }
         );
-        if (!output) {
+        if (!output?.trim()) {
           return false;
         }
-        if (!command.trim()) {
-          return true;
-        }
-        const commandPrefix = command.trim().split(/\s+/)[0]?.toLowerCase();
-        return !commandPrefix || output.toLowerCase().includes(commandPrefix);
+        // On Windows, spawned tasks run inside git-bash.exe / powershell.exe wrappers,
+        // so the wrapper's command line never contains the user's original command.
+        // Just confirm the pid is alive — we use taskkill /T to stop child trees.
+        return true;
       }
 
       const output = await execFileAsync('ps', ['-p', String(pid), '-o', 'command='], {

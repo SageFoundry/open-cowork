@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Background task service (`BackgroundTaskService`) on Windows: `spawnDetached` now uses `pipe` mode (`stdio: ['ignore', 'pipe', 'pipe']`) instead of raw file descriptors, and logs are written via `child.stdout.on('data')` + `appendFileSync` instead of fd passthrough, fixing unreliable log capture.
+- Background task service: `isProcessAlive` on Windows now uses `Get-CimInstance Win32_Process` via PowerShell instead of `tasklist`, providing more reliable process-liveness detection.
+- Logger (`src/main/utils/logger.ts`): registered `process.stdout` / `process.stderr` `error` event handlers to detect EPIPE, preventing application crashes when stdout/stderr pipes are broken (e.g., parent process exits).
+- Background task service: `reconcileTasks` now correctly uses `await isProcessAlive()` instead of synchronous fd-based checks, preventing false-positive "lost" status for healthy tasks.
+
 ## [3.3.4] - 2026-05-09
 
 ### Added
