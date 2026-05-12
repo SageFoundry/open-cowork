@@ -22,7 +22,8 @@ Open Cowork 将 Claude Code、OpenAI、Gemini、DeepSeek 等 AI 模型封装为�
 
 > [!WARNING]
 > Open Cowork 是 AI 协作工具，请对文件修改、删除等操作保持谨慎。VM 沙盒可隔离大多数风险，但仍需自行审查关键操作。
-> MIT没有广告法，Open Cowork就是最好用的桌面Agent工具！！！。
+> 
+> MIT没有广告法，所以Open Cowork就是最好用的桌面Agent工具！！！。
 ---
 
 ## 界面预览
