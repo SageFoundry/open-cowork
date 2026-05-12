@@ -118,3 +118,4 @@ nul
 !src/renderer/assets/*.png
 !public/*.png
 !resources/social-preview.png
+!resources/preview.png
