@@ -7,6 +7,10 @@
 <p align="center">开源的 AI Agent 桌面应用，支持 Windows / macOS 一键安装</p>
 
 <p align="center">
+  <a href="README.md">中文</a> · <a href="README.en.md">English</a>
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/协议-MIT-green" alt="License" />
   <img src="https://img.shields.io/badge/Node.js-22+-brightgreen" alt="Node.js" />
   <a href="https://discord.gg/pynjtQDf"><img src="https://img.shields.io/discord/1493588403260883078?logo=discord&label=Discord&color=5865F2" alt="Discord" /></a>
@@ -18,6 +22,14 @@ Open Cowork 将 Claude Code、OpenAI、Gemini、DeepSeek 等 AI 模型封装为�
 
 > [!WARNING]
 > Open Cowork 是 AI 协作工具，请对文件修改、删除等操作保持谨慎。VM 沙盒可隔离大多数风险，但仍需自行审查关键操作。
+
+---
+
+## 界面预览
+
+<p align="center">
+  <img src="resources/preview.png" alt="Open Cowork 界面预览" width="100%" />
+</p>
 
 ---
 
@@ -104,6 +116,6 @@ npm run dev
 
 ---
 
-## 许可
+## License
 
 MIT © Open Cowork Team
