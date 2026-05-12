@@ -5,6 +5,7 @@ import { Terminal, FileCode, FileText, Pencil, Search, Globe, FolderSearch } fro
 export function getToolIcon(name: string) {
   const n = name.toLowerCase();
   if (n === 'bash' || n === 'pwsh' || n === 'execute_command') return <Terminal className="w-3.5 h-3.5" />;
+  if (n === 'http') return <Globe className="w-3.5 h-3.5" />;
   if (n === 'read' || n === 'read_file') return <FileCode className="w-3.5 h-3.5" />;
   if (n === 'write' || n === 'write_file') return <FileText className="w-3.5 h-3.5" />;
   if (n === 'edit' || n === 'edit_file') return <Pencil className="w-3.5 h-3.5" />;
@@ -52,6 +53,15 @@ export function getToolLabel(name: string, input: Record<string, unknown>): stri
       return `$ ${short}`;
     }
     return 'Run command';
+  }
+  if (nameLower === 'http') {
+    const method = String(inp.method || 'GET');
+    const url = String(inp.url || '');
+    if (url) {
+      const shortUrl = url.length > 50 ? url.substring(0, 47) + '...' : url;
+      return `${method} ${shortUrl}`;
+    }
+    return `${method} ...`;
   }
   if (nameLower === 'glob') return inp.pattern ? `Glob ${String(inp.pattern)}` : 'Glob';
   if (nameLower === 'grep') return inp.pattern ? `Grep "${String(inp.pattern)}"` : 'Grep';

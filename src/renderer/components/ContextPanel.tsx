@@ -117,7 +117,7 @@ export function ContextPanel() {
     }
 
     const confirmed = window.confirm(
-      '这会创建新的压缩快照并重建运行时上下文，完整聊天记录不会删除。现在继续吗？'
+      t('context.compactConfirm')
     );
 
     if (!confirmed) {
@@ -132,8 +132,8 @@ export function ContextPanel() {
         type: 'error',
         message:
           error instanceof Error && error.message
-            ? `上下文压缩失败：${error.message}`
-            : '上下文压缩失败，请稍后重试。',
+            ? `${t('context.compactFailed')}${error.message}`
+            : t('context.compactFailedGeneric'),
       });
     }
   };
@@ -452,41 +452,37 @@ export function ContextPanel() {
                 })}
               </p>
               {tokenBudget && (
-                <>
-                  <p className="text-[11px] text-text-muted">
-                    Conversation {formatTokenCount(tokenBudget.estimatedConversationTokens)} ·
-                    Reserve {formatTokenCount(tokenBudget.reserveTokens)}
-                  </p>
-                  <p className="text-[11px] text-text-muted">
-                    Window {formatTokenCount(activeContextWindow || tokenBudget.contextWindow)} ·
-                    Status {tokenBudget.warningState}
-                  </p>
-                </>
+                <p className="text-[11px] text-text-muted/80">
+                  {t('context.contextDetail', {
+                    conversation: formatTokenCount(tokenBudget.estimatedConversationTokens),
+                    reserve: formatTokenCount(tokenBudget.reserveTokens),
+                    window: formatTokenCount(activeContextWindow || tokenBudget.contextWindow),
+                    status: translateWarningState(tokenBudget.warningState, t),
+                  })}
+                </p>
               )}
-              <div className="flex items-center justify-between gap-2 pt-1">
-                <div className="min-w-0 text-[11px] text-text-muted">
-                  {latestCompaction ? (
-                    <span className="truncate block">
-                      Last compact: {latestCompaction.compactionType} ·{' '}
-                      {new Date(latestCompaction.createdAt).toLocaleTimeString()}
-                    </span>
-                  ) : (
-                    <span>No compaction yet</span>
-                  )}
-                </div>
+              <div className="flex items-center justify-between gap-2 pt-0.5">
+                <span className="text-[11px] text-text-muted truncate">
+                  {latestCompaction
+                    ? t('context.lastCompact', {
+                        type: latestCompaction.compactionType,
+                        time: new Date(latestCompaction.createdAt).toLocaleTimeString(),
+                      })
+                    : t('context.noCompaction')}
+                </span>
                 <button
                   onClick={handleCompactNow}
                   disabled={!activeSessionId || isCompacting}
-                  className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-border-muted text-[11px] text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="shrink-0 inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-border-muted text-[11px] text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isCompacting && <Loader2 className="w-3 h-3 animate-spin" />}
-                  <span>{isCompacting ? 'Compacting...' : 'Compact Now'}</span>
+                  <span>{isCompacting ? t('context.compacting') : t('context.compactNow')}</span>
                 </button>
               </div>
               {isCompacting && (
                 <div className="flex items-center gap-1.5 rounded-md bg-surface-muted px-2 py-1.5 text-[11px] text-text-muted">
                   <Loader2 className="w-3 h-3 animate-spin shrink-0" />
-                  <span>{compactionState?.message || '正在创建压缩快照并重建运行时上下文…'}</span>
+                  <span>{compactionState?.message || t('context.compactingMessage')}</span>
                 </div>
               )}
             </div>
@@ -980,4 +976,19 @@ function formatTaskDuration(task: BackgroundTask): string {
     return `${Math.floor(diff / minute)}m`;
   }
   return `${Math.floor(diff / hour)}h`;
+}
+
+function translateWarningState(state: string, t: (key: string) => string): string {
+  switch (state) {
+    case 'normal':
+      return t('context.statusNormal');
+    case 'warning':
+      return t('context.statusWarning');
+    case 'blocking':
+      return t('context.statusBlocking');
+    case 'error':
+      return t('context.statusError');
+    default:
+      return state;
+  }
 }

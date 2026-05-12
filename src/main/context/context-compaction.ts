@@ -9,7 +9,7 @@ import type {
 } from '../../renderer/types';
 import { estimateMessagesTokens, getStrategyThresholds } from './context-budget';
 
-const COMPACTABLE_TOOL_NAMES = new Set(['read', 'grep', 'glob', 'bash', 'pwsh', 'edit', 'write']);
+const COMPACTABLE_TOOL_NAMES = new Set(['read', 'grep', 'glob', 'bash', 'pwsh', 'http', 'edit', 'write']);
 
 export interface MicroCompactionResult {
   messages: Message[];

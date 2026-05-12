@@ -530,7 +530,7 @@ export interface Settings {
 }
 
 // Tool types
-export type ToolName = 'read' | 'write' | 'edit' | 'glob' | 'grep' | 'bash' | 'pwsh' | 'webFetch' | 'webSearch';
+export type ToolName = 'read' | 'write' | 'edit' | 'glob' | 'grep' | 'bash' | 'pwsh' | 'http' | 'webFetch' | 'webSearch';
 
 export interface ToolResult {
   success: boolean;

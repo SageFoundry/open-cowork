@@ -2631,13 +2631,143 @@ Tool routing:
         wrappedTools.push(pwshTool);
       }
 
+      // Register the http tool for making HTTP requests directly
+      // (avoids Git Bash/MSYS2 encoding issues with curl and non-ASCII payloads)
+      {
+        const httpTool: ToolDefinition = {
+          name: 'http',
+          label: 'HTTP Request',
+          description:
+            'Make an HTTP request (GET, POST, PUT, PATCH, DELETE, HEAD). Use this instead of curl/wget for API calls — it avoids shell encoding issues and works with non-ASCII payloads. Returns status, headers, and body.',
+          parameters: Type.Object({
+            method: Type.String({
+              description:
+                'HTTP method: GET, POST, PUT, PATCH, DELETE, or HEAD.',
+            }),
+            url: Type.String({
+              description: 'Full URL including protocol (https://...)',
+            }),
+            headers: Type.Optional(
+              Type.Record(Type.String(), Type.String(), {
+                description:
+                  'Optional request headers, e.g. {"Content-Type": "application/json", "Authorization": "Bearer token"}',
+              })
+            ),
+            body: Type.Optional(
+              Type.String({
+                description:
+                  'Optional request body as a string. For JSON APIs, pass JSON.stringify(...) result here.',
+              })
+            ),
+            timeout: Type.Optional(
+              Type.Number({
+                description:
+                  'Optional timeout in seconds. Defaults to 30.',
+              })
+            ),
+          }),
+          execute: async (
+            _toolCallId: string,
+            params: {
+              method: string;
+              url: string;
+              headers?: Record<string, string>;
+              body?: string;
+              timeout?: number;
+            },
+            signal: AbortSignal | undefined
+          ) => {
+            const method = (params.method || 'GET').toUpperCase();
+            const url = params.url?.trim();
+            if (!url) {
+              throw new Error('URL is required');
+            }
+
+            // Validate URL
+            let parsed: URL;
+            try {
+              parsed = new URL(url);
+            } catch {
+              throw new Error('Invalid URL');
+            }
+            if (!['http:', 'https:'].includes(parsed.protocol)) {
+              throw new Error('Only http/https URLs are supported');
+            }
+
+            const timeoutMs = Math.max(1, (params.timeout ?? 30)) * 1000;
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+            // Forward external abort signal
+            if (signal) {
+              signal.addEventListener('abort', () => controller.abort(), { once: true });
+            }
+
+            try {
+              const response = await fetch(url, {
+                method,
+                headers: {
+                  'User-Agent': 'open-cowork',
+                  ...(params.headers ?? {}),
+                },
+                body: ['GET', 'HEAD'].includes(method) ? undefined : (params.body ?? undefined),
+                signal: controller.signal,
+                redirect: 'follow',
+              });
+
+              clearTimeout(timeoutId);
+
+              const responseHeaders: string[] = [];
+              response.headers.forEach((value, key) => {
+                responseHeaders.push(`${key}: ${value}`);
+              });
+
+              let body: string;
+              try {
+                body = await response.text();
+              } catch {
+                body = '[Binary or unreadable body]';
+              }
+
+              const limit = 50000;
+              const truncated =
+                body.length > limit
+                  ? `${body.slice(0, limit)}\n\n[Truncated ${body.length - limit} chars]`
+                  : body;
+
+              const output = [
+                `HTTP ${response.status} ${response.statusText}`,
+                ...responseHeaders,
+                '',
+                truncated,
+              ].join('\n');
+
+              return {
+                content: [{ type: 'text' as const, text: output }],
+                details: undefined as unknown,
+              };
+            } catch (error) {
+              clearTimeout(timeoutId);
+              if (
+                error instanceof Error &&
+                (error.name === 'AbortError' || error.name === 'TimeoutError')
+              ) {
+                throw new Error('Request timed out');
+              }
+              throw error;
+            }
+          },
+        };
+        wrappedTools.push(httpTool);
+      }
+
       const shellGuardedTools = this.wrapBashToolForBackgroundSyntax(
         wrappedTools,
         session.id,
         effectiveCwd
       );
       const shellOverrideTools = shellGuardedTools.filter(
-        (tool) => tool.name === 'bash' || tool.name === 'pwsh'
+        (tool) => tool.name === 'bash' || tool.name === 'pwsh' || tool.name === 'http'
       );
       const customTools = [...baseCustomTools, ...shellOverrideTools];
 

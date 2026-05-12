@@ -23,14 +23,63 @@ Renderer areas:
 - `src/renderer/utils/projects.ts` - derived project summaries from session cwd
 - `src/renderer/utils/conversation-turns.ts` - assistant/user turn grouping
 
-## Commands
+## Self-Optimization Workflow (编译版本 / Dev 版本)
+
+Open Cowork has **two runtime modes**, and the agent (you) must understand which you're running in.
+
+### How to tell which mode you're in
+
+| Signal | Compiled (Release Build) | Dev (`npm run dev`) |
+|--------|--------------------------|---------------------|
+| Running process | `Open Cowork.exe` from `E:\opencowork\Open Cowork\` | Electron from the source tree |
+| `app.asar` location | `E:\opencowork\Open Cowork\resources\app.asar` | No asar (rendered from source) |
+| Source edits take effect? | ❌ No — needs rebuild | ✅ Yes — hot reload |
+| `npm run build:win` produces | `release/` installer assets | N/A (dev mode) |
+| Package version in `package.json` | Matches running version | Matches running version |
+
+**To check**: Look at the running process path. If it's `E:\opencowork\Open Cowork\Open Cowork.exe`, you're in the **compiled release build**.
+
+### The workflow
+
+```
+1. Agent runs inside COMPILED BUILD
+   → Discovers bugs, identifies issues
+   → Reads source code to understand root cause
+   → Edits source files in E:\workspace\open-cowork\src\
+   → Source edits do NOT affect the running app
+
+2. User runs npm run dev (DEV VERSION)
+   → Dev version uses the edited source directly
+   → User verifies the fix works
+
+3. User runs npm run build:win
+   → Compiles the fixed source into a new release build
+   → New build at E:\opencowork\Open Cowork\
+
+4. User launches the NEW COMPILED BUILD
+   → Agent now runs in the updated build
+   → The fix is live and can be verified end-to-end
+   → Cycle continues with next issue
+```
+
+### Important rules for agents
+
+- **When running in the compiled build**: You CAN read and edit source files at `E:\workspace\open-cowork\src\`, but the running code comes from `app.asar`. Edits will only take effect after the user rebuilds.
+- **When asking about the current version**: Check `E:\workspace\open-cowork\package.json` for `version`, and check the running process path to confirm compiled vs dev.
+- **After making source fixes**: Remind the user that the fix is in the source but needs a rebuild to take effect in the compiled app.
+- **When the user says "基于最新代码编译运行的版本"**: They mean the running compiled build already includes recent edits. Verify this when possible.
+- **Don't confuse `npm run dev` with the compiled build**: Dev mode hot-reloads from source; compiled mode uses `app.asar`.
+- **Git Bash encoding chain**: `executeViaGitBash` writes temp `.sh` scripts and passes command content via `base64 -d | bash` through stdin. The resolved Python directory must be converted to MSYS2 POSIX format (`/d/path` not `D:\path`) before injecting into the script's `export PATH`. See `winPathToMsys2()` in `src/main/tools/windows-bash-executor.ts`.
+
+### Commands
 
 Use PowerShell on Windows.
 
 ```powershell
-npm run typecheck
-npm test
-npm run build:win
+npm run typecheck   # TypeScript check (always run after edits)
+npm test            # Run unit tests
+npm run dev         # Dev mode with hot reload
+npm run build:win   # Full Windows release build + pre-build checks
 ```
 
 `npm run build:win` runs the full Windows release build and pre-build checks. It generates installer assets under `release/`.

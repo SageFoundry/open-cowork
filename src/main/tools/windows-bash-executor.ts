@@ -8,6 +8,14 @@ import { getSandboxAdapter } from '../sandbox/sandbox-adapter';
 import type { ExecutionResult } from '../sandbox/types';
 import { log } from '../utils/logger';
 
+/**
+ * Convert a Windows path (e.g. "D:/pythonsdk" or "D:\\pythonsdk") to
+ * MSYS2/POSIX format (e.g. "/d/pythonsdk") for use in Git Bash's $PATH.
+ */
+function winPathToMsys2(winPath: string): string {
+  return winPath.replace(/^([A-Za-z]):[\\/]/, (_match, drive: string) => `/${drive.toLowerCase()}/`);
+}
+
 export interface WindowsBashExecutionParams {
   sessionId: string;
   command: string;
@@ -241,8 +249,11 @@ async function executeViaGitBash({
     os.tmpdir(),
     `oc-git-bash-${Date.now()}-${Math.random().toString(16).slice(2)}.sh`
   );
-  // Base64-encode the command so the script file is 100% ASCII,
-  // avoiding any Git Bash/MSYS2 locale-dependent encoding issues.
+  // Base64-encode the command and deliver it via stdin (not argv / script body).
+  // MSYS2/Cygwin auto-converts arguments that look like Unix paths, which can
+  // corrupt base64 payloads containing byte patterns that match path-like
+  // sequences (especially with CJK/non-ASCII content).  Passing the command
+  // through stdin bypasses MSYS2 argv conversion entirely.
   const cmdBase64 = Buffer.from(command, 'utf-8').toString('base64');
   const scriptBody = [
     '#!/usr/bin/env bash',
@@ -250,9 +261,9 @@ async function executeViaGitBash({
     'export PYTHONUTF8=1',
     'export LANG=en_US.UTF-8',
     'export LC_ALL=en_US.UTF-8',
-    resolvedPythonDir ? `export PATH='${resolvedPythonDir.replace(/'/g, `"'"'`)}':"$PATH"` : '',
+    resolvedPythonDir ? `export PATH='${winPathToMsys2(resolvedPythonDir).replace(/'/g, `"'"'`)}':"$PATH"` : '',
     `cd ${shellEscapeSingleQuoted(normalizedCwd)}`,
-    `eval "$(printf '%s' '${cmdBase64}' | base64 -d)"`,
+    'base64 -d | bash',
     '',
   ].join('\n');
   fs.writeFileSync(scriptPath, scriptBody, 'utf8');
@@ -364,7 +375,11 @@ async function executeViaGitBash({
       });
     });
 
+    // Write the base64-encoded command to stdin, then any external stdin.
+    // The script reads stdin via 'base64 -d | bash'.
+    child.stdin?.write(cmdBase64);
     if (stdin) {
+      child.stdin?.write('\n');
       child.stdin?.write(stdin);
     }
     child.stdin?.end();
