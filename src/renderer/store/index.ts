@@ -268,6 +268,7 @@ const defaultSettings: Settings = {
   globalSkillsPath: '',
   memoryStrategy: 'auto',
   maxContextTokens: 180000,
+  language: 'zh',
 };
 
 export const useAppStore = create<AppState>((set) => ({

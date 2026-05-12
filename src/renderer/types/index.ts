@@ -527,6 +527,7 @@ export interface Settings {
   globalSkillsPath: string;
   memoryStrategy: MemoryStrategy;
   maxContextTokens: number;
+  language: 'zh' | 'en';
 }
 
 // Tool types
@@ -618,6 +619,7 @@ export interface AppConfig {
   maxContextTokens?: number;
   sandboxEnabled?: boolean;
   enableThinking?: boolean;
+  language?: 'zh' | 'en';
   isConfigured: boolean;
 }
 

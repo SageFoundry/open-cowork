@@ -2489,15 +2489,25 @@ This is an isolated sandbox environment. Use ${VIRTUAL_WORKSPACE_PATH} as the ro
         ? this.projectMemoryService.buildPromptMaterial(workingDir, prompt)
         : null;
 
+      const uiLanguage = configStore.get('language') ?? 'zh';
+      const thinkingLangPrompt = `<thinking_language>
+CRITICAL: All visible thinking (reasoning shown to the user) MUST be written in ${uiLanguage === 'zh' ? 'Chinese (中文)' : 'English'}.
+- Current language: ${uiLanguage === 'zh' ? 'Chinese (中文)' : 'English'}
+- This applies to ALL reasoning, analysis, planning, and self-talk in <thinking> blocks.
+- Do NOT default to English for thinking when the language is set to Chinese.
+- This is a hard configuration setting — do not override it based on user message content.
+</thinking_language>`;
+
       const coworkAppendPrompt = [
         'You are an Open Cowork assistant. Be concise, accurate, and tool-capable.',
+        thinkingLangPrompt,
         `CRITICAL BEHAVIORAL RULES:
 1. CHAT FIRST: By default, respond to the user in plain text within the conversation. Do NOT create, write, or edit files unless the user explicitly asks you to (e.g., "create a file", "write this to...", "edit the code", "save as...", mentions a specific file path, or describes code changes they want applied). For questions, summaries, explanations, analysis, and general conversation — always reply directly in chat text.
 2. When a request is actionable, proceed immediately with reasonable assumptions. If you need clarification, ask briefly in plain text.
 3. For relative time windows like "within two days" in browsing or research tasks, assume the most recent two relevant publication days unless the user explicitly defines another date range.
 4. For bracketed placeholders like [Agent], [Topic], etc., treat the word inside brackets as the literal search keyword unless the user says otherwise.
 5. When given a task, START DOING IT. Do not restate the task, do not list what you will do, do not ask for confirmation. Just execute.
-6. LANGUAGE MATCH FOR VISIBLE THINKING: When thinking mode is enabled and your reasoning is visible to the user, write that thinking in the same language as the user's current message unless they explicitly ask for another language. If the user is speaking Chinese, think in Chinese. If the user is speaking English, think in English. Avoid switching languages mid-thought without a user request.`,
+6. THINKING LANGUAGE: Your visible thinking MUST match the configured <thinking_language> above. Do not guess based on user message content.`,
         `<final_answer_style>
 Default to Codex-style closeouts:
 - Keep the final answer short. Usually 1-2 short paragraphs or 2-4 short bullets at most.

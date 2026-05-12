@@ -5,7 +5,13 @@ All notable changes to the Open Cowork AI agent desktop app will be documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.3.7] - 2026-05-12
+
+### Added
+
+- Thinking language is now controlled by the UI language setting (通用 → 语言), replacing the previous guess-based approach. Switching between 中文/English in settings causes agent thinking to output in the matching language deterministically.
+
+## [3.3.6] - 2026-05-12
 
 ### Fixed
 

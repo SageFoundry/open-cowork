@@ -108,6 +108,7 @@ export function useIPC() {
       store.setAppConfig(config);
       store.setSettings({
         theme: config.theme || 'light',
+        language: config.language || 'zh',
         memoryStrategy: config.memoryStrategy || store.settings.memoryStrategy,
         maxContextTokens: config.maxContextTokens || store.settings.maxContextTokens,
       });

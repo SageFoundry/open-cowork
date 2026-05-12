@@ -1637,6 +1637,9 @@ async function handleClientEvent(event: ClientEvent): Promise<unknown> {
             Math.floor(event.payload.maxContextTokens)
           );
         }
+        if (event.payload.language === 'zh' || event.payload.language === 'en') {
+          configUpdates.language = event.payload.language;
+        }
         if (Object.keys(configUpdates).length > 0) {
           configStore.update(configUpdates);
         }

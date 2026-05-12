@@ -134,6 +134,9 @@ export interface AppConfig {
   // Enable thinking mode (show thinking steps)
   enableThinking: boolean;
 
+  // UI language preference (controls thinking language)
+  language: 'zh' | 'en';
+
   // First run flag
   isConfigured: boolean;
 }
@@ -157,6 +160,7 @@ const DIRECT_READ_KEYS = new Set<keyof AppConfig>([
   'maxContextTokens',
   'sandboxEnabled',
   'enableThinking',
+  'language',
   'isConfigured',
 ]);
 
@@ -244,6 +248,7 @@ const defaultConfig: AppConfig = {
   maxContextTokens: 180000,
   sandboxEnabled: false,
   enableThinking: false,
+  language: 'zh',
   isConfigured: false,
 };
 
@@ -942,6 +947,8 @@ export class ConfigStore {
           : defaultConfig.maxContextTokens,
       sandboxEnabled: toBoolean(raw.sandboxEnabled, defaultConfig.sandboxEnabled),
       enableThinking: projected.enableThinking,
+      language:
+        raw.language === 'zh' || raw.language === 'en' ? raw.language : defaultConfig.language,
       isConfigured: toBoolean(raw.isConfigured, defaultConfig.isConfigured),
     };
     this.normalizeModelIds(result);
