@@ -159,7 +159,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   config: {
     get: (): Promise<AppConfig> => ipcRenderer.invoke('config.get'),
     getPresets: (): Promise<ProviderPresets> => ipcRenderer.invoke('config.getPresets'),
-    save: (config: Partial<AppConfig>): Promise<{ success: boolean; config: AppConfig }> =>
+    save: (
+      config: Partial<AppConfig>
+    ): Promise<{ success: boolean; config: AppConfig; modelContextWindow?: number }> =>
       ipcRenderer.invoke('config.save', config),
     createSet: (payload: CreateSetPayload): Promise<{ success: boolean; config: AppConfig }> =>
       ipcRenderer.invoke('config.createSet', payload),
@@ -453,7 +455,9 @@ declare global {
       config: {
         get: () => Promise<AppConfig>;
         getPresets: () => Promise<ProviderPresets>;
-        save: (config: Partial<AppConfig>) => Promise<{ success: boolean; config: AppConfig }>;
+        save: (
+          config: Partial<AppConfig>
+        ) => Promise<{ success: boolean; config: AppConfig; modelContextWindow?: number }>;
         createSet: (payload: CreateSetPayload) => Promise<{ success: boolean; config: AppConfig }>;
         renameSet: (payload: {
           id: string;

@@ -2856,6 +2856,14 @@ Tool routing:
               cachedSession.ollamaNumCtx.value
             );
           }
+          // Notify renderer of updated context window info on model switch
+          this.sendToRenderer({
+            type: 'session.contextInfo',
+            payload: {
+              sessionId: session.id,
+              contextWindow: piModel.contextWindow || 128000,
+            },
+          });
         }
         if (cachedSession.thinkingLevel !== thinkingLevel) {
           logCtx(

@@ -16,6 +16,7 @@ import type {
   ProviderModelInfo,
   ServerEvent,
 } from '../../renderer/types';
+import { resolveKnownModelSpecs } from '../claude/pi-model-resolution';
 
 export interface RegisterConfigHandlersDeps {
   getSessionManager: () => SessionManager | null;
@@ -103,7 +104,15 @@ export function registerConfigHandlers({
     const previousConfig = configStore.getAll();
     configStore.update(newConfig);
     const updatedConfig = await syncConfigAfterMutation(previousConfig);
-    return { success: true, config: updatedConfig };
+
+    // If model changed, compute new context window so renderer can update immediately
+    let modelContextWindow: number | undefined;
+    if (newConfig.model && newConfig.model !== previousConfig.model) {
+      const spec = resolveKnownModelSpecs(newConfig.model);
+      modelContextWindow = spec?.contextWindow || newConfig.contextWindow || 128000;
+    }
+
+    return { success: true, config: updatedConfig, modelContextWindow };
   });
 
   ipcMain.handle('config.createSet', async (_event, payload: CreateConfigSetPayload) => {

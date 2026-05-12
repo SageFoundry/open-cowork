@@ -1197,7 +1197,25 @@ export function ChatView() {
                                         .save({ model: option.id })
                                         .then((result) => {
                                           if (result.success) {
-                                            useAppStore.getState().setAppConfig(result.config);
+                                            const store = useAppStore.getState();
+                                            store.setAppConfig(result.config);
+                                            // Update context window for the active session immediately
+                                            if (result.modelContextWindow && activeSessionId) {
+                                              const cw = result.modelContextWindow;
+                                              store.setSessionContextWindow(activeSessionId, cw);
+                                              // Also update tokenBudget maxContextTokens to match
+                                              const ss = store.sessionStates[activeSessionId];
+                                              if (ss?.tokenBudget) {
+                                                store.setSessionTokenBudget(activeSessionId, {
+                                                  ...ss.tokenBudget,
+                                                  maxContextTokens: cw,
+                                                });
+                                              }
+                                            }
+                                            // Update model name on the active session
+                                            if (activeSessionId) {
+                                              store.updateSession(activeSessionId, { model: option.id });
+                                            }
                                           }
                                         })
                                         .catch((err) => console.error('[ChatView] Failed to switch model:', err));
@@ -1211,7 +1229,25 @@ export function ChatView() {
                                         })
                                         .then((saveResult) => {
                                           if (saveResult?.success) {
-                                            useAppStore.getState().setAppConfig(saveResult.config);
+                                            const store = useAppStore.getState();
+                                            store.setAppConfig(saveResult.config);
+                                            // Update context window for the active session immediately
+                                            if (saveResult.modelContextWindow && activeSessionId) {
+                                              const cw = saveResult.modelContextWindow;
+                                              store.setSessionContextWindow(activeSessionId, cw);
+                                              // Also update tokenBudget maxContextTokens to match
+                                              const ss = store.sessionStates[activeSessionId];
+                                              if (ss?.tokenBudget) {
+                                                store.setSessionTokenBudget(activeSessionId, {
+                                                  ...ss.tokenBudget,
+                                                  maxContextTokens: cw,
+                                                });
+                                              }
+                                            }
+                                            // Update model name on the active session
+                                            if (activeSessionId) {
+                                              store.updateSession(activeSessionId, { model: option.id });
+                                            }
                                           }
                                         })
                                         .catch((err) => console.error('[ChatView] Failed to switch:', err));
