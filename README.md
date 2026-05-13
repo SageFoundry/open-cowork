@@ -102,11 +102,11 @@ npm run dev
 | 服务商 | Base URL | 推荐模型 |
 |--------|----------|----------|
 | [Anthropic](https://console.anthropic.com/) | 默认 | `claude-sonnet-4-6` |
-| [OpenRouter](https://openrouter.ai/) | `https://openrouter.ai/api` | `claude-sonnet-4-6` |
+| [OpenAI](https://platform.openai.com/) | `https://api.openai.com/v1` | `gpt-5.5` |
 | [DeepSeek](https://platform.deepseek.com/) | `https://api.deepseek.com` | `deepseek-v4-pro` |
 | [智谱 GLM](https://bigmodel.cn/glm-coding) | `https://open.bigmodel.cn/api/anthropic` | `glm-5.1` |
-| [MiniMax](https://platform.minimaxi.com/subscribe/coding-plan) | `https://api.minimaxi.com/anthropic` | `minimax-m2-7` |
-| [Kimi](https://www.kimi.com/membership/pricing) | `https://api.kimi.com/coding/` | `kimi-k2-6` |
+| [MiniMax](https://platform.minimaxi.com/subscribe/coding-plan) | `https://api.minimaxi.com/anthropic` | `minimax-m2.7` |
+| [Kimi](https://www.kimi.com/membership/pricing) | `https://api.kimi.com/coding/` | `kimi-k2.6` |
 
 ### 2. 配置应用
 

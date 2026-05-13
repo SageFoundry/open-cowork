@@ -42,6 +42,8 @@ export const API_PROVIDER_PRESETS: SharedProviderPresets = {
       { id: 'anthropic/claude-opus-4-6', name: 'anthropic/claude-opus-4-6' },
       { id: 'anthropic/claude-sonnet-4-6', name: 'anthropic/claude-sonnet-4-6' },
       { id: 'anthropic/claude-haiku-4-5', name: 'anthropic/claude-haiku-4-5' },
+      { id: 'openai/gpt-5.5', name: 'openai/gpt-5.5' },
+      { id: 'openai/gpt-5.5-pro', name: 'openai/gpt-5.5-pro' },
       { id: 'openai/gpt-5.4', name: 'openai/gpt-5.4' },
       { id: 'openai/gpt-5.3-codex', name: 'openai/gpt-5.3-codex' },
       { id: 'google/gemini-3.1-pro-preview', name: 'google/gemini-3.1-pro-preview' },
@@ -68,6 +70,8 @@ export const API_PROVIDER_PRESETS: SharedProviderPresets = {
     name: 'OpenAI',
     baseUrl: 'https://api.openai.com/v1',
     models: [
+      { id: 'gpt-5.5', name: 'gpt-5.5' },
+      { id: 'gpt-5.5-pro', name: 'gpt-5.5-pro' },
       { id: 'gpt-5.4', name: 'gpt-5.4' },
       { id: 'gpt-5.4-pro', name: 'gpt-5.4-pro' },
       { id: 'gpt-5.4-mini', name: 'gpt-5.4-mini' },
@@ -137,6 +141,8 @@ export const PI_AI_CURATED_PRESETS: Record<string, { piProvider: string; pick: s
       'anthropic/claude-opus-4-6',
       'anthropic/claude-sonnet-4-6',
       'anthropic/claude-haiku-4-5',
+      'openai/gpt-5.5',
+      'openai/gpt-5.5-pro',
       'openai/gpt-5.4',
       'openai/gpt-5.3-codex',
       'google/gemini-3.1-pro-preview',
@@ -157,6 +163,8 @@ export const PI_AI_CURATED_PRESETS: Record<string, { piProvider: string; pick: s
   openai: {
     piProvider: 'openai',
     pick: [
+      'gpt-5.5',
+      'gpt-5.5-pro',
       'gpt-5.4',
       'gpt-5.4-pro',
       'gpt-5.4-mini',
@@ -235,7 +243,7 @@ export function getModelInputGuidance(
 
   if (provider === 'openai') {
     return {
-      placeholder: 'gpt-5.4, gpt-5.4-mini, o3',
+      placeholder: 'gpt-5.5, gpt-5.5-pro, gpt-5.4, o3',
       hint: 'Use the exact model ID for the selected protocol or endpoint.',
     };
   }
