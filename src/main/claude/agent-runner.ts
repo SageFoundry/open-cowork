@@ -98,10 +98,10 @@ import {
 
 // Virtual workspace path shown to the model (hides real sandbox path)
 const VIRTUAL_WORKSPACE_PATH = '/workspace';
-const DEFAULT_HISTORY_CHARS_PER_TOKEN = 4;
-const DEFAULT_COLD_START_HISTORY_BUDGET_RATIO = 0.3;
-const SMALL_CONTEXT_HISTORY_BUDGET_RATIO = 0.15;
-const MAX_COLD_START_HISTORY_TURNS = 48;
+const DEFAULT_HISTORY_CHARS_PER_TOKEN = 2;  // Conservative estimate: 2 chars ≈ 1 token (handles CJK-heavy content)
+const DEFAULT_COLD_START_HISTORY_BUDGET_RATIO = 0.15;  // Use 15% of context window for cold start history
+const SMALL_CONTEXT_HISTORY_BUDGET_RATIO = 0.08;
+const MAX_COLD_START_HISTORY_TURNS = 32;  // Fewer turns to keep preamble lean
 
 interface StableHistoryEntry {
   role: 'user' | 'assistant';

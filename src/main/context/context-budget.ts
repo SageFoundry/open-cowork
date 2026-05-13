@@ -25,27 +25,27 @@ export interface StrategyThresholds {
 
 const STRATEGY_THRESHOLDS: Record<MemoryStrategy, StrategyThresholds> = {
   auto: {
-    warningRatio: 0.72,
-    errorRatio: 0.82,
-    blockingRatio: 0.92,
-    microCompactRatio: 0.68,
-    fullCompactRatio: 0.82,
+    warningRatio: 0.6,
+    errorRatio: 0.68,
+    blockingRatio: 0.8,
+    microCompactRatio: 0.55,
+    fullCompactRatio: 0.65,
     preservedTailCount: 8,
   },
   manual: {
-    warningRatio: 0.72,
-    errorRatio: 0.82,
-    blockingRatio: 0.92,
-    microCompactRatio: 0.68,
+    warningRatio: 0.6,
+    errorRatio: 0.68,
+    blockingRatio: 0.8,
+    microCompactRatio: 0.55,
     fullCompactRatio: Number.POSITIVE_INFINITY,
     preservedTailCount: 8,
   },
   rolling: {
-    warningRatio: 0.65,
-    errorRatio: 0.75,
-    blockingRatio: 0.88,
-    microCompactRatio: 0.6,
-    fullCompactRatio: 0.75,
+    warningRatio: 0.55,
+    errorRatio: 0.6,
+    blockingRatio: 0.72,
+    microCompactRatio: 0.5,
+    fullCompactRatio: 0.6,
     preservedTailCount: 4,
   },
 };
@@ -54,11 +54,41 @@ export function getStrategyThresholds(strategy: MemoryStrategy): StrategyThresho
   return STRATEGY_THRESHOLDS[strategy];
 }
 
+/**
+ * Estimates the token count for a given text string.
+ *
+ * Uses character-length-based heuristics that vary by script type to account
+ * for the different tokenization efficiency of different writing systems:
+ *
+ * - CJK (Chinese/Japanese/Korean) characters: approximately 2-3 tokens per
+ *   character in most LLM tokenizers (Claude, GPT, DeepSeek).
+ * - Latin/numeric/whitespace characters: approximately 1 token per 4 characters.
+ * - Mixed content: weighted average based on detected CJK ratio.
+ *
+ * This guards against severe underestimation in Chinese-heavy conversations
+ * (previously used a flat `length/4` which underestimated Chinese by ~50-60%).
+ */
 export function estimateTextTokens(text: string): number {
   if (!text) {
     return 0;
   }
-  return Math.ceil(text.length / 4);
+
+  // Count CJK characters (CJK Unified Ideographs range)
+  let cjkCount = 0;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code >= 0x4e00 && code <= 0x9fff) {
+      cjkCount++;
+    }
+  }
+
+  const nonCjkCount = text.length - cjkCount;
+
+  // CJK: ~2.5 tokens per character (conservative middle estimate)
+  // Non-CJK: ~1 token per 4 characters (standard heuristic)
+  const estimatedTokens = cjkCount * 2.5 + nonCjkCount / 4;
+
+  return Math.ceil(estimatedTokens);
 }
 
 function estimateContentBlockTokens(block: ContentBlock): number {

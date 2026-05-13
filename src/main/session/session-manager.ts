@@ -1198,6 +1198,29 @@ export class SessionManager {
         });
         this.emitTokenBudget(session.id, postRunBudget);
 
+        // Post-run safety: if actual token usage exceeds 50% of context window,
+        // force clear the SDK session. This prevents cumulative historical messages
+        // inside the SDK session from eventually overshooting context bounds (the
+        // SDK's internal compaction may not align with our budget thresholds).
+        //
+        // Without this guard, the SDK session accumulates every turn's messages
+        // internally and sends ALL of them on every prompt() call. Our compact
+        // logic (micro/full) only affects the messagesForContext passed to run(),
+        // but during session reuse the SDK ignores that parameter and uses its own
+        // internal history. Clearing the session forces a cold start next turn,
+        // which uses the compacted preamble instead of the SDK's full history.
+        if (
+          postRunBudget.warningState !== 'normal' &&
+          this.agentRunner.clearSdkSession
+        ) {
+          this.agentRunner.clearSdkSession(session.id);
+          logCtx(
+            '[SessionManager] Post-run: cleared SDK session (usage ratio:',
+            postRunBudget.usageRatio.toFixed(3),
+            ') — next turn will use cold start with compacted preamble'
+          );
+        }
+
         // 标题生成不再与首轮对话并发，避免与主请求竞争同一上游配额/通道导致体感变慢。
         this.runSessionTitleGeneration(session, prompt, existingMessages).catch((err) =>
           logCtxError('[SessionManager] Title generation failed:', err)
