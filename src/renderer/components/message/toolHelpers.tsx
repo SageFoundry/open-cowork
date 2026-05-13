@@ -10,6 +10,7 @@ export function getToolIcon(name: string) {
   if (n === 'write' || n === 'write_file') return <FileText className="w-3.5 h-3.5" />;
   if (n === 'edit' || n === 'edit_file') return <Pencil className="w-3.5 h-3.5" />;
   if (n === 'grep') return <Search className="w-3.5 h-3.5" />;
+  if (n === 'search_history') return <Search className="w-3.5 h-3.5" />;
   if (n === 'glob') return <FolderSearch className="w-3.5 h-3.5" />;
   if (n === 'websearch') return <Globe className="w-3.5 h-3.5" />;
   if (n === 'webfetch') return <Globe className="w-3.5 h-3.5" />;
@@ -63,6 +64,7 @@ export function getToolLabel(name: string, input: Record<string, unknown>): stri
     }
     return `${method} ...`;
   }
+  if (nameLower === 'search_history') return inp.keyword ? `Search "${String(inp.keyword)}"` : 'Search history';
   if (nameLower === 'glob') return inp.pattern ? `Glob ${String(inp.pattern)}` : 'Glob';
   if (nameLower === 'grep') return inp.pattern ? `Grep "${String(inp.pattern)}"` : 'Grep';
   if (nameLower === 'websearch') return inp.query ? `Search "${String(inp.query)}"` : 'Web search';

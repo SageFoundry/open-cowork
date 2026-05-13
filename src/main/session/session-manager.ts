@@ -185,6 +185,11 @@ export class SessionManager {
         saveMessage: (message: Message) => this.saveMessage(message),
         requestSudoPassword: (sessionId: string, toolUseId: string, command: string) =>
           this.requestSudoPassword(sessionId, toolUseId, command),
+        searchSessionMessages: (
+          sessionId: string,
+          keywords: string[],
+          maxResults = 20
+        ) => this.searchSessionMessages(sessionId, keywords, maxResults),
       },
       this.pathResolver,
       this.mcpManager,
@@ -1648,6 +1653,71 @@ export class SessionManager {
       hasMore,
       oldestTimestamp: messages[0]?.timestamp ?? null,
     };
+  }
+
+  /**
+   * Search the FULL message history of a session (bypasses compaction boundaries).
+   * Returns snippets from messages that contain ALL specified keywords.
+   * Used by the search_history agent tool so the model can retrieve information
+   * that was lost from context after compaction.
+   */
+  private searchSessionMessages(
+    sessionId: string,
+    keywords: string[],
+    maxResults = 20
+  ): { messageId: string; role: 'user' | 'assistant'; timestamp: number; snippet: string; turnIndex: number }[] {
+    const messages = this.getMessages(sessionId);
+    const results: { messageId: string; role: 'user' | 'assistant'; timestamp: number; snippet: string; turnIndex: number }[] = [];
+
+    for (let i = 0; i < messages.length; i++) {
+      if (results.length >= maxResults) break;
+
+      const msg = messages[i];
+      if (msg.role !== 'user' && msg.role !== 'assistant') continue;
+
+      // Flatten message content into searchable plain text
+      const textBlocks: string[] = [];
+      for (const block of msg.content) {
+        if (block.type === 'text') {
+          textBlocks.push((block as { text: string }).text);
+        } else if (block.type === 'thinking') {
+          // Skip thinking blocks — they're verbose and rarely useful for search
+          continue;
+        } else if (block.type === 'tool_use') {
+          const tu = block as { name: string; input: Record<string, unknown> };
+          textBlocks.push(`[tool_use: ${tu.name}]`);
+        } else if (block.type === 'tool_result') {
+          const tr = block as { content: string };
+          // Only index first 200 chars of tool results (they're huge)
+          textBlocks.push(tr.content.slice(0, 200));
+        }
+      }
+
+      const fullText = textBlocks.join(' ').toLowerCase();
+
+      // Check ALL keywords match (AND logic)
+      const allMatch = keywords.every((kw) => fullText.includes(kw));
+      if (!allMatch) continue;
+
+      // Build a snippet around the first matched keyword
+      const firstKw = keywords[0];
+      const kwIndex = fullText.indexOf(firstKw);
+      const snippetStart = Math.max(0, kwIndex - 80);
+      const snippetEnd = Math.min(fullText.length, kwIndex + firstKw.length + 220);
+      let snippet = fullText.slice(snippetStart, snippetEnd);
+      if (snippetStart > 0) snippet = '…' + snippet;
+      if (snippetEnd < fullText.length) snippet = snippet + '…';
+
+      results.push({
+        messageId: msg.id,
+        role: msg.role as 'user' | 'assistant',
+        timestamp: msg.timestamp,
+        snippet,
+        turnIndex: i,
+      });
+    }
+
+    return results;
   }
 
   private normalizeContent(raw: string): ContentBlock[] {

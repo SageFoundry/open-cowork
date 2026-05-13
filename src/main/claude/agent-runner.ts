@@ -723,6 +723,16 @@ function normalizeTokenUsage(usage: unknown): Message['tokenUsage'] | undefined 
   return normalized;
 }
 
+export interface HistorySearchResult {
+  messageId: string;
+  role: 'user' | 'assistant';
+  timestamp: number;
+  /** Matched fragment: keyword + surrounding context, max ~300 chars */
+  snippet: string;
+  /** Turn index within the session (0-based) */
+  turnIndex: number;
+}
+
 interface AgentRunnerOptions {
   sendToRenderer: (event: ServerEvent) => void;
   saveMessage?: (message: Message) => void;
@@ -731,6 +741,12 @@ interface AgentRunnerOptions {
     toolUseId: string,
     command: string
   ) => Promise<string | null>;
+  /** Search the full message history of a session (bypasses compaction boundaries). */
+  searchSessionMessages?: (
+    sessionId: string,
+    keywords: string[],
+    maxResults?: number
+  ) => HistorySearchResult[];
 }
 
 interface CachedPiSession {
@@ -757,6 +773,11 @@ export class ClaudeAgentRunner {
     toolUseId: string,
     command: string
   ) => Promise<string | null>;
+  private searchSessionMessages?: (
+    sessionId: string,
+    keywords: string[],
+    maxResults?: number
+  ) => HistorySearchResult[];
   private pathResolver: PathResolver;
   private mcpManager?: MCPManager;
   // @ts-expect-error stored for future plugin support
@@ -933,6 +954,7 @@ ${hints.join('\n')}
     this.sendToRenderer = options.sendToRenderer;
     this.saveMessage = options.saveMessage;
     this.requestSudoPassword = options.requestSudoPassword;
+    this.searchSessionMessages = options.searchSessionMessages;
     this.pathResolver = pathResolver;
     this.mcpManager = mcpManager;
     this._pluginRuntimeService = pluginRuntimeService;
@@ -2559,6 +2581,83 @@ Tool routing:
       }
       if (backgroundTaskTools.length > 0) {
         log('[ClaudeAgentRunner] Registered background task tool');
+      }
+
+      // Register search_history custom tool — allows the agent to search
+      // the full (pre-compaction) message history of the current session.
+      if (this.searchSessionMessages) {
+        const searchSessionMessages = this.searchSessionMessages;
+        const searchHistoryTool: ToolDefinition = {
+          name: 'search_history',
+          label: 'Search History',
+          description:
+            'Search the FULL message history of the current conversation session (including messages that were compacted/truncated from context). Use this when you need to recall details from earlier in the conversation that are no longer visible in the current context. Returns matching message snippets with timestamps.',
+          parameters: Type.Object({
+            keyword: Type.String({
+              description:
+                'One or more search keywords, separated by spaces. Messages containing ALL keywords will match (AND logic). For example: "database migration postgres" will match messages that contain all three words.',
+            }),
+            maxResults: Type.Optional(
+              Type.Number({
+                description:
+                  'Maximum number of results to return. Defaults to 20.',
+              })
+            ),
+          }),
+          execute: async (
+            _toolCallId: string,
+            params: { keyword: string; maxResults?: number }
+          ) => {
+            const keywords = params.keyword
+              .split(/\s+/)
+              .map((w: string) => w.toLowerCase())
+              .filter((w: string) => w.length > 0);
+
+            if (keywords.length === 0) {
+              return {
+                content: [{ type: 'text' as const, text: 'No search keywords provided.' }],
+                details: undefined as unknown,
+              };
+            }
+
+            const results = searchSessionMessages(
+              session.id,
+              keywords,
+              params.maxResults ?? 20
+            );
+
+            if (results.length === 0) {
+              return {
+                content: [
+                  {
+                    type: 'text' as const,
+                    text: `No messages found matching: "${params.keyword}"`,
+                  },
+                ],
+                details: undefined as unknown,
+              };
+            }
+
+            const formatted = results
+              .map(
+                (r) =>
+                  `[${new Date(r.timestamp).toISOString()}] ${r.role === 'user' ? '🧑 User' : '🤖 Assistant'} (turn #${r.turnIndex}): ${r.snippet}`
+              )
+              .join('\n\n---\n\n');
+
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: `Found ${results.length} matching messages (out of the full pre-compaction history):\n\n${formatted}`,
+                },
+              ],
+              details: undefined as unknown,
+            };
+          },
+        };
+        baseCustomTools.push(searchHistoryTool);
+        log('[ClaudeAgentRunner] Registered search_history custom tool');
       }
 
       // Enrich process.env.PATH for build mode — ensures Skill commands (python3, node)
