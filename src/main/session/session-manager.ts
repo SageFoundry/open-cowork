@@ -39,7 +39,7 @@ import {
   reinitializeSandbox,
 } from '../sandbox/sandbox-adapter';
 import { SandboxSync } from '../sandbox/sandbox-sync';
-import { ClaudeAgentRunner } from '../claude/agent-runner';
+import { ClaudeAgentRunner, HistorySearchResult } from '../claude/agent-runner';
 import { configStore } from '../config/config-store';
 import { MCPManager } from '../mcp/mcp-manager';
 import { mcpConfigStore } from '../mcp/mcp-config-store';
@@ -1665,9 +1665,9 @@ export class SessionManager {
     sessionId: string,
     keywords: string[],
     maxResults = 20
-  ): { messageId: string; role: 'user' | 'assistant'; timestamp: number; snippet: string; turnIndex: number }[] {
+  ): HistorySearchResult[] {
     const messages = this.getMessages(sessionId);
-    const results: { messageId: string; role: 'user' | 'assistant'; timestamp: number; snippet: string; turnIndex: number }[] = [];
+    const results: HistorySearchResult[] = [];
 
     for (let i = 0; i < messages.length; i++) {
       if (results.length >= maxResults) break;
