@@ -5,6 +5,34 @@ All notable changes to the Open Cowork AI agent desktop app will be documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.9] - 2026-05-13
+
+### Changed
+
+- Context budget now uses CJK-aware token estimation: CJK characters weighted at 2.5 chars/token, non-CJK at 4 chars/token. All compaction thresholds tightened accordingly for better token-count accuracy on Chinese text.
+- Cold-start budget parameters tightened: `CHARS_PER_TOKEN` 4→2, `COLD_START_BUDGET_RATIO` 0.3→0.15, `SMALL_CONTEXT` 0.15→0.08, `MAX_COLD_START_HISTORY_TURNS` 48→32, reducing wasted token budget on first agent invocation.
+
+### Fixed
+
+- Post-run SDK session cleanup: agent now explicitly calls `clearSdkSession` after each run, preventing SDK-internal history accumulation across runs that caused context overflow and erratic agent behavior.
+- Model input guidance updated for recommended models across providers.
+
+### Release
+
+- Published Windows installer `Open-Cowork-3.3.9-win-x64.exe` with `.blockmap` and `latest.yml` for auto-update.
+- GitHub Release: https://github.com/SageFoundry/open-cowork/releases/tag/v3.3.9
+
+## [3.3.8] - 2026-05-12
+
+### Added
+
+- `lingyi-json` (零一万物JSON) and `lingyi-vl` (零一万物VL) configured as OpenAI-compatible providers with recommended models.
+
+### Release
+
+- Published Windows installer `Open-Cowork-3.3.8-win-x64.exe` with `.blockmap` and `latest.yml` for auto-update.
+- GitHub Release: https://github.com/SageFoundry/open-cowork/releases/tag/v3.3.8
+
 ## [3.3.7] - 2026-05-12
 
 ### Added
@@ -237,7 +265,9 @@ First stable release of the 3.3.x series. Graduated from 9 beta releases with 30
 
 - Initial release of Open Cowork — open-source AI agent desktop app with one-click install for Windows and macOS
 
-[Unreleased]: https://github.com/SageFoundry/open-cowork/compare/v3.3.3...HEAD
+[Unreleased]: https://github.com/SageFoundry/open-cowork/compare/v3.3.9...HEAD
+[3.3.9]: https://github.com/SageFoundry/open-cowork/compare/v3.3.8...v3.3.9
+[3.3.8]: https://github.com/SageFoundry/open-cowork/compare/v3.3.7...v3.3.8
 [3.3.3]: https://github.com/SageFoundry/open-cowork/compare/v3.3.2...v3.3.3
 [3.3.2]: https://github.com/SageFoundry/open-cowork/compare/v3.3.1...v3.3.2
 [3.3.1]: https://github.com/SageFoundry/open-cowork/compare/2a282b1...v3.3.1
