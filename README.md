@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="resources/logo.png" alt="Open Cowork Logo" width="200" />
+  <img src="resources/logo.png" alt="Open Cowork Logo" width="100%" />
 </p>
 
 <h1 align="center">Open Cowork</h1>
