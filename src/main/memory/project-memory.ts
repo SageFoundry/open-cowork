@@ -1,117 +1,66 @@
-import { execFileSync } from 'child_process';
-import { createHash } from 'crypto';
-import { app } from 'electron';
-import * as fs from 'fs';
-import * as path from 'path';
-import type { MountedPath } from '../../renderer/types';
+import { v4 as uuidv4 } from 'uuid';
+import type Database from 'better-sqlite3';
+import { getDatabase } from '../db/database';
 
-export const PROJECT_MEMORY_VIRTUAL_PATH = '/mnt/project-memory';
-const VALID_MEMORY_TYPES = new Set(['user', 'feedback', 'project', 'reference']);
+/**
+ * Knowledge types for durable memory
+ */
+export type KnowledgeType =
+  | 'fact'        // Project facts, architecture decisions
+  | 'preference'  // User preferences, style choices
+  | 'decision'    // Design/implementation decisions
+  | 'reference'   // Reference information, links, docs
+  | 'project';    // General project knowledge
 
-export interface ProjectMemoryTopic {
-  filePath: string;
-  name: string;
-  description: string;
-  type: 'user' | 'feedback' | 'project' | 'reference';
-  body: string;
+/**
+ * A single knowledge entry (durable cross-session memory)
+ */
+export interface KnowledgeEntry {
+  id: string;
+  sessionId: string | null;
+  type: KnowledgeType;
+  title: string;
+  content: string;
+  importance: number;      // 1-5
+  accessCount: number;
+  source: 'auto' | 'manual';
+  tags: string[];
+  createdAt: number;
+  updatedAt: number;
 }
 
+/**
+ * Prompt material built from relevant knowledge
+ */
 export interface ProjectMemoryPromptMaterial {
-  mountedPath?: MountedPath;
-  memoryRoot?: string;
   ignoreMemory: boolean;
   promptSections: string[];
-  topics: ProjectMemoryTopic[];
+  entries: KnowledgeEntry[];
 }
 
-function safeGitRoot(cwd: string): string | null {
-  try {
-    const output = execFileSync('git', ['rev-parse', '--show-toplevel'], {
-      cwd,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    return output || null;
-  } catch {
-    return null;
-  }
-}
+const VALID_TYPES = new Set<string>(['fact', 'preference', 'decision', 'reference', 'project']);
 
 function tokenizeQuery(query: string): string[] {
   const lowered = query.toLowerCase();
   const asciiTokens = lowered
     .split(/[^a-z0-9_./-]+/i)
-    .map((token) => token.trim())
-    .filter((token) => token.length >= 2);
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2);
   const cjkTokens = lowered.match(/[\u4e00-\u9fff]{2,}/g) ?? [];
   return Array.from(new Set([...asciiTokens, ...cjkTokens, lowered.trim()].filter(Boolean)));
 }
 
-function parseFrontmatter(content: string): {
-  metadata: Partial<ProjectMemoryTopic>;
-  body: string;
-} {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
-  if (!match) {
-    return { metadata: {}, body: content.trim() };
-  }
-
-  const metadata: Partial<ProjectMemoryTopic> = {};
-  for (const line of match[1].split(/\r?\n/)) {
-    const separator = line.indexOf(':');
-    if (separator <= 0) {
-      continue;
-    }
-    const key = line.slice(0, separator).trim();
-    const value = line.slice(separator + 1).trim();
-    if (key === 'name') {
-      metadata.name = value;
-    } else if (key === 'description') {
-      metadata.description = value;
-    } else if (key === 'type' && VALID_MEMORY_TYPES.has(value)) {
-      metadata.type = value as ProjectMemoryTopic['type'];
-    }
-  }
-
-  return {
-    metadata,
-    body: content.slice(match[0].length).trim(),
-  };
-}
-
+/**
+ * ProjectMemoryService - manages durable cross-session knowledge using SQLite + FTS5.
+ *
+ * Storage: cowork.db → knowledge table + knowledge_fts (FTS5 virtual table)
+ * 
+ * Replaces the old file-system-based project memory. All knowledge entries are
+ * stored in a single SQLite table with full-text search via FTS5.
+ */
 export class ProjectMemoryService {
-  resolveWorkspaceRoot(cwd: string): string {
-    return safeGitRoot(cwd) ?? cwd;
-  }
-
-  resolveMemoryRoot(cwd: string): string {
-    const workspaceRoot = this.resolveWorkspaceRoot(cwd);
-    const workspaceHash = createHash('sha256').update(workspaceRoot).digest('hex').slice(0, 12);
-    return path.join(app.getPath('userData'), 'projects', workspaceHash, 'memory');
-  }
-
-  ensureMemoryFiles(cwd: string): string {
-    const memoryRoot = this.resolveMemoryRoot(cwd);
-    fs.mkdirSync(memoryRoot, { recursive: true });
-    const indexPath = path.join(memoryRoot, 'MEMORY.md');
-    if (!fs.existsSync(indexPath)) {
-      fs.writeFileSync(
-        indexPath,
-        '# Project Memory\n\nUse this directory for durable facts that cannot be inferred from the current repository state.\n',
-        'utf8'
-      );
-    }
-    return memoryRoot;
-  }
-
-  getMountedPath(cwd?: string): MountedPath | undefined {
-    if (!cwd) {
-      return undefined;
-    }
-    return {
-      virtual: PROJECT_MEMORY_VIRTUAL_PATH,
-      real: this.ensureMemoryFiles(cwd),
-    };
+  private getDb(): Database.Database {
+    return getDatabase().raw;
   }
 
   shouldIgnoreMemory(userPrompt: string): boolean {
@@ -120,97 +69,282 @@ export class ProjectMemoryService {
     );
   }
 
-  listTopics(cwd: string): ProjectMemoryTopic[] {
-    const memoryRoot = this.ensureMemoryFiles(cwd);
-    const entries = fs
-      .readdirSync(memoryRoot, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && entry.name.endsWith('.md') && entry.name !== 'MEMORY.md');
+  /**
+   * Save a knowledge entry to the database and update FTS index
+   */
+  saveKnowledge(entry: Omit<KnowledgeEntry, 'id' | 'accessCount' | 'createdAt' | 'updatedAt'>): KnowledgeEntry {
+    const db = this.getDb();
+    const now = Date.now();
+    const knowledge: KnowledgeEntry = {
+      id: uuidv4(),
+      sessionId: entry.sessionId ?? null,
+      type: entry.type,
+      title: entry.title,
+      content: entry.content,
+      importance: entry.importance ?? 3,
+      accessCount: 0,
+      source: entry.source ?? 'auto',
+      tags: entry.tags ?? [],
+      createdAt: now,
+      updatedAt: now,
+    };
 
-    return entries
-      .map((entry) => {
-        const filePath = path.join(memoryRoot, entry.name);
-        const content = fs.readFileSync(filePath, 'utf8');
-        const { metadata, body } = parseFrontmatter(content);
-        const name = metadata.name?.trim() || path.basename(entry.name, '.md');
-        const description = metadata.description?.trim() || '';
-        const type = metadata.type && VALID_MEMORY_TYPES.has(metadata.type) ? metadata.type : 'project';
-        return {
-          filePath,
-          name,
-          description,
-          type,
-          body,
-        } satisfies ProjectMemoryTopic;
-      })
-      .sort((a, b) => a.name.localeCompare(b.name));
+    const stmt = db.prepare(`
+      INSERT INTO knowledge (id, session_id, type, title, content, importance, access_count, source, tags, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      knowledge.id,
+      knowledge.sessionId,
+      knowledge.type,
+      knowledge.title,
+      knowledge.content,
+      knowledge.importance,
+      knowledge.accessCount,
+      knowledge.source,
+      JSON.stringify(knowledge.tags),
+      knowledge.createdAt,
+      knowledge.updatedAt
+    );
+
+    // Sync to FTS5 index
+    db.exec(`
+      INSERT INTO knowledge_fts (rowid, title, content, tags)
+      VALUES (last_insert_rowid(), '${knowledge.title.replace(/'/g, "''")}', '${knowledge.content.replace(/'/g, "''")}', '${JSON.stringify(knowledge.tags).replace(/'/g, "''")}')
+    `);
+
+    return knowledge;
   }
 
+  /**
+   * Update an existing knowledge entry
+   */
+  updateKnowledge(id: string, updates: Partial<Pick<KnowledgeEntry, 'content' | 'title' | 'importance' | 'type' | 'tags'>>): void {
+    const db = this.getDb();
+    const setClauses: string[] = ['updated_at = ?'];
+    const values: unknown[] = [Date.now()];
+
+    if (updates.content !== undefined) {
+      setClauses.push('content = ?');
+      values.push(updates.content);
+    }
+    if (updates.title !== undefined) {
+      setClauses.push('title = ?');
+      values.push(updates.title);
+    }
+    if (updates.importance !== undefined) {
+      setClauses.push('importance = ?');
+      values.push(updates.importance);
+    }
+    if (updates.type !== undefined) {
+      setClauses.push('type = ?');
+      values.push(updates.type);
+    }
+    if (updates.tags !== undefined) {
+      setClauses.push('tags = ?');
+      values.push(JSON.stringify(updates.tags));
+    }
+
+    values.push(id);
+    db.prepare(`UPDATE knowledge SET ${setClauses.join(', ')} WHERE id = ?`).run(...values);
+
+    // Rebuild FTS index for this row
+    const row = db.prepare('SELECT rowid, title, content, tags FROM knowledge WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (row) {
+      db.prepare('DELETE FROM knowledge_fts WHERE rowid = ?').run(row.rowid);
+      db.prepare(`INSERT INTO knowledge_fts (rowid, title, content, tags) VALUES (?, ?, ?, ?)`).run(
+        row.rowid,
+        row.title as string,
+        row.content as string,
+        row.tags as string
+      );
+    }
+  }
+
+  /**
+   * Increment access count for an entry
+   */
+  markAccessed(id: string): void {
+    this.getDb().prepare('UPDATE knowledge SET access_count = access_count + 1 WHERE id = ?').run(id);
+  }
+
+  /**
+   * Delete a knowledge entry
+   */
+  deleteKnowledge(id: string): void {
+    const db = this.getDb();
+    const row = db.prepare('SELECT rowid FROM knowledge WHERE id = ?').get(id) as { rowid: number } | undefined;
+    if (row) {
+      db.prepare('DELETE FROM knowledge_fts WHERE rowid = ?').run(row.rowid);
+    }
+    db.prepare('DELETE FROM knowledge WHERE id = ?').run(id);
+  }
+
+  /**
+   * Get a single knowledge entry by ID
+   */
+  getKnowledge(id: string): KnowledgeEntry | undefined {
+    const row = this.getDb().prepare('SELECT * FROM knowledge WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) return undefined;
+    return this.rowToEntry(row);
+  }
+
+  /**
+   * List all knowledge entries, optionally filtered by type
+   */
+  listKnowledge(type?: KnowledgeType): KnowledgeEntry[] {
+    let sql = 'SELECT * FROM knowledge';
+    const params: unknown[] = [];
+    if (type && VALID_TYPES.has(type)) {
+      sql += ' WHERE type = ?';
+      params.push(type);
+    }
+    sql += ' ORDER BY importance DESC, updated_at DESC LIMIT 100';
+    const rows = this.getDb().prepare(sql).all(...params) as Record<string, unknown>[];
+    return rows.map((r) => this.rowToEntry(r));
+  }
+
+  /**
+   * Search knowledge using FTS5 full-text search
+   */
+  searchKnowledge(query: string): KnowledgeEntry[] {
+    // Use FTS5 for full-text search
+    const ftsSql = `
+      SELECT k.*
+      FROM knowledge k
+      JOIN knowledge_fts fts ON k.rowid = fts.rowid
+      WHERE knowledge_fts MATCH ?
+      ORDER BY rank
+      LIMIT 10
+    `;
+    try {
+      const rows = this.getDb().prepare(ftsSql).all(this.buildFtsQuery(query)) as Record<string, unknown>[];
+      if (rows.length > 0) {
+        return rows.map((r) => this.rowToEntry(r));
+      }
+    } catch {
+      // FTS5 query failed, fall back to simple keyword search
+    }
+
+    // Fallback: simple keyword search across content/title
+    return this.fallbackSearch(query);
+  }
+
+  /**
+   * Build prompt material: search relevant knowledge and inject into prompt sections
+   */
   buildPromptMaterial(cwd: string | undefined, userPrompt: string): ProjectMemoryPromptMaterial {
     if (!cwd) {
-      return { ignoreMemory: false, promptSections: [], topics: [] };
+      return { ignoreMemory: false, promptSections: [], entries: [] };
     }
 
-    const memoryRoot = this.ensureMemoryFiles(cwd);
-    const mountedPath = this.getMountedPath(cwd);
     const ignoreMemory = this.shouldIgnoreMemory(userPrompt);
-    const topics = this.listTopics(cwd);
-    if (ignoreMemory || topics.length === 0) {
-      return {
-        mountedPath,
-        memoryRoot,
-        ignoreMemory,
-        promptSections: [],
-        topics,
-      };
+    if (ignoreMemory) {
+      return { ignoreMemory: true, promptSections: [], entries: [] };
     }
 
-    const queryTokens = tokenizeQuery(userPrompt);
-    const rankedTopics = topics
-      .map((topic) => {
-        const haystack = `${topic.name}\n${topic.description}\n${topic.body}`.toLowerCase();
-        const score = queryTokens.reduce((sum, token) => sum + (haystack.includes(token) ? 1 : 0), 0);
-        return { topic, score };
-      })
-      .filter((item) => item.score > 0)
-      .sort((a, b) => b.score - a.score || a.topic.name.localeCompare(b.topic.name))
-      .slice(0, 3)
-      .map((item) => item.topic);
+    // Search relevant entries using FTS5
+    const entries = this.searchKnowledge(userPrompt);
 
-    const indexSummary = topics
-      .slice(0, 12)
-      .map(
-        (topic) =>
-          `- ${topic.name} [${topic.type}]${topic.description ? `: ${topic.description}` : ''}`
-      )
+    // Also include high-importance entries that might be relevant
+    const highImportance = this.listKnowledge().filter((e) => e.importance >= 4 && !entries.some((m) => m.id === e.id));
+    const allEntries = [...entries, ...highImportance].slice(0, 6);
+
+    // Mark accessed
+    for (const e of allEntries) {
+      this.markAccessed(e.id);
+    }
+
+    // Build index summary
+    const indexSummary = this.listKnowledge()
+      .slice(0, 20)
+      .map((e) => `- ${e.title} [${e.type}]${e.importance >= 4 ? ' (important)' : ''}`)
       .join('\n');
 
-    const relevantTopicsSection =
-      rankedTopics.length > 0
-        ? rankedTopics
-            .map(
-              (topic) =>
-                `### ${topic.name}\nType: ${topic.type}\n${topic.description ? `Description: ${topic.description}\n` : ''}${topic.body.slice(0, 1600).trim()}`
-            )
-            .join('\n\n')
-        : '';
+    // Build relevant entries section
+    const relevantSection = allEntries.length > 0
+      ? allEntries
+          .map(
+            (e) =>
+              `### ${e.title}\nType: ${e.type} | Importance: ${e.importance}\n${e.content.slice(0, 2000).trim()}`
+          )
+          .join('\n\n')
+      : '';
 
     return {
-      mountedPath,
-      memoryRoot,
       ignoreMemory: false,
-      topics,
+      entries: allEntries,
       promptSections: [
         `<project_memory_guidance>
 Use project memory only for durable information that cannot be derived from the current repository state.
 Ignore project memory when it conflicts with the user's current instruction or with the checked-out code.
 Do not treat project memory as a task list, recent diff log, or temporary scratchpad.
-Project memory files are mounted at ${PROJECT_MEMORY_VIRTUAL_PATH}.
+Knowledge is stored as structured entries (facts, preferences, decisions, references).
 </project_memory_guidance>`,
-        `<project_memory_index>\n${indexSummary || '(no indexed topics)'}\n</project_memory_index>`,
-        relevantTopicsSection
-          ? `<project_memory_relevant>\n${relevantTopicsSection}\n</project_memory_relevant>`
+        `<project_memory_index>\n${indexSummary || '(no indexed knowledge)'}\n</project_memory_index>`,
+        relevantSection
+          ? `<project_memory_relevant>\n${relevantSection}\n</project_memory_relevant>`
           : '',
       ].filter(Boolean),
     };
+  }
+
+  /**
+   * Convert a database row to a KnowledgeEntry
+   */
+  private rowToEntry(row: Record<string, unknown>): KnowledgeEntry {
+    let tags: string[] = [];
+    try {
+      tags = JSON.parse(row.tags as string) as string[];
+    } catch {
+      tags = [];
+    }
+    return {
+      id: row.id as string,
+      sessionId: row.session_id as string | null,
+      type: (row.type as KnowledgeType) ?? 'fact',
+      title: (row.title as string) ?? '',
+      content: row.content as string,
+      importance: (row.importance as number) ?? 3,
+      accessCount: (row.access_count as number) ?? 0,
+      source: (row.source as 'auto' | 'manual') ?? 'auto',
+      tags,
+      createdAt: row.created_at as number,
+      updatedAt: row.updated_at as number,
+    };
+  }
+
+  /**
+   * Build an FTS5 query string from user input
+   */
+  private buildFtsQuery(query: string): string {
+    const tokens = tokenizeQuery(query);
+    if (tokens.length === 0) return '""';
+    // Escape special FTS5 characters and join with OR
+    const escaped = tokens.map((t) => {
+      const sanitized = t.replace(/['"*^()~:+-]/g, '');
+      return sanitized ? `"${sanitized}"` : '';
+    }).filter(Boolean);
+    return escaped.join(' OR ');
+  }
+
+  /**
+   * Fallback keyword search when FTS5 fails
+   */
+  private fallbackSearch(query: string): KnowledgeEntry[] {
+    const tokens = tokenizeQuery(query);
+    if (tokens.length === 0) return [];
+
+    const all = this.listKnowledge();
+    return all
+      .map((entry) => {
+        const haystack = `${entry.title}\n${entry.content}`.toLowerCase();
+        const score = tokens.reduce((sum, t) => sum + (haystack.includes(t) ? 1 : 0), 0);
+        return { entry, score };
+      })
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score || b.entry.importance - a.entry.importance)
+      .slice(0, 5)
+      .map((item) => item.entry);
   }
 }

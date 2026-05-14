@@ -55,6 +55,7 @@ import { registerLogHandlers } from './ipc/log-handlers';
 import { registerRemoteHandlers } from './ipc/remote-handlers';
 import { registerScheduleHandlers } from './ipc/schedule-handlers';
 import { registerTasksHandlers } from './ipc/tasks-handlers';
+import { registerMemoryHandlers } from './ipc/memory-handlers';
 import { BackgroundTaskService } from './background/background-task-service';
 
 // Current working directory used for new sessions and relative path resolution.
@@ -1484,6 +1485,9 @@ registerScheduleHandlers({
 });
 registerTasksHandlers({
   getBackgroundTaskService: () => backgroundTaskService,
+});
+registerMemoryHandlers({
+  getSessionMessages: (sessionId: string) => sessionManager?.getMessages(sessionId) ?? [],
 });
 async function handleClientEvent(event: ClientEvent): Promise<unknown> {
   // Check if configured before starting sessions

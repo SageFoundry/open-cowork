@@ -619,6 +619,7 @@ export interface AppConfig {
   maxContextTokens?: number;
   sandboxEnabled?: boolean;
   enableThinking?: boolean;
+  autoMemory?: boolean;
   language?: 'zh' | 'en';
   isConfigured: boolean;
 }

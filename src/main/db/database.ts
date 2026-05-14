@@ -353,6 +353,50 @@ function initializeSchema(database: Database.Database): void {
     )
   `);
 
+    // Create knowledge table for durable cross-session memory
+    database.exec(`
+    CREATE TABLE IF NOT EXISTS knowledge (
+      id TEXT PRIMARY KEY,
+      session_id TEXT,
+      type TEXT NOT NULL DEFAULT 'fact',
+      title TEXT NOT NULL DEFAULT '',
+      content TEXT NOT NULL,
+      importance INTEGER NOT NULL DEFAULT 3,
+      access_count INTEGER NOT NULL DEFAULT 0,
+      source TEXT NOT NULL DEFAULT 'auto',
+      tags TEXT NOT NULL DEFAULT '[]',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `);
+
+    // Create FTS5 virtual table for knowledge full-text search
+    database.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
+      title,
+      content,
+      tags,
+      content='knowledge',
+      content_rowid='rowid'
+    )
+  `);
+
+    // Create index for knowledge queries
+    database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_knowledge_type 
+    ON knowledge(type)
+  `);
+
+    database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_knowledge_importance 
+    ON knowledge(importance DESC)
+  `);
+
+    database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_knowledge_updated 
+    ON knowledge(updated_at DESC)
+  `);
+
     // Create skills table (for future use)
     database.exec(`
     CREATE TABLE IF NOT EXISTS skills (

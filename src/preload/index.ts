@@ -155,6 +155,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('artifacts.listRecentFiles', cwd, sinceMs, Math.min(limit, 500)),
   },
 
+  memory: {
+    list: (): Promise<Array<{ id: string; type: string; title: string; importance: number; tags: string[]; createdAt: number; updatedAt: number }>> =>
+      ipcRenderer.invoke('memory.list'),
+    get: (id: string): Promise<any> =>
+      ipcRenderer.invoke('memory.get', id),
+    delete: (id: string): Promise<void> =>
+      ipcRenderer.invoke('memory.delete', id),
+    save: (entry: { type: string; title: string; content: string; importance?: number; tags?: string[]; sessionId?: string }): Promise<{ id: string }> =>
+      ipcRenderer.invoke('memory.save', entry),
+    extract: (sessionId: string): Promise<{ entries: number }> =>
+      ipcRenderer.invoke('memory.extract', sessionId),
+  },
+
   // Config methods
   config: {
     get: (): Promise<AppConfig> => ipcRenderer.invoke('config.get'),
@@ -451,6 +464,31 @@ declare global {
           sinceMs: number,
           limit?: number
         ) => Promise<Array<{ path: string; modifiedAt: number; size: number }>>;
+      };
+      memory: {
+        list: () => Promise<Array<{ id: string; type: string; title: string; importance: number; tags: string[]; createdAt: number; updatedAt: number }>>;
+        get: (id: string) => Promise<{
+          id: string;
+          type: string;
+          title: string;
+          content: string;
+          importance: number;
+          tags: string[];
+          source: string;
+          sessionId: string | null;
+          createdAt: number;
+          updatedAt: number;
+        } | null>;
+        delete: (id: string) => Promise<void>;
+        save: (entry: {
+          type: string;
+          title: string;
+          content: string;
+          importance?: number;
+          tags?: string[];
+          sessionId?: string;
+        }) => Promise<{ id: string }>;
+        extract: (sessionId: string) => Promise<{ entries: number }>;
       };
       config: {
         get: () => Promise<AppConfig>;
