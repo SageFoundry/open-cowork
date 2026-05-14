@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // In-memory storage
 const store = new Map<string, Record<string, unknown>>();
 let rowIdCounter = 1;
+let ftsAvailable = true;
+const PROJECT_PATH = 'e:\\workspace\\project-a';
+const OTHER_PROJECT_PATH = 'e:\\workspace\\project-b';
 
 // Make the default prepare return a callable
 const defaultRun = (..._args: unknown[]) => ({ lastInsertRowid: ++rowIdCounter });
@@ -14,6 +17,15 @@ function mockPrepare(sql: string): {
   get: (...args: unknown[]) => Record<string, unknown> | undefined;
   all: (...args: unknown[]) => Record<string, unknown>[];
 } {
+  // FTS5 availability check
+  if (/sqlite_master/i.test(sql) && /knowledge_fts/i.test(sql)) {
+    return {
+      run: defaultRun,
+      get: () => (ftsAvailable ? { name: 'knowledge_fts' } : undefined),
+      all: defaultAll,
+    };
+  }
+
   // INSERT INTO knowledge (may have leading whitespace/newlines from template literals)
   if (/INSERT INTO knowledge\b/i.test(sql.trim())) {
     return {
@@ -21,15 +33,16 @@ function mockPrepare(sql: string): {
         const record: Record<string, unknown> = {
           id: params[0] as string,
           session_id: params[1] as string | null,
-          type: params[2] as string,
-          title: params[3] as string,
-          content: params[4] as string,
-          importance: params[5] as number,
-          access_count: params[6] as number,
-          source: params[7] as string,
-          tags: params[8] as string,
-          created_at: params[9] as number,
-          updated_at: params[10] as number,
+          project_path: params[2] as string | null,
+          type: params[3] as string,
+          title: params[4] as string,
+          content: params[5] as string,
+          importance: params[6] as number,
+          access_count: params[7] as number,
+          source: params[8] as string,
+          tags: params[9] as string,
+          created_at: params[10] as number,
+          updated_at: params[11] as number,
           rowid: rowIdCounter,
         };
         store.set(record.id as string, record);
@@ -43,12 +56,26 @@ function mockPrepare(sql: string): {
 
   // INSERT INTO knowledge_fts
   if (/INSERT INTO knowledge_fts/i.test(sql.trim())) {
-    return { run: defaultRun, get: defaultGet, all: defaultAll };
+    return {
+      run: (...args: unknown[]) => {
+        if (!ftsAvailable) throw new Error('no such table: knowledge_fts');
+        return defaultRun(...args);
+      },
+      get: defaultGet,
+      all: defaultAll,
+    };
   }
 
   // DELETE FROM knowledge_fts
   if (/DELETE FROM knowledge_fts/i.test(sql.trim())) {
-    return { run: defaultRun, get: defaultGet, all: defaultAll };
+    return {
+      run: (...args: unknown[]) => {
+        if (!ftsAvailable) throw new Error('no such table: knowledge_fts');
+        return defaultRun(...args);
+      },
+      get: defaultGet,
+      all: defaultAll,
+    };
   }
 
   // DELETE FROM knowledge WHERE id = ?
@@ -124,16 +151,35 @@ function mockPrepare(sql: string): {
     };
   }
 
-  // SELECT * FROM knowledge WHERE type = ? (listKnowledge with type filter)
-  // ⚠️ Must come BEFORE generic "SELECT * FROM knowledge" check
-  if (/^SELECT \*/i.test(sql.trim()) && /WHERE type/i.test(sql)) {
+  // SELECT * FROM knowledge WHERE project_path = ? (listKnowledge with project filter)
+  if (/^SELECT \*/i.test(sql.trim()) && /WHERE project_path/i.test(sql) && !/\btype\b/i.test(sql)) {
     return {
       run: defaultRun,
       get: defaultGet,
       all: (...params: unknown[]) => {
-        const type = params[0] as string;
+        const projectPath = params[0] as string;
         return Array.from(store.values())
-          .filter((r) => r.type === type)
+          .filter((r) => r.project_path === projectPath)
+          .sort(
+            (a, b) => (b.importance as number) - (a.importance as number) || (b.updated_at as number) - (a.updated_at as number)
+          )
+          .slice(0, 100);
+      },
+    };
+  }
+
+  // SELECT * FROM knowledge WHERE type = ? (listKnowledge with type filter)
+  // ⚠️ Must come BEFORE generic "SELECT * FROM knowledge" check
+  if (/^SELECT \*/i.test(sql.trim()) && /WHERE/i.test(sql) && /type/i.test(sql)) {
+    return {
+      run: defaultRun,
+      get: defaultGet,
+      all: (...params: unknown[]) => {
+        const hasProjectFilter = /project_path/i.test(sql);
+        const projectPath = hasProjectFilter ? (params[0] as string) : undefined;
+        const type = params[hasProjectFilter ? 1 : 0] as string;
+        return Array.from(store.values())
+          .filter((r) => (!projectPath || r.project_path === projectPath) && r.type === type)
           .sort(
             (a, b) => (b.importance as number) - (a.importance as number) || (b.updated_at as number) - (a.updated_at as number)
           )
@@ -148,7 +194,9 @@ function mockPrepare(sql: string): {
       run: defaultRun,
       get: defaultGet,
       all: (...params: unknown[]) => {
-        const query = params[0] as string;
+        if (!ftsAvailable) throw new Error('no such table: knowledge_fts');
+        const projectPath = params[0] as string;
+        const query = params[1] as string;
         const terms = query
           .toLowerCase()
           .split(' OR ')
@@ -156,7 +204,7 @@ function mockPrepare(sql: string): {
         return Array.from(store.values())
           .filter((record) => {
             const haystack = `${record.title} ${record.content} ${record.tags}`.toLowerCase();
-            return terms.some((term) => term && haystack.includes(term));
+            return record.project_path === projectPath && terms.some((term) => term && haystack.includes(term));
           })
           .slice(0, 10);
       },
@@ -182,6 +230,7 @@ describe('ProjectMemoryService', () => {
   beforeEach(() => {
     store.clear();
     rowIdCounter = 1;
+    ftsAvailable = true;
   });
 
   it('saves and retrieves knowledge entries', () => {
@@ -189,6 +238,7 @@ describe('ProjectMemoryService', () => {
 
     const entry = service.saveKnowledge({
       sessionId: null,
+      projectPath: PROJECT_PATH,
       type: 'preference',
       title: 'Alice Preferences',
       content: 'Alice prefers concise progress updates and wants implementation notes to stay brief.',
@@ -215,6 +265,7 @@ describe('ProjectMemoryService', () => {
 
     service.saveKnowledge({
       sessionId: null,
+      projectPath: PROJECT_PATH,
       type: 'preference',
       title: 'Alice Preferences',
       content: 'Alice prefers concise progress updates and brief implementation notes.',
@@ -225,6 +276,7 @@ describe('ProjectMemoryService', () => {
 
     service.saveKnowledge({
       sessionId: null,
+      projectPath: PROJECT_PATH,
       type: 'decision',
       title: 'DB Schema Decision',
       content: 'Decided to use SQLite FTS5 for full-text search over file-system grep.',
@@ -233,11 +285,11 @@ describe('ProjectMemoryService', () => {
       tags: ['database', 'search'],
     });
 
-    const results = service.searchKnowledge('FTS5');
+    const results = service.searchKnowledge('FTS5', PROJECT_PATH);
     expect(results.length).toBeGreaterThanOrEqual(1);
     expect(results.some((r) => r.title === 'DB Schema Decision')).toBe(true);
 
-    const results2 = service.searchKnowledge('prefers concise');
+    const results2 = service.searchKnowledge('prefers concise', PROJECT_PATH);
     expect(results2.some((r) => r.title === 'Alice Preferences')).toBe(true);
   });
 
@@ -246,6 +298,7 @@ describe('ProjectMemoryService', () => {
 
     service.saveKnowledge({
       sessionId: null,
+      projectPath: '/some/workspace',
       type: 'preference',
       title: 'Alice Preferences',
       content: 'Alice prefers concise progress updates.',
@@ -279,6 +332,7 @@ describe('ProjectMemoryService', () => {
 
     const entry = service.saveKnowledge({
       sessionId: null,
+      projectPath: PROJECT_PATH,
       type: 'fact',
       title: 'Test Fact',
       content: 'Original content.',
@@ -300,15 +354,35 @@ describe('ProjectMemoryService', () => {
   it('lists knowledge by type', () => {
     const service = new ProjectMemoryService();
 
-    service.saveKnowledge({ sessionId: null, type: 'fact', title: 'Fact 1', content: 'x', importance: 3, source: 'auto', tags: [] });
-    service.saveKnowledge({ sessionId: null, type: 'preference', title: 'Pref 1', content: 'y', importance: 3, source: 'auto', tags: [] });
-    service.saveKnowledge({ sessionId: null, type: 'decision', title: 'Dec 1', content: 'z', importance: 3, source: 'auto', tags: [] });
+    service.saveKnowledge({ sessionId: null, projectPath: PROJECT_PATH, type: 'fact', title: 'Fact 1', content: 'x', importance: 3, source: 'auto', tags: [] });
+    service.saveKnowledge({ sessionId: null, projectPath: PROJECT_PATH, type: 'preference', title: 'Pref 1', content: 'y', importance: 3, source: 'auto', tags: [] });
+    service.saveKnowledge({ sessionId: null, projectPath: OTHER_PROJECT_PATH, type: 'decision', title: 'Dec 1', content: 'z', importance: 3, source: 'auto', tags: [] });
 
-    const facts = service.listKnowledge('fact');
+    const facts = service.listKnowledge(PROJECT_PATH, 'fact');
     expect(facts).toHaveLength(1);
     expect(facts[0].title).toBe('Fact 1');
 
-    const all = service.listKnowledge();
-    expect(all.length).toBeGreaterThanOrEqual(3);
+    const all = service.listKnowledge(PROJECT_PATH);
+    expect(all).toHaveLength(2);
+    expect(all.some((entry) => entry.title === 'Dec 1')).toBe(false);
+  });
+
+  it('saves and searches with keyword fallback when FTS5 is unavailable', () => {
+    ftsAvailable = false;
+    const service = new ProjectMemoryService();
+
+    const entry = service.saveKnowledge({
+      sessionId: null,
+      projectPath: PROJECT_PATH,
+      type: 'fact',
+      title: 'Fallback Memory',
+      content: 'Keyword search should still work when the FTS table is absent.',
+      importance: 3,
+      source: 'auto',
+      tags: [],
+    });
+
+    expect(service.getKnowledge(entry.id)?.title).toBe('Fallback Memory');
+    expect(service.searchKnowledge('keyword absent', PROJECT_PATH).some((r) => r.id === entry.id)).toBe(true);
   });
 });

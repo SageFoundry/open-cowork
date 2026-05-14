@@ -1488,6 +1488,8 @@ registerTasksHandlers({
 });
 registerMemoryHandlers({
   getSessionMessages: (sessionId: string) => sessionManager?.getMessages(sessionId) ?? [],
+  getSessionCwd: (sessionId: string) =>
+    sessionManager?.listSessions().find((session) => session.id === sessionId)?.cwd ?? null,
 });
 async function handleClientEvent(event: ClientEvent): Promise<unknown> {
   // Check if configured before starting sessions

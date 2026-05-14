@@ -216,10 +216,11 @@ export function ContextPanel() {
     let cancelled = false;
     const load = async () => {
       try {
-        const list = await window.electronAPI.memory.list();
+        const list = await window.electronAPI.memory.list(currentWorkingDir);
         if (!cancelled) {
           setMemoryLoadError(null);
           setMemoryList(list);
+          setMemoryDetail(null);
         }
       } catch (error) {
         if (!cancelled) {
@@ -232,7 +233,7 @@ export function ContextPanel() {
     load();
 
     return () => { cancelled = true; };
-  }, [activeSessionId, contextPanelCollapsed, steps.length, t]);
+  }, [activeSessionId, contextPanelCollapsed, currentWorkingDir, steps.length, t]);
 
   // Load autoMemory state from config
   useEffect(() => {
@@ -290,7 +291,7 @@ export function ContextPanel() {
     try {
       const result = await window.electronAPI.memory.extract(activeSessionId);
       // Refresh memory list
-      const list = await window.electronAPI.memory.list();
+      const list = await window.electronAPI.memory.list(currentWorkingDir);
       setMemoryLoadError(null);
       setMemoryList(list);
       setExtractResult(result.entries > 0 ? t('context.extractedCount', { count: result.entries }) : t('context.extractedNone'));
@@ -315,7 +316,7 @@ export function ContextPanel() {
     }
 
     try {
-      await window.electronAPI.memory.delete(id);
+      await window.electronAPI.memory.delete(id, currentWorkingDir);
       setMemoryList((prev) => prev.filter((m) => m.id !== id));
     } catch (error) {
       console.error('Failed to delete memory:', error);
@@ -334,7 +335,7 @@ export function ContextPanel() {
     }
 
     try {
-      const entry = await window.electronAPI.memory.get(id);
+      const entry = await window.electronAPI.memory.get(id, currentWorkingDir);
       setMemoryDetail(entry);
     } catch (error) {
       console.error('Failed to load memory detail:', error);

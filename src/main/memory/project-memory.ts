@@ -1,6 +1,8 @@
 import { v4 as uuidv4 } from 'uuid';
 import type Database from 'better-sqlite3';
+import * as path from 'path';
 import { getDatabase } from '../db/database';
+import { logWarn } from '../utils/logger';
 
 /**
  * Knowledge types for durable memory
@@ -18,6 +20,7 @@ export type KnowledgeType =
 export interface KnowledgeEntry {
   id: string;
   sessionId: string | null;
+  projectPath: string | null;
   type: KnowledgeType;
   title: string;
   content: string;
@@ -40,6 +43,15 @@ export interface ProjectMemoryPromptMaterial {
 
 const VALID_TYPES = new Set<string>(['fact', 'preference', 'decision', 'reference', 'project']);
 
+export function normalizeProjectPath(cwd: string | null | undefined): string | null {
+  const trimmed = cwd?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const normalized = path.normalize(path.resolve(trimmed));
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
 function tokenizeQuery(query: string): string[] {
   const lowered = query.toLowerCase();
   const asciiTokens = lowered
@@ -59,8 +71,67 @@ function tokenizeQuery(query: string): string[] {
  * stored in a single SQLite table with full-text search via FTS5.
  */
 export class ProjectMemoryService {
+  private knowledgeFtsAvailable: boolean | null = null;
+
   private getDb(): Database.Database {
     return getDatabase().raw;
+  }
+
+  private hasKnowledgeFts(): boolean {
+    if (this.knowledgeFtsAvailable !== null) {
+      return this.knowledgeFtsAvailable;
+    }
+
+    try {
+      const row = this.getDb()
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_fts'")
+        .get() as { name: string } | undefined;
+      this.knowledgeFtsAvailable = Boolean(row);
+    } catch {
+      this.knowledgeFtsAvailable = false;
+    }
+    return this.knowledgeFtsAvailable;
+  }
+
+  private disableKnowledgeFts(operation: string, error: unknown): void {
+    this.knowledgeFtsAvailable = false;
+    logWarn(
+      `[ProjectMemoryService] Knowledge FTS unavailable during ${operation}; using keyword fallback:`,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+
+  private getKnowledgeRowId(id: string): number | null {
+    const row = this.getDb()
+      .prepare('SELECT rowid FROM knowledge WHERE id = ?')
+      .get(id) as { rowid: number } | undefined;
+    return typeof row?.rowid === 'number' ? row.rowid : null;
+  }
+
+  private insertIntoFts(rowid: number, title: string, content: string, tags: string): void {
+    if (!this.hasKnowledgeFts()) {
+      return;
+    }
+
+    try {
+      this.getDb()
+        .prepare('INSERT INTO knowledge_fts (rowid, title, content, tags) VALUES (?, ?, ?, ?)')
+        .run(rowid, title, content, tags);
+    } catch (error) {
+      this.disableKnowledgeFts('insert', error);
+    }
+  }
+
+  private deleteFromFts(rowid: number): void {
+    if (!this.hasKnowledgeFts()) {
+      return;
+    }
+
+    try {
+      this.getDb().prepare('DELETE FROM knowledge_fts WHERE rowid = ?').run(rowid);
+    } catch (error) {
+      this.disableKnowledgeFts('delete', error);
+    }
   }
 
   shouldIgnoreMemory(userPrompt: string): boolean {
@@ -72,12 +143,17 @@ export class ProjectMemoryService {
   /**
    * Save a knowledge entry to the database and update FTS index
    */
-  saveKnowledge(entry: Omit<KnowledgeEntry, 'id' | 'accessCount' | 'createdAt' | 'updatedAt'>): KnowledgeEntry {
+  saveKnowledge(
+    entry: Omit<KnowledgeEntry, 'id' | 'projectPath' | 'accessCount' | 'createdAt' | 'updatedAt'> & {
+      projectPath?: string | null;
+    }
+  ): KnowledgeEntry {
     const db = this.getDb();
     const now = Date.now();
     const knowledge: KnowledgeEntry = {
       id: uuidv4(),
       sessionId: entry.sessionId ?? null,
+      projectPath: normalizeProjectPath(entry.projectPath),
       type: entry.type,
       title: entry.title,
       content: entry.content,
@@ -90,12 +166,13 @@ export class ProjectMemoryService {
     };
 
     const stmt = db.prepare(`
-      INSERT INTO knowledge (id, session_id, type, title, content, importance, access_count, source, tags, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO knowledge (id, session_id, project_path, type, title, content, importance, access_count, source, tags, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    stmt.run(
+    const result = stmt.run(
       knowledge.id,
       knowledge.sessionId,
+      knowledge.projectPath,
       knowledge.type,
       knowledge.title,
       knowledge.content,
@@ -107,11 +184,13 @@ export class ProjectMemoryService {
       knowledge.updatedAt
     );
 
-    // Sync to FTS5 index
-    db.exec(`
-      INSERT INTO knowledge_fts (rowid, title, content, tags)
-      VALUES (last_insert_rowid(), '${knowledge.title.replace(/'/g, "''")}', '${knowledge.content.replace(/'/g, "''")}', '${JSON.stringify(knowledge.tags).replace(/'/g, "''")}')
-    `);
+    const rowidFromInsert = Number(result.lastInsertRowid);
+    const rowid = Number.isFinite(rowidFromInsert) && rowidFromInsert > 0
+      ? rowidFromInsert
+      : this.getKnowledgeRowId(knowledge.id);
+    if (rowid !== null) {
+      this.insertIntoFts(rowid, knowledge.title, knowledge.content, JSON.stringify(knowledge.tags));
+    }
 
     return knowledge;
   }
@@ -151,9 +230,9 @@ export class ProjectMemoryService {
     // Rebuild FTS index for this row
     const row = db.prepare('SELECT rowid, title, content, tags FROM knowledge WHERE id = ?').get(id) as Record<string, unknown> | undefined;
     if (row) {
-      db.prepare('DELETE FROM knowledge_fts WHERE rowid = ?').run(row.rowid);
-      db.prepare(`INSERT INTO knowledge_fts (rowid, title, content, tags) VALUES (?, ?, ?, ?)`).run(
-        row.rowid,
+      this.deleteFromFts(row.rowid as number);
+      this.insertIntoFts(
+        row.rowid as number,
         row.title as string,
         row.content as string,
         row.tags as string
@@ -175,7 +254,7 @@ export class ProjectMemoryService {
     const db = this.getDb();
     const row = db.prepare('SELECT rowid FROM knowledge WHERE id = ?').get(id) as { rowid: number } | undefined;
     if (row) {
-      db.prepare('DELETE FROM knowledge_fts WHERE rowid = ?').run(row.rowid);
+      this.deleteFromFts(row.rowid);
     }
     db.prepare('DELETE FROM knowledge WHERE id = ?').run(id);
   }
@@ -192,12 +271,21 @@ export class ProjectMemoryService {
   /**
    * List all knowledge entries, optionally filtered by type
    */
-  listKnowledge(type?: KnowledgeType): KnowledgeEntry[] {
+  listKnowledge(projectPath?: string | null, type?: KnowledgeType): KnowledgeEntry[] {
     let sql = 'SELECT * FROM knowledge';
     const params: unknown[] = [];
+    const where: string[] = [];
+    const normalizedProjectPath = normalizeProjectPath(projectPath);
+    if (normalizedProjectPath) {
+      where.push('project_path = ?');
+      params.push(normalizedProjectPath);
+    }
     if (type && VALID_TYPES.has(type)) {
-      sql += ' WHERE type = ?';
+      where.push('type = ?');
       params.push(type);
+    }
+    if (where.length > 0) {
+      sql += ` WHERE ${where.join(' AND ')}`;
     }
     sql += ' ORDER BY importance DESC, updated_at DESC LIMIT 100';
     const rows = this.getDb().prepare(sql).all(...params) as Record<string, unknown>[];
@@ -207,27 +295,35 @@ export class ProjectMemoryService {
   /**
    * Search knowledge using FTS5 full-text search
    */
-  searchKnowledge(query: string): KnowledgeEntry[] {
+  searchKnowledge(query: string, projectPath?: string | null): KnowledgeEntry[] {
+    const normalizedProjectPath = normalizeProjectPath(projectPath);
+    if (!normalizedProjectPath) {
+      return [];
+    }
     // Use FTS5 for full-text search
     const ftsSql = `
       SELECT k.*
       FROM knowledge k
       JOIN knowledge_fts fts ON k.rowid = fts.rowid
-      WHERE knowledge_fts MATCH ?
+      WHERE k.project_path = ? AND knowledge_fts MATCH ?
       ORDER BY rank
       LIMIT 10
     `;
     try {
-      const rows = this.getDb().prepare(ftsSql).all(this.buildFtsQuery(query)) as Record<string, unknown>[];
+      if (!this.hasKnowledgeFts()) {
+        return this.fallbackSearch(query, normalizedProjectPath);
+      }
+      const rows = this.getDb().prepare(ftsSql).all(normalizedProjectPath, this.buildFtsQuery(query)) as Record<string, unknown>[];
       if (rows.length > 0) {
         return rows.map((r) => this.rowToEntry(r));
       }
-    } catch {
+    } catch (error) {
+      this.disableKnowledgeFts('search', error);
       // FTS5 query failed, fall back to simple keyword search
     }
 
     // Fallback: simple keyword search across content/title
-    return this.fallbackSearch(query);
+    return this.fallbackSearch(query, normalizedProjectPath);
   }
 
   /**
@@ -244,10 +340,11 @@ export class ProjectMemoryService {
     }
 
     // Search relevant entries using FTS5
-    const entries = this.searchKnowledge(userPrompt);
+    const projectPath = normalizeProjectPath(cwd);
+    const entries = this.searchKnowledge(userPrompt, projectPath);
 
     // Also include high-importance entries that might be relevant
-    const highImportance = this.listKnowledge().filter((e) => e.importance >= 4 && !entries.some((m) => m.id === e.id));
+    const highImportance = this.listKnowledge(projectPath).filter((e) => e.importance >= 4 && !entries.some((m) => m.id === e.id));
     const allEntries = [...entries, ...highImportance].slice(0, 6);
 
     // Mark accessed
@@ -256,7 +353,7 @@ export class ProjectMemoryService {
     }
 
     // Build index summary
-    const indexSummary = this.listKnowledge()
+    const indexSummary = this.listKnowledge(projectPath)
       .slice(0, 20)
       .map((e) => `- ${e.title} [${e.type}]${e.importance >= 4 ? ' (important)' : ''}`)
       .join('\n');
@@ -302,6 +399,7 @@ Knowledge is stored as structured entries (facts, preferences, decisions, refere
     return {
       id: row.id as string,
       sessionId: row.session_id as string | null,
+      projectPath: (row.project_path as string | null) ?? null,
       type: (row.type as KnowledgeType) ?? 'fact',
       title: (row.title as string) ?? '',
       content: row.content as string,
@@ -331,11 +429,11 @@ Knowledge is stored as structured entries (facts, preferences, decisions, refere
   /**
    * Fallback keyword search when FTS5 fails
    */
-  private fallbackSearch(query: string): KnowledgeEntry[] {
+  private fallbackSearch(query: string, projectPath: string): KnowledgeEntry[] {
     const tokens = tokenizeQuery(query);
     if (tokens.length === 0) return [];
 
-    const all = this.listKnowledge();
+    const all = this.listKnowledge(projectPath);
     return all
       .map((entry) => {
         const haystack = `${entry.title}\n${entry.content}`.toLowerCase();

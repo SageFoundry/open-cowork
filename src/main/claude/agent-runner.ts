@@ -57,7 +57,11 @@ import type { BackgroundTaskService } from '../background/background-task-servic
 import { configStore } from '../config/config-store';
 import { normalizeOpenAICompatibleBaseUrl } from '../config/auth-utils';
 import { resolveMessageEndPayload, toUserFacingErrorText } from './agent-runner-message-end';
-import { ProjectMemoryService } from '../memory/project-memory';
+import { normalizeProjectPath, ProjectMemoryService, type KnowledgeEntry, type KnowledgeType } from '../memory/project-memory';
+import {
+  applyMemoryActions,
+  buildCandidateEvaluationAction,
+} from '../memory/memory-evaluation';
 import {
   applyPiModelRuntimeOverrides,
   buildSyntheticPiModel,
@@ -2598,6 +2602,14 @@ Tool routing:
 - If user explicitly asks to use Chrome/browser/web navigation, prioritize Chrome MCP tools (mcp__Chrome__*) over generic WebSearch/WebFetch.
 - Use WebSearch/WebFetch only when Chrome MCP is unavailable or the user explicitly asks for generic web search.
 </tool_behavior>`,
+        `<memory_tool_policy>
+Project memory is a compact, durable knowledge base. search_history is the full conversation lookup tool.
+Use search_history for recoverable historical details, temporary task progress, logs, one-off bug context, and ordinary conversation recall.
+Use project memory only for stable cross-session knowledge: explicit user memory requests, key architecture decisions, long-term project conventions, durable user preferences, and critical constraints.
+autoMemory is currently ${configStore.get('autoMemory') ? 'enabled' : 'disabled'}.
+If autoMemory is disabled, call save_knowledge only when the user explicitly asks to remember/save something.
+If autoMemory is enabled, autonomous save_knowledge calls must be rare and must satisfy all three tests: high value, stable over time, and likely useful across future sessions.
+</memory_tool_policy>`,
         ...(projectMemoryMaterial?.promptSections ?? []),
         this.getBundledPathHints(),
       ]
@@ -2708,22 +2720,53 @@ Tool routing:
         log('[ClaudeAgentRunner] Registered search_history custom tool');
       }
 
-      // Register memory tools: save_knowledge and delete_knowledge
-      // These allow the agent to manage durable cross-session memory.
+      // Register memory tools for durable cross-session project knowledge.
       {
         const projectMemory = this.projectMemoryService;
         const autoMemory = configStore.get('autoMemory');
+        const memoryProjectPath = workingDir || null;
+        const normalizedMemoryProjectPath = normalizeProjectPath(memoryProjectPath);
+        const validKnowledgeTypes: KnowledgeType[] = ['fact', 'preference', 'decision', 'reference', 'project'];
+        const formatKnowledgeEntry = (entry: KnowledgeEntry, includeContent: boolean): string => {
+          const tags = entry.tags.length > 0 ? entry.tags.join(', ') : 'none';
+          const parts = [
+            `ID: ${entry.id}`,
+            `Title: ${entry.title}`,
+            `Type: ${entry.type}`,
+            `Importance: ${entry.importance}`,
+            `Tags: ${tags}`,
+          ];
+          if (includeContent) {
+            parts.push(`Content:\n${entry.content}`);
+          } else {
+            const summary = entry.content.length > 300
+              ? `${entry.content.slice(0, 300)}...`
+              : entry.content;
+            parts.push(`Preview: ${summary}`);
+          }
+          return parts.join('\n');
+        };
+        const normalizeKnowledgeLimit = (value: number | undefined, fallback: number): number => {
+          if (!Number.isFinite(value ?? NaN)) return fallback;
+          return Math.max(1, Math.min(20, Math.floor(value as number)));
+        };
 
         const saveKnowledgeTool: ToolDefinition = {
           name: 'save_knowledge',
           label: 'Save Knowledge',
           description:
-            'Save a durable knowledge entry to project memory. Knowledge entries persist across sessions and can be retrieved via semantic search. ' +
-            'Use this when the user explicitly says "remember this", or (if autoMemory is enabled) when you discover important information ' +
-            'such as: project architecture decisions, user preferences and workflow habits, key configuration/setup steps, reference links or documents, ' +
-            `critical constraints or conventions. Currently autoMemory is ${autoMemory ? 'enabled' : 'disabled'}. ` +
-            'Do NOT save trivial, temporary, or conversational content.',
+            'Propose a durable knowledge entry for project memory. The app will still dedupe, merge, or ignore the proposal before writing. ' +
+            'Use trigger=explicit_user_request when the user directly asks to remember/save something. ' +
+            `Currently autoMemory is ${autoMemory ? 'enabled' : 'disabled'}. ` +
+            (autoMemory
+              ? 'For autonomous_high_value, call this rarely and only for stable cross-session knowledge: key architecture decisions, durable project conventions, explicit user preferences, or critical constraints. '
+              : 'Because autoMemory is disabled, do not use autonomous_high_value. ') +
+            'Do not save temporary task progress, logs, one-off bug details, tool output summaries, or ordinary history recall; use search_history for those.',
           parameters: Type.Object({
+            trigger: Type.String({
+              description:
+                'Why this memory is being saved: explicit_user_request when the user directly asks to remember/save it, or autonomous_high_value for rare high-value automatic memory when autoMemory is enabled.',
+            }),
             type: Type.String({
               description: 'Knowledge type: fact, preference, decision, reference, project',
             }),
@@ -2743,30 +2786,167 @@ Tool routing:
                 description: 'Optional comma-separated tags for categorization',
               })
             ),
+            reason: Type.Optional(
+              Type.String({
+                description: 'Brief reason this is durable cross-session memory rather than searchable history.',
+              })
+            ),
           }),
           execute: async (
             _toolCallId: string,
-            params: { type: string; title: string; content: string; importance?: number; tags?: string }
+            params: { trigger: string; type: string; title: string; content: string; importance?: number; tags?: string; reason?: string }
           ) => {
             const tags = params.tags
               ? params.tags.split(',').map((t: string) => t.trim()).filter(Boolean)
               : [];
-            const entry = projectMemory.saveKnowledge({
-              sessionId: session.id,
-              type: params.type as 'fact' | 'preference' | 'decision' | 'reference' | 'project',
+            const action = buildCandidateEvaluationAction({
+              trigger: params.trigger === 'explicit_user_request'
+                ? 'explicit_user_request'
+                : 'autonomous_high_value',
+              type: params.type,
               title: params.title,
               content: params.content,
               importance: params.importance ?? 3,
-              source: 'auto',
               tags,
+              reason: params.reason,
+            }, memoryProjectPath ? projectMemory.listKnowledge(memoryProjectPath) : [], Boolean(autoMemory));
+            const applied = applyMemoryActions(projectMemory, [action], {
+              sessionId: session.id,
+              projectPath: memoryProjectPath,
+              source: 'auto',
             });
+
+            if (applied.created === 0 && applied.updated === 0) {
+              return {
+                content: [{ type: 'text' as const, text: `Knowledge not saved: ${applied.reasons[0] || action.reason || 'candidate was ignored as duplicate or low-value memory.'}` }],
+                details: undefined as unknown,
+              };
+            }
+
+            const entry = applied.entries[0];
+            const verb = applied.updated > 0 ? 'updated' : 'saved';
             return {
-              content: [{ type: 'text' as const, text: `Knowledge saved: "${entry.title}" (id: ${entry.id}, type: ${entry.type}, importance: ${entry.importance})` }],
+              content: [{ type: 'text' as const, text: `Knowledge ${verb}: "${entry.title}" (id: ${entry.id}, type: ${entry.type}, importance: ${entry.importance})` }],
               details: undefined as unknown,
             };
           },
         };
         baseCustomTools.push(saveKnowledgeTool);
+
+        const queryKnowledgeTool: ToolDefinition = {
+          name: 'query_knowledge',
+          label: 'Query Knowledge',
+          description:
+            'Search durable project memory for relevant knowledge entries. Use this when you need to recall prior decisions, preferences, constraints, references, or project facts.',
+          parameters: Type.Object({
+            query: Type.String({
+              description: 'Search query describing the knowledge you need to recall',
+            }),
+            maxResults: Type.Optional(
+              Type.Number({
+                description: 'Maximum number of entries to return, from 1 to 20 (default: 8)',
+              })
+            ),
+          }),
+          execute: async (
+            _toolCallId: string,
+            params: { query: string; maxResults?: number }
+          ) => {
+            const limit = normalizeKnowledgeLimit(params.maxResults, 8);
+            const entries = projectMemory.searchKnowledge(params.query, memoryProjectPath).slice(0, limit);
+            for (const entry of entries) {
+              projectMemory.markAccessed(entry.id);
+            }
+
+            if (entries.length === 0) {
+              return {
+                content: [{ type: 'text' as const, text: `No matching knowledge entries found for query: ${params.query}` }],
+                details: undefined as unknown,
+              };
+            }
+
+            const formatted = entries.map((entry) => formatKnowledgeEntry(entry, true)).join('\n\n---\n\n');
+            return {
+              content: [{ type: 'text' as const, text: `Found ${entries.length} knowledge entries:\n\n${formatted}` }],
+              details: undefined as unknown,
+            };
+          },
+        };
+        baseCustomTools.push(queryKnowledgeTool);
+
+        const listKnowledgeTool: ToolDefinition = {
+          name: 'list_knowledge',
+          label: 'List Knowledge',
+          description:
+            'List durable project memory entries, optionally filtered by type. Use this to inspect available memory before choosing a specific entry to read.',
+          parameters: Type.Object({
+            type: Type.Optional(
+              Type.String({
+                description: 'Optional type filter: fact, preference, decision, reference, or project',
+              })
+            ),
+            maxResults: Type.Optional(
+              Type.Number({
+                description: 'Maximum number of entries to return, from 1 to 20 (default: 12)',
+              })
+            ),
+          }),
+          execute: async (
+            _toolCallId: string,
+            params: { type?: string; maxResults?: number }
+          ) => {
+            const type = params.type && validKnowledgeTypes.includes(params.type as KnowledgeType)
+              ? (params.type as KnowledgeType)
+              : undefined;
+            const limit = normalizeKnowledgeLimit(params.maxResults, 12);
+            const entries = projectMemory.listKnowledge(memoryProjectPath, type).slice(0, limit);
+
+            if (entries.length === 0) {
+              return {
+                content: [{ type: 'text' as const, text: type ? `No knowledge entries found for type: ${type}` : 'No knowledge entries found.' }],
+                details: undefined as unknown,
+              };
+            }
+
+            const formatted = entries.map((entry) => formatKnowledgeEntry(entry, false)).join('\n\n---\n\n');
+            return {
+              content: [{ type: 'text' as const, text: `Listed ${entries.length} knowledge entries:\n\n${formatted}` }],
+              details: undefined as unknown,
+            };
+          },
+        };
+        baseCustomTools.push(listKnowledgeTool);
+
+        const getKnowledgeTool: ToolDefinition = {
+          name: 'get_knowledge',
+          label: 'Get Knowledge',
+          description:
+            'Read one durable project memory entry by ID. Use this after list_knowledge or query_knowledge when you need the full stored content.',
+          parameters: Type.Object({
+            id: Type.String({
+              description: 'The ID of the knowledge entry to read',
+            }),
+          }),
+          execute: async (
+            _toolCallId: string,
+            params: { id: string }
+          ) => {
+            const entry = projectMemory.getKnowledge(params.id);
+            if (!entry || !normalizedMemoryProjectPath || entry.projectPath !== normalizedMemoryProjectPath) {
+              return {
+                content: [{ type: 'text' as const, text: `Knowledge entry not found: ${params.id}` }],
+                details: undefined as unknown,
+              };
+            }
+
+            projectMemory.markAccessed(entry.id);
+            return {
+              content: [{ type: 'text' as const, text: formatKnowledgeEntry(entry, true) }],
+              details: undefined as unknown,
+            };
+          },
+        };
+        baseCustomTools.push(getKnowledgeTool);
 
         const deleteKnowledgeTool: ToolDefinition = {
           name: 'delete_knowledge',
@@ -2782,6 +2962,13 @@ Tool routing:
             _toolCallId: string,
             params: { id: string }
           ) => {
+            const entry = projectMemory.getKnowledge(params.id);
+            if (!entry || !normalizedMemoryProjectPath || entry.projectPath !== normalizedMemoryProjectPath) {
+              return {
+                content: [{ type: 'text' as const, text: `Knowledge entry not found: ${params.id}` }],
+                details: undefined as unknown,
+              };
+            }
             projectMemory.deleteKnowledge(params.id);
             return {
               content: [{ type: 'text' as const, text: `Knowledge entry deleted: ${params.id}` }],
@@ -2791,7 +2978,7 @@ Tool routing:
         };
         baseCustomTools.push(deleteKnowledgeTool);
 
-        log('[ClaudeAgentRunner] Registered save_knowledge and delete_knowledge custom tools');
+        log('[ClaudeAgentRunner] Registered project memory custom tools');
       }
 
       // Enrich process.env.PATH for build mode — ensures Skill commands (python3, node)

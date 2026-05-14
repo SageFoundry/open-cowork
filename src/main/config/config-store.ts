@@ -163,6 +163,7 @@ const DIRECT_READ_KEYS = new Set<keyof AppConfig>([
   'maxContextTokens',
   'sandboxEnabled',
   'enableThinking',
+  'autoMemory',
   'language',
   'isConfigured',
 ]);

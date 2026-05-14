@@ -156,13 +156,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   memory: {
-    list: (): Promise<Array<{ id: string; type: string; title: string; importance: number; tags: string[]; createdAt: number; updatedAt: number }>> =>
-      ipcRenderer.invoke('memory.list'),
-    get: (id: string): Promise<any> =>
-      ipcRenderer.invoke('memory.get', id),
-    delete: (id: string): Promise<void> =>
-      ipcRenderer.invoke('memory.delete', id),
-    save: (entry: { type: string; title: string; content: string; importance?: number; tags?: string[]; sessionId?: string }): Promise<{ id: string }> =>
+    list: (cwd?: string | null): Promise<Array<{ id: string; type: string; title: string; importance: number; tags: string[]; createdAt: number; updatedAt: number }>> =>
+      ipcRenderer.invoke('memory.list', cwd),
+    get: (id: string, cwd?: string | null): Promise<any> =>
+      ipcRenderer.invoke('memory.get', id, cwd),
+    delete: (id: string, cwd?: string | null): Promise<void> =>
+      ipcRenderer.invoke('memory.delete', id, cwd),
+    save: (entry: { type: string; title: string; content: string; importance?: number; tags?: string[]; sessionId?: string; projectPath?: string | null }): Promise<{ id: string }> =>
       ipcRenderer.invoke('memory.save', entry),
     extract: (sessionId: string): Promise<{ entries: number }> =>
       ipcRenderer.invoke('memory.extract', sessionId),
@@ -466,8 +466,8 @@ declare global {
         ) => Promise<Array<{ path: string; modifiedAt: number; size: number }>>;
       };
       memory: {
-        list: () => Promise<Array<{ id: string; type: string; title: string; importance: number; tags: string[]; createdAt: number; updatedAt: number }>>;
-        get: (id: string) => Promise<{
+        list: (cwd?: string | null) => Promise<Array<{ id: string; type: string; title: string; importance: number; tags: string[]; createdAt: number; updatedAt: number }>>;
+        get: (id: string, cwd?: string | null) => Promise<{
           id: string;
           type: string;
           title: string;
@@ -479,7 +479,7 @@ declare global {
           createdAt: number;
           updatedAt: number;
         } | null>;
-        delete: (id: string) => Promise<void>;
+        delete: (id: string, cwd?: string | null) => Promise<void>;
         save: (entry: {
           type: string;
           title: string;
@@ -487,6 +487,7 @@ declare global {
           importance?: number;
           tags?: string[];
           sessionId?: string;
+          projectPath?: string | null;
         }) => Promise<{ id: string }>;
         extract: (sessionId: string) => Promise<{ entries: number }>;
       };

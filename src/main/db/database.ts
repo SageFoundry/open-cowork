@@ -5,7 +5,7 @@
 
 import Database from 'better-sqlite3';
 import { app } from 'electron';
-import { join } from 'path';
+import { join, normalize, resolve } from 'path';
 import { existsSync, mkdirSync, statSync, renameSync, openSync, readSync, closeSync } from 'fs';
 import { log, logError, logWarn } from '../utils/logger';
 
@@ -206,6 +206,45 @@ function isSqliteFile(filePath: string): boolean {
   }
 }
 
+function normalizeProjectPathForDb(cwd: string | null | undefined): string | null {
+  const trimmed = cwd?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const normalized = normalize(resolve(trimmed));
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+function backfillKnowledgeProjectPaths(database: Database.Database): void {
+  try {
+    const rows = database
+      .prepare(
+        `SELECT k.id, s.cwd
+         FROM knowledge k
+         JOIN sessions s ON s.id = k.session_id
+         WHERE (k.project_path IS NULL OR k.project_path = '')
+           AND s.cwd IS NOT NULL
+           AND s.cwd != ''`
+      )
+      .all() as Array<{ id: string; cwd: string | null }>;
+    if (rows.length === 0) {
+      return;
+    }
+    const update = database.prepare('UPDATE knowledge SET project_path = ? WHERE id = ?');
+    const tx = database.transaction((items: Array<{ id: string; cwd: string | null }>) => {
+      for (const row of items) {
+        const projectPath = normalizeProjectPathForDb(row.cwd);
+        if (projectPath) {
+          update.run(projectPath, row.id);
+        }
+      }
+    });
+    tx(rows);
+  } catch (error) {
+    logWarn('[Database] Failed to backfill knowledge project paths:', error);
+  }
+}
+
 function prepareDatabaseDirectory(userDataPath: string): string {
   ensureDirectory(userDataPath, 'userData');
 
@@ -256,6 +295,29 @@ function getDatabasePath(): string {
   }
 
   return dbPath;
+}
+
+function initializeKnowledgeFts(database: Database.Database): void {
+  try {
+    database.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
+      title,
+      content,
+      tags,
+      content='knowledge',
+      content_rowid='rowid'
+    )
+  `);
+
+    // Keep upgraded databases searchable even when knowledge rows predate the
+    // FTS table or were saved while FTS was unavailable.
+    database.exec(`INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild')`);
+  } catch (error) {
+    logWarn(
+      '[Database] Knowledge FTS5 unavailable; memory search will use keyword fallback:',
+      error instanceof Error ? error.message : String(error)
+    );
+  }
 }
 
 /**
@@ -358,6 +420,7 @@ function initializeSchema(database: Database.Database): void {
     CREATE TABLE IF NOT EXISTS knowledge (
       id TEXT PRIMARY KEY,
       session_id TEXT,
+      project_path TEXT,
       type TEXT NOT NULL DEFAULT 'fact',
       title TEXT NOT NULL DEFAULT '',
       content TEXT NOT NULL,
@@ -369,19 +432,18 @@ function initializeSchema(database: Database.Database): void {
       updated_at INTEGER NOT NULL
     )
   `);
+    ensureColumn(database, 'knowledge', 'project_path', 'project_path TEXT');
+    backfillKnowledgeProjectPaths(database);
 
-    // Create FTS5 virtual table for knowledge full-text search
-    database.exec(`
-    CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
-      title,
-      content,
-      tags,
-      content='knowledge',
-      content_rowid='rowid'
-    )
-  `);
+    // Create FTS5 virtual table for knowledge full-text search when supported.
+    initializeKnowledgeFts(database);
 
     // Create index for knowledge queries
+    database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_knowledge_project_path
+    ON knowledge(project_path)
+  `);
+
     database.exec(`
     CREATE INDEX IF NOT EXISTS idx_knowledge_type 
     ON knowledge(type)
