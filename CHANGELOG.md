@@ -5,6 +5,32 @@ All notable changes to the Open Cowork AI agent desktop app will be documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.0] - 2026-05-14
+
+### Added
+
+- 项目级长期记忆系统：记忆按 `project_path` 隔离，同一项目内跨 session 共享记忆
+- 模型提炼引擎（`memory-evaluation.ts`）：手动"提炼记忆"和 agent 主动 `save_knowledge` 统一走真实模型评估，输出 `create/update/ignore` 决策，支持本地去重、合并、数量限制和字段校验
+- 新增 agent 记忆读取工具：`query_knowledge`（按项目搜索）、`list_knowledge`（列出项目记忆）、`get_knowledge`（读取单条）、`delete_knowledge`（删除当前项目内指定记忆）
+- Agent prompt 自动注入项目记忆：每轮根据用户 prompt 检索 FTS5/关键词，注入最多 6 条正文 + 20 条索引标题
+- 明确的 memory 与 `search_history` 分工策略：memory 存长期压缩知识（架构决策、项目约定），`search_history` 查完整历史对话（临时过程、一次性 bug）
+- FTS5 安全降级：FTS5 不可用时自动回退 keyword 搜索
+
+### Changed
+
+- `database.ts` 新增 `knowledge` 表 `project_path` 列和 FTS5 全文检索表；包含旧数据回填迁移逻辑
+- `save_knowledge` 不再直接入库，先走记忆评估引擎
+- 自主保存（autoMemory）比手动保存更严格的触发门槛，只保存长期稳定、高价值信息
+- IPC memory handlers 全部改为按 `cwd/projectPath` 隔离
+- ContextPanel 记忆面板按当前项目路径展示不同记忆
+- `configStore` 补充 `autoMemory` 到 `DIRECT_READ_KEYS`
+- 旧数据通过 `session_id -> sessions.cwd` 自动回填项目路径
+
+### Release
+
+- Published Windows installer `Open-Cowork-3.4.0-win-x64.exe` with `.blockmap` and `latest.yml` for auto-update.
+- GitHub Release: https://github.com/SageFoundry/open-cowork/releases/tag/v3.4.0
+
 ## [3.3.9] - 2026-05-13
 
 ### Changed
@@ -265,7 +291,8 @@ First stable release of the 3.3.x series. Graduated from 9 beta releases with 30
 
 - Initial release of Open Cowork — open-source AI agent desktop app with one-click install for Windows and macOS
 
-[Unreleased]: https://github.com/SageFoundry/open-cowork/compare/v3.3.9...HEAD
+[Unreleased]: https://github.com/SageFoundry/open-cowork/compare/v3.4.0...HEAD
+[3.4.0]: https://github.com/SageFoundry/open-cowork/compare/v3.3.9...v3.4.0
 [3.3.9]: https://github.com/SageFoundry/open-cowork/compare/v3.3.8...v3.3.9
 [3.3.8]: https://github.com/SageFoundry/open-cowork/compare/v3.3.7...v3.3.8
 [3.3.3]: https://github.com/SageFoundry/open-cowork/compare/v3.3.2...v3.3.3
