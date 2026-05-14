@@ -169,6 +169,54 @@ function serializeStableHistoryTurn(entry: StableHistoryEntry): string {
   return `<turn role="${entry.role}">${escapeXmlText(entry.text)}</turn>`;
 }
 
+/**
+ * Convert Open Cowork Message[] to pi SDK AgentMessage[] format.
+ * Tool results are omitted — the SDK manages its own tool result flow.
+ */
+function convertToPiAgentMessages(messages: Message[]): import('@mariozechner/pi-ai').Message[] {
+  const result: import('@mariozechner/pi-ai').Message[] = [];
+  for (const msg of messages) {
+    if (msg.role === 'user') {
+      const content: (import('@mariozechner/pi-ai').TextContent | import('@mariozechner/pi-ai').ImageContent)[] = [];
+      for (const c of msg.content) {
+        if (c.type === 'text') {
+          content.push({ type: 'text' as const, text: c.text });
+        } else if (c.type === 'image' && c.source.type === 'base64') {
+          content.push({ type: 'image' as const, data: c.source.data, mimeType: c.source.media_type });
+        }
+      }
+      result.push({
+        role: 'user',
+        content,
+        timestamp: msg.timestamp ?? Date.now(),
+      });
+    } else if (msg.role === 'assistant') {
+      const content: import('@mariozechner/pi-ai').AssistantMessage['content'] = [];
+      for (const c of msg.content) {
+        if (c.type === 'text') {
+          content.push({ type: 'text' as const, text: c.text });
+        } else if (c.type === 'thinking') {
+          content.push({ type: 'thinking' as const, thinking: c.thinking, ...(c.thinkingSignature ? { thinkingSignature: c.thinkingSignature } : {}) });
+        } else if (c.type === 'tool_use') {
+          content.push({ type: 'toolCall' as const, id: c.id, name: c.name, arguments: c.input });
+        }
+      }
+      result.push({
+        role: 'assistant',
+        content,
+        api: '' as import('@mariozechner/pi-ai').Api,
+        provider: '' as import('@mariozechner/pi-ai').Provider,
+        model: '',
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: 'stop',
+        timestamp: msg.timestamp ?? Date.now(),
+      });
+    }
+    // toolResult messages are skipped — SDK manages its own tool result flow
+  }
+  return result;
+}
+
 function buildStableConversationHistoryPreamble(input: {
   messages: Message[];
   provider: string;
@@ -2660,6 +2708,92 @@ Tool routing:
         log('[ClaudeAgentRunner] Registered search_history custom tool');
       }
 
+      // Register memory tools: save_knowledge and delete_knowledge
+      // These allow the agent to manage durable cross-session memory.
+      {
+        const projectMemory = this.projectMemoryService;
+        const autoMemory = configStore.get('autoMemory');
+
+        const saveKnowledgeTool: ToolDefinition = {
+          name: 'save_knowledge',
+          label: 'Save Knowledge',
+          description:
+            'Save a durable knowledge entry to project memory. Knowledge entries persist across sessions and can be retrieved via semantic search. ' +
+            'Use this when the user explicitly says "remember this", or (if autoMemory is enabled) when you discover important information ' +
+            'such as: project architecture decisions, user preferences and workflow habits, key configuration/setup steps, reference links or documents, ' +
+            `critical constraints or conventions. Currently autoMemory is ${autoMemory ? 'enabled' : 'disabled'}. ` +
+            'Do NOT save trivial, temporary, or conversational content.',
+          parameters: Type.Object({
+            type: Type.String({
+              description: 'Knowledge type: fact, preference, decision, reference, project',
+            }),
+            title: Type.String({
+              description: 'Short descriptive title for the knowledge entry',
+            }),
+            content: Type.String({
+              description: 'Detailed content of the knowledge entry',
+            }),
+            importance: Type.Optional(
+              Type.Number({
+                description: 'Importance level 1-5 (default: 3). Use 4-5 for critical information.',
+              })
+            ),
+            tags: Type.Optional(
+              Type.String({
+                description: 'Optional comma-separated tags for categorization',
+              })
+            ),
+          }),
+          execute: async (
+            _toolCallId: string,
+            params: { type: string; title: string; content: string; importance?: number; tags?: string }
+          ) => {
+            const tags = params.tags
+              ? params.tags.split(',').map((t: string) => t.trim()).filter(Boolean)
+              : [];
+            const entry = projectMemory.saveKnowledge({
+              sessionId: session.id,
+              type: params.type as 'fact' | 'preference' | 'decision' | 'reference' | 'project',
+              title: params.title,
+              content: params.content,
+              importance: params.importance ?? 3,
+              source: 'auto',
+              tags,
+            });
+            return {
+              content: [{ type: 'text' as const, text: `Knowledge saved: "${entry.title}" (id: ${entry.id}, type: ${entry.type}, importance: ${entry.importance})` }],
+              details: undefined as unknown,
+            };
+          },
+        };
+        baseCustomTools.push(saveKnowledgeTool);
+
+        const deleteKnowledgeTool: ToolDefinition = {
+          name: 'delete_knowledge',
+          label: 'Delete Knowledge',
+          description:
+            'Delete a knowledge entry by its ID. Use this when the user asks to forget or remove specific knowledge.',
+          parameters: Type.Object({
+            id: Type.String({
+              description: 'The ID of the knowledge entry to delete',
+            }),
+          }),
+          execute: async (
+            _toolCallId: string,
+            params: { id: string }
+          ) => {
+            projectMemory.deleteKnowledge(params.id);
+            return {
+              content: [{ type: 'text' as const, text: `Knowledge entry deleted: ${params.id}` }],
+              details: undefined as unknown,
+            };
+          },
+        };
+        baseCustomTools.push(deleteKnowledgeTool);
+
+        log('[ClaudeAgentRunner] Registered save_knowledge and delete_knowledge custom tools');
+      }
+
       // Enrich process.env.PATH for build mode — ensures Skill commands (python3, node)
       // executed via Pi SDK's Bash tool can find bundled and user-installed executables.
       await enrichProcessPathForBuild();
@@ -2973,6 +3107,23 @@ Tool routing:
           );
           piSession.setThinkingLevel(thinkingLevel);
           cachedSession.thinkingLevel = thinkingLevel;
+        }
+
+        // 🔑 Replace SDK agent internal messages with the compressed version from session-manager.
+        // Without this, SDK accumulates ALL previous turns' messages in state.messages and sends
+        // them to the model, causing context ballooning (~400K → 780K+). By injecting the
+        // budgeted/compacted messages here, the SDK only sends what we control.
+        if (existingMessages.length > 0) {
+          const agent = piSession.agent;
+          const compressedMessages = convertToPiAgentMessages(existingMessages);
+          agent.replaceMessages(compressedMessages);
+          logCtx(
+            '[ClaudeAgentRunner] Replaced SDK agent messages with compressed version:',
+            compressedMessages.length,
+            'messages (from',
+            existingMessages.length,
+            'existing)'
+          );
         }
 
         logCtx('[ClaudeAgentRunner] Reusing cached pi session for:', session.id);
@@ -3770,6 +3921,19 @@ Tool routing:
   cancel(sessionId: string): void {
     const controller = this.activeControllers.get(sessionId);
     if (controller) controller.abort();
+
+    // Also abort the pi-coding-agent session to cancel in-flight HTTP requests.
+    // The controller abort() alone only stops processing stream events on the
+    // renderer side, but the SDK's underlying fetch/HTTP call continues running.
+    // piSession.abort() aborts the agent's internal operation (network I/O, tool
+    // execution, etc.) and waits for it to become idle. We call it fire-and-forget
+    // because SessionManager.stopSession() is synchronous.
+    const cached = this.piSessions.get(sessionId);
+    if (cached) {
+      cached.session.abort().catch((err) => {
+        logWarn('[ClaudeAgentRunner] Error aborting pi session:', err);
+      });
+    }
   }
 
   private sendTraceStep(sessionId: string, step: TraceStep): void {
@@ -3794,4 +3958,5 @@ Tool routing:
   private sendPartial(sessionId: string, delta: string): void {
     this.sendToRenderer({ type: 'stream.partial', payload: { sessionId, delta } });
   }
+
 }

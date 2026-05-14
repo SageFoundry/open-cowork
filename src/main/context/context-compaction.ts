@@ -9,7 +9,16 @@ import type {
 } from '../../renderer/types';
 import { estimateMessagesTokens, getStrategyThresholds } from './context-budget';
 
-const COMPACTABLE_TOOL_NAMES = new Set(['read', 'grep', 'glob', 'bash', 'pwsh', 'http', 'edit', 'write']);
+const COMPACTABLE_TOOL_NAMES = new Set([
+  'read',
+  'grep',
+  'glob',
+  'bash',
+  'pwsh',
+  'http',
+  'edit',
+  'write',
+]);
 
 export interface MicroCompactionResult {
   messages: Message[];
@@ -182,8 +191,27 @@ export function rebuildRuntimeMessagesFromSnapshot(
 
   const summaryMessage = createBoundarySummaryMessage(sessionId, snapshot.summary_text);
   summaryMessage.timestamp = snapshot.created_at;
-  const newerMessages = transcriptMessages.filter((message) => message.timestamp > snapshot.created_at);
+  const newerMessages = transcriptMessages.filter(
+    (message) => message.timestamp > snapshot.created_at
+  );
   return [summaryMessage, ...preservedTail, ...newerMessages];
+}
+
+export function appendTranscriptMessagesSince(
+  runtimeMessages: Message[],
+  transcriptMessages: Message[],
+  sinceTimestamp: number
+): Message[] {
+  const runtimeMessageIds = new Set(runtimeMessages.map((message) => message.id));
+  const appendedMessages = transcriptMessages.filter(
+    (message) => !runtimeMessageIds.has(message.id) && message.timestamp >= sinceTimestamp
+  );
+
+  if (appendedMessages.length === 0) {
+    return runtimeMessages;
+  }
+
+  return [...runtimeMessages, ...appendedMessages];
 }
 
 export function buildCompactionInfo(input: {

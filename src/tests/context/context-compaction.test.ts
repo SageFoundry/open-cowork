@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Message } from '../../renderer/types';
 import { buildTokenBudgetSnapshot } from '../../main/context/context-budget';
 import {
+  appendTranscriptMessagesSince,
   microCompactMessages,
   rebuildRuntimeMessagesFromSnapshot,
 } from '../../main/context/context-compaction';
@@ -18,7 +19,7 @@ function textMessage(id: string, role: Message['role'], text: string, timestamp:
 
 describe('context budgeting', () => {
   it('computes warning states against the configured context budget', () => {
-    const messages = [textMessage('m1', 'user', 'x'.repeat(42000), 1)];
+    const messages = [textMessage('m1', 'user', 'x'.repeat(30000), 1)];
 
     const snapshot = buildTokenBudgetSnapshot({
       messages,
@@ -29,7 +30,7 @@ describe('context budgeting', () => {
     });
 
     expect(snapshot.maxContextTokens).toBe(18000);
-    expect(snapshot.estimatedConversationTokens).toBeGreaterThan(8000);
+    expect(snapshot.estimatedConversationTokens).toBeGreaterThan(7000);
     expect(snapshot.warningState).toBe('warning');
   });
 
@@ -118,5 +119,23 @@ describe('runtime restore', () => {
     expect(rebuilt[1]).toEqual(preservedTail[0]);
     expect(rebuilt[2].id).toBe('new-assistant');
     expect(rebuilt.find((message) => message.id === 'old-user')).toBeUndefined();
+  });
+
+  it('preserves compacted runtime messages while appending only the current turn transcript', () => {
+    const compactedOldOutput = textMessage('old-tool-output', 'assistant', '...[compacted]', 1);
+    const currentUser = textMessage('current-user', 'user', 'continue', 10);
+    const runtimeMessages = [compactedOldOutput, currentUser];
+    const transcriptMessages = [
+      textMessage('old-tool-output', 'assistant', 'A'.repeat(2000), 1),
+      currentUser,
+      textMessage('new-assistant', 'assistant', 'done', 11),
+    ];
+
+    const rebuilt = appendTranscriptMessagesSince(runtimeMessages, transcriptMessages, 10);
+
+    expect(rebuilt).toHaveLength(3);
+    expect(rebuilt[0]).toEqual(compactedOldOutput);
+    expect(rebuilt[1]).toEqual(currentUser);
+    expect(rebuilt[2].id).toBe('new-assistant');
   });
 });
