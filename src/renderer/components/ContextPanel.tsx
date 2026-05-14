@@ -1,17 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAppStore } from '../store';
-import { resolveArtifactPath } from '../utils/artifact-path';
 import { getProjectIdForCwd } from '../utils/projects';
-import {
-  extractFilePathFromToolInput,
-  extractFilePathFromToolOutput,
-} from '../utils/tool-output-path';
-import {
-  getArtifactLabel,
-  getArtifactIconComponent,
-  getArtifactSteps,
-} from '../utils/artifact-steps';
 import { useIPC } from '../hooks/useIPC';
 import {
   ChevronDown,
@@ -19,16 +9,8 @@ import {
   ChevronLeft,
   ChevronRight,
   FileText,
-  FileSpreadsheet,
-  FilePieChart,
-  FileCode2,
-  FileArchive,
-  FileAudio2,
-  FileVideo,
-  Image as ImageIcon,
   FolderOpen,
   FolderSync,
-  File,
   Check,
   Loader2,
   Plug,
@@ -36,12 +18,26 @@ import {
   MessageSquare,
   Cpu,
   Copy,
-  Layers,
   Terminal,
   Square,
   ExternalLink,
+  Brain,
+  BookOpen,
+  Star,
+  Trash2,
+  Sparkles,
 } from 'lucide-react';
 import type { TraceStep, MCPServerInfo, BackgroundTask } from '../types';
+
+interface MemoryListItem {
+  id: string;
+  type: string;
+  title: string;
+  importance: number;
+  tags: string[];
+  createdAt: number;
+  updatedAt: number;
+}
 
 const EMPTY_STEPS: TraceStep[] = [];
 
@@ -58,7 +54,7 @@ export function ContextPanel() {
   const workingDir = useAppStore((s) => s.workingDir);
   const setGlobalNotice = useAppStore((s) => s.setGlobalNotice);
   const { getMCPServers, changeWorkingDir, compactSession, getBackgroundTaskLogTail, stopBackgroundTask } = useIPC();
-  const [artifactsOpen, setArtifactsOpen] = useState(true);
+  const [memoryOpen, setMemoryOpen] = useState(true);
   const [backgroundTasksOpen, setBackgroundTasksOpen] = useState(true);
   const [expandedConnector, setExpandedConnector] = useState<string | null>(null);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
@@ -66,13 +62,12 @@ export function ContextPanel() {
   const [mcpServers, setMcpServers] = useState<MCPServerInfo[]>([]);
   const [copiedPath, setCopiedPath] = useState(false);
   const [isChangingDir, setIsChangingDir] = useState(false);
-  const [recentWorkspaceFiles, setRecentWorkspaceFiles] = useState<
-    Array<{
-      path: string;
-      modifiedAt: number;
-      size: number;
-    }>
-  >([]);
+  const [memoryList, setMemoryList] = useState<MemoryListItem[]>([]);
+  const [memoryDetail, setMemoryDetail] = useState<{ id: string; title: string; content: string; type: string; importance: number; tags: string[]; createdAt: number; updatedAt: number; sessionId: string | null; source: string } | null>(null);
+  const [memoryLoadError, setMemoryLoadError] = useState<string | null>(null);
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [extractResult, setExtractResult] = useState<string | null>(null);
+  const [autoMemory, setAutoMemory] = useState(false);
   const ss = activeSessionId ? sessionStates[activeSessionId] : undefined;
   const steps = ss?.traceSteps ?? EMPTY_STEPS;
   const tokenBudget = ss?.tokenBudget ?? null;
@@ -141,9 +136,6 @@ export function ContextPanel() {
   const activeSession = activeSessionId ? sessions.find((s) => s.id === activeSessionId) : null;
   const currentWorkingDir = activeSession?.cwd || workingDir;
   const activeProjectId = getProjectIdForCwd(currentWorkingDir);
-  const { displayArtifactSteps } = getArtifactSteps(steps);
-  const canShowItemInFolder =
-    typeof window !== 'undefined' && !!window.electronAPI?.showItemInFolder;
 
   // Session info computations
   const messages = useMemo(
@@ -184,10 +176,6 @@ export function ContextPanel() {
     };
   }, [tokenBudget]);
 
-  const completedStepCount = useMemo(
-    () => steps.reduce((n, s) => n + (s.status === 'completed' ? 1 : 0), 0),
-    [steps]
-  );
   const isActiveBackgroundTask = useCallback(
     (task: BackgroundTask) =>
       task.status === 'queued' ||
@@ -213,93 +201,146 @@ export function ContextPanel() {
     [visibleBackgroundTasks]
   );
 
+  // Load memory list
   useEffect(() => {
-    if (contextPanelCollapsed) {
+    if (contextPanelCollapsed || typeof window === 'undefined') {
       return;
     }
-    if (
-      typeof window === 'undefined' ||
-      !window.electronAPI?.artifacts?.listRecentFiles ||
-      !currentWorkingDir ||
-      !activeSession?.createdAt
-    ) {
-      setRecentWorkspaceFiles([]);
+
+    if (!window.electronAPI?.memory) {
+      setMemoryLoadError(t('context.memoryUnavailable'));
+      setMemoryList([]);
       return;
     }
 
     let cancelled = false;
-    const timer = setTimeout(async () => {
+    const load = async () => {
       try {
-        const files = await window.electronAPI.artifacts.listRecentFiles(
-          currentWorkingDir,
-          activeSession.createdAt,
-          50
-        );
+        const list = await window.electronAPI.memory.list();
         if (!cancelled) {
-          setRecentWorkspaceFiles(files || []);
+          setMemoryLoadError(null);
+          setMemoryList(list);
         }
       } catch (error) {
         if (!cancelled) {
-          console.error('Failed to load recent workspace files:', error);
-          setRecentWorkspaceFiles([]);
+          console.error('Failed to load memory list:', error);
+          setMemoryLoadError(t('context.memoryLoadFailed'));
+          setMemoryList([]);
         }
       }
-    }, 500);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
     };
-  }, [
-    activeSession?.createdAt,
-    activeSessionId,
-    steps.length,
-    completedStepCount,
-    contextPanelCollapsed,
-    currentWorkingDir,
-  ]);
+    load();
 
-  const displayArtifacts = useMemo(() => {
-    const seenPaths = new Set<string>();
-    const items: Array<{ label: string; path: string }> = [];
+    return () => { cancelled = true; };
+  }, [activeSessionId, contextPanelCollapsed, steps.length, t]);
 
-    for (const step of displayArtifactSteps) {
-      const fallbackPath =
-        extractFilePathFromToolOutput(step.toolOutput) ||
-        extractFilePathFromToolInput(step.toolInput);
-      if (!fallbackPath) {
-        continue;
-      }
+  // Load autoMemory state from config
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.electronAPI?.config) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const config = await window.electronAPI.config.get();
+        if (!cancelled) {
+          setAutoMemory(Boolean(config.autoMemory));
+        }
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
-      const resolvedPath = resolveArtifactPath(fallbackPath, currentWorkingDir);
-      const key = resolvedPath.trim();
-      if (!key || seenPaths.has(key)) {
-        continue;
-      }
-
-      seenPaths.add(key);
-      items.push({
-        label: getArtifactLabel(fallbackPath),
-        path: resolvedPath,
+  const handleToggleAutoMemory = async () => {
+    if (!window.electronAPI?.config) {
+      setGlobalNotice({
+        id: `memory-config-unavailable-${Date.now()}`,
+        type: 'warning',
+        message: t('context.memoryUnavailable'),
       });
+      return;
     }
 
-    for (const file of recentWorkspaceFiles) {
-      const resolvedPath = resolveArtifactPath(file.path, currentWorkingDir);
-      const key = resolvedPath.trim();
-      if (!key || seenPaths.has(key)) {
-        continue;
+    const next = !autoMemory;
+    setAutoMemory(next);
+    try {
+      const result = await window.electronAPI.config.save({ autoMemory: next });
+      if (!result.success) {
+        throw new Error('Config save failed');
       }
-
-      seenPaths.add(key);
-      items.push({
-        label: getArtifactLabel(file.path),
-        path: resolvedPath,
+    } catch (error) {
+      console.error('Failed to save autoMemory:', error);
+      setAutoMemory(!next); // revert
+      setGlobalNotice({
+        id: `memory-config-save-failed-${Date.now()}`,
+        type: 'error',
+        message: t('context.memorySaveFailed'),
       });
     }
+  };
 
-    return items;
-  }, [currentWorkingDir, displayArtifactSteps, recentWorkspaceFiles]);
+  const handleExtractMemory = async () => {
+    if (!activeSessionId || isExtracting) return;
+    if (!window.electronAPI?.memory) {
+      setExtractResult(t('context.memoryUnavailable'));
+      setTimeout(() => setExtractResult(null), 4000);
+      return;
+    }
+
+    setIsExtracting(true);
+    setExtractResult(null);
+    try {
+      const result = await window.electronAPI.memory.extract(activeSessionId);
+      // Refresh memory list
+      const list = await window.electronAPI.memory.list();
+      setMemoryLoadError(null);
+      setMemoryList(list);
+      setExtractResult(result.entries > 0 ? t('context.extractedCount', { count: result.entries }) : t('context.extractedNone'));
+    } catch (error) {
+      console.error('Failed to extract memory:', error);
+      setExtractResult(t('context.extractFailed'));
+    } finally {
+      setIsExtracting(false);
+      // Auto-dismiss after 4 seconds
+      setTimeout(() => setExtractResult(null), 4000);
+    }
+  };
+
+  const handleDeleteMemory = async (id: string) => {
+    if (!window.electronAPI?.memory) {
+      setGlobalNotice({
+        id: `memory-unavailable-${Date.now()}`,
+        type: 'warning',
+        message: t('context.memoryUnavailable'),
+      });
+      return;
+    }
+
+    try {
+      await window.electronAPI.memory.delete(id);
+      setMemoryList((prev) => prev.filter((m) => m.id !== id));
+    } catch (error) {
+      console.error('Failed to delete memory:', error);
+      setGlobalNotice({
+        id: `memory-delete-failed-${Date.now()}`,
+        type: 'error',
+        message: t('context.memoryDeleteFailed'),
+      });
+    }
+  };
+
+  const handleViewMemoryDetail = async (id: string) => {
+    if (!window.electronAPI?.memory) {
+      setMemoryLoadError(t('context.memoryUnavailable'));
+      return;
+    }
+
+    try {
+      const entry = await window.electronAPI.memory.get(id);
+      setMemoryDetail(entry);
+    } catch (error) {
+      console.error('Failed to load memory detail:', error);
+      setMemoryLoadError(t('context.memoryLoadFailed'));
+    }
+  };
 
   useEffect(() => {
     if (contextPanelCollapsed) {
@@ -626,79 +667,99 @@ export function ContextPanel() {
         )}
       </div>
 
-      {/* Artifacts Section */}
+      {/* Memory Section — replaces old Artifacts */}
       <div className="border-b border-border-muted">
         <button
-          onClick={() => setArtifactsOpen(!artifactsOpen)}
+          onClick={() => setMemoryOpen(!memoryOpen)}
           className="w-full px-4 py-2.5 flex items-center justify-between hover:bg-surface-hover transition-colors"
         >
           <span className="text-xs font-medium text-text-muted uppercase tracking-wider">
-            {t('context.artifacts')}
+            🧠 {t('context.memory')}
           </span>
-          {artifactsOpen ? (
+          {memoryOpen ? (
             <ChevronUp className="w-3.5 h-3.5 text-text-muted" />
           ) : (
             <ChevronDown className="w-3.5 h-3.5 text-text-muted" />
           )}
         </button>
 
-        {artifactsOpen && (
-          <div className="pb-2 max-h-64 overflow-y-auto">
-            {displayArtifacts.length === 0 ? (
-              <div className="flex items-center gap-2 px-4 py-2 text-xs text-text-muted">
-                <Layers className="w-3.5 h-3.5 shrink-0" />
-                <span>{t('context.noArtifactsYet')}</span>
+        {memoryOpen && (
+          <div className="px-4 pb-2 space-y-2">
+            {/* Auto Memory Toggle */}
+            <div className="flex items-center justify-between py-1">
+              <span className="text-xs text-text-secondary">{t('context.autoMemory')}</span>
+              <button
+                onClick={handleToggleAutoMemory}
+                className={`relative w-8 h-4 rounded-full transition-colors ${autoMemory ? 'bg-accent-primary' : 'bg-border-muted'}`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white transition-transform ${autoMemory ? 'translate-x-4' : ''}`}
+                />
+              </button>
+            </div>
+
+            {/* Extract Memory Button */}
+            <button
+              onClick={handleExtractMemory}
+              disabled={isExtracting || !activeSessionId}
+              className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs rounded-md bg-surface-hover hover:bg-border-muted transition-colors disabled:opacity-50"
+            >
+              {isExtracting ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="w-3.5 h-3.5" />
+              )}
+              <span>{t('context.extractMemory')}</span>
+            </button>
+
+            {/* Extract Result Feedback */}
+            {extractResult && (
+              <div className="text-xs text-center px-2 py-1 rounded bg-surface-hover text-text-secondary">
+                {extractResult}
+              </div>
+            )}
+
+            {/* Memory List */}
+            {memoryLoadError ? (
+              <div className="flex items-center gap-2 py-2 text-xs text-red-600 dark:text-red-400">
+                <BookOpen className="w-3.5 h-3.5 shrink-0" />
+                <span>{memoryLoadError}</span>
+              </div>
+            ) : memoryList.length === 0 ? (
+              <div className="flex items-center gap-2 py-2 text-xs text-text-muted">
+                <BookOpen className="w-3.5 h-3.5 shrink-0" />
+                <span>{t('context.noMemoryYet')}</span>
               </div>
             ) : (
-              <div>
-                {displayArtifacts.map((artifact, index) => {
-                  const label = artifact.label || t('context.fileCreated');
-                  const artifactPath = artifact.path;
-                  const canClick = Boolean(artifactPath && canShowItemInFolder);
-                  const iconComponent = getArtifactIconComponent(label);
-                  const IconComponent =
-                    iconComponent === 'presentation'
-                      ? FilePieChart
-                      : iconComponent === 'table'
-                        ? FileSpreadsheet
-                        : iconComponent === 'document'
-                          ? FileText
-                          : iconComponent === 'code'
-                            ? FileCode2
-                            : iconComponent === 'image'
-                              ? ImageIcon
-                              : iconComponent === 'audio'
-                                ? FileAudio2
-                                : iconComponent === 'video'
-                                  ? FileVideo
-                                  : iconComponent === 'archive'
-                                    ? FileArchive
-                                    : iconComponent === 'text'
-                                      ? File
-                                      : File;
-
+              <div className="max-h-64 overflow-y-auto space-y-1">
+                {memoryList.map((item) => {
+                  const TypeIcon = item.type === 'preference' ? Star : item.type === 'decision' ? Brain : BookOpen;
                   return (
                     <div
-                      key={artifact.path || artifact.label || `artifact-${index}`}
-                      className={`flex items-center gap-2 px-4 py-1.5 transition-colors ${canClick ? 'cursor-pointer hover:bg-surface-hover' : ''}`}
-                      onClick={async () => {
-                        if (!canClick) return;
-                        const revealed = await window.electronAPI.showItemInFolder(
-                          artifactPath,
-                          currentWorkingDir ?? undefined
-                        );
-                        if (!revealed) {
-                          setGlobalNotice({
-                            id: `artifact-reveal-failed-${Date.now()}`,
-                            type: 'warning',
-                            message: t('context.revealFailed'),
-                          });
-                        }
-                      }}
-                      title={artifactPath || undefined}
+                      key={item.id}
+                      className="flex items-start gap-2 px-2 py-1.5 rounded-md hover:bg-surface-hover cursor-pointer transition-colors group"
+                      onClick={() => handleViewMemoryDetail(item.id)}
                     >
-                      <IconComponent className="w-3.5 h-3.5 text-text-muted shrink-0" />
-                      <span className="text-xs text-text-primary truncate">{label}</span>
+                      <TypeIcon className="w-3.5 h-3.5 text-text-muted shrink-0 mt-0.5" />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs text-text-primary truncate">{item.title}</span>
+                          <span className={`text-[10px] px-1 py-0.5 rounded shrink-0 ${
+                            item.importance >= 4 ? 'bg-yellow-500/10 text-yellow-600' : 'bg-surface-hover text-text-muted'
+                          }`}>
+                            {item.type}
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-text-muted mt-0.5">
+                          {new Date(item.createdAt).toLocaleDateString()}
+                        </div>
+                      </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleDeleteMemory(item.id); }}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 hover:bg-red-500/10 rounded"
+                      >
+                        <Trash2 className="w-3 h-3 text-text-muted hover:text-red-500" />
+                      </button>
                     </div>
                   );
                 })}
@@ -707,6 +768,46 @@ export function ContextPanel() {
           </div>
         )}
       </div>
+
+      {/* Memory Detail Modal */}
+      {memoryDetail && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => setMemoryDetail(null)}
+        >
+          <div
+            className="bg-surface rounded-xl shadow-xl max-w-lg w-full mx-4 max-h-[80vh] overflow-y-auto p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between mb-3">
+              <div>
+                <h3 className="text-sm font-semibold text-text-primary">{memoryDetail.title}</h3>
+                <span className="text-[11px] text-text-muted">
+                  {memoryDetail.type} · {t('context.importance')}: {memoryDetail.importance} · {new Date(memoryDetail.createdAt).toLocaleString()}
+                </span>
+              </div>
+              <button
+                onClick={() => setMemoryDetail(null)}
+                className="p-1 hover:bg-surface-hover rounded"
+              >
+                <ChevronDown className="w-4 h-4 text-text-muted" />
+              </button>
+            </div>
+            <div className="text-xs text-text-secondary leading-relaxed whitespace-pre-wrap">
+              {memoryDetail.content}
+            </div>
+            {memoryDetail.tags.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-3">
+                {memoryDetail.tags.map((tag) => (
+                  <span key={tag} className="text-[10px] px-1.5 py-0.5 bg-surface-hover text-text-muted rounded">
+                    #{tag}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Working Directory */}
       <div className="border-b border-border-muted">

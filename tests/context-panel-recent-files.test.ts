@@ -4,16 +4,25 @@ import fs from 'node:fs';
 
 const contextPanelPath = path.resolve(process.cwd(), 'src/renderer/components/ContextPanel.tsx');
 
-describe('ContextPanel recent workspace files integration', () => {
-  it('loads recent workspace files through electron artifacts API', () => {
+describe('ContextPanel memory module integration', () => {
+  it('loads memory list through electron memory API', () => {
     const source = fs.readFileSync(contextPanelPath, 'utf8');
-    expect(source).toContain('window.electronAPI?.artifacts?.listRecentFiles');
-    expect(source).toContain('setRecentWorkspaceFiles');
+    expect(source).toContain('window.electronAPI.memory.list');
+    expect(source).toContain('setMemoryList');
   });
 
-  it('merges recent workspace files into the displayed artifacts list', () => {
+  it('renders memory list with type icons and delete button', () => {
     const source = fs.readFileSync(contextPanelPath, 'utf8');
-    expect(source).toContain('const displayArtifacts = useMemo(() => {');
-    expect(source).toContain('for (const file of recentWorkspaceFiles)');
+    expect(source).toContain('TypeIcon');
+    expect(source).toContain('Trash2');
+    expect(source).toContain('handleDeleteMemory');
+  });
+
+  it('supports auto memory toggle and extract memory button', () => {
+    const source = fs.readFileSync(contextPanelPath, 'utf8');
+    expect(source).toContain('handleToggleAutoMemory');
+    expect(source).toContain('autoMemory');
+    expect(source).toContain('handleExtractMemory');
+    expect(source).toContain('extractMemory');
   });
 });
