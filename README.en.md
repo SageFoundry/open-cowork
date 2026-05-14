@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="resources/logo.png" alt="Open Cowork Logo" width="200" />
+  <img src="resources/logo.png" alt="Open Cowork Logo" width="90%" />
 </p>
 
 <h1 align="center">Open Cowork</h1>
@@ -28,7 +28,7 @@ Open Cowork wraps Claude Code, OpenAI, Gemini, DeepSeek, and other AI models in 
 ## Preview
 
 <p align="center">
-  <img src="resources/preview.png" alt="Open Cowork Preview" width="100%" />
+  <img src="resources/preview.png" alt="Open Cowork Preview" width="90%" />
 </p>
 
 ---
