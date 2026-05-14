@@ -134,6 +134,9 @@ export interface AppConfig {
   // Enable thinking mode (show thinking steps)
   enableThinking: boolean;
 
+  // Auto memory: when enabled, the agent may proactively save knowledge
+  autoMemory: boolean;
+
   // UI language preference (controls thinking language)
   language: 'zh' | 'en';
 
@@ -248,6 +251,7 @@ const defaultConfig: AppConfig = {
   maxContextTokens: 180000,
   sandboxEnabled: false,
   enableThinking: false,
+  autoMemory: false,
   language: 'zh',
   isConfigured: false,
 };
@@ -947,6 +951,7 @@ export class ConfigStore {
           : defaultConfig.maxContextTokens,
       sandboxEnabled: toBoolean(raw.sandboxEnabled, defaultConfig.sandboxEnabled),
       enableThinking: projected.enableThinking,
+      autoMemory: toBoolean(raw.autoMemory, defaultConfig.autoMemory),
       language:
         raw.language === 'zh' || raw.language === 'en' ? raw.language : defaultConfig.language,
       isConfigured: toBoolean(raw.isConfigured, defaultConfig.isConfigured),
@@ -1385,6 +1390,8 @@ export class ConfigStore {
           : current.maxContextTokens,
       sandboxEnabled:
         updates.sandboxEnabled !== undefined ? updates.sandboxEnabled : current.sandboxEnabled,
+      autoMemory:
+        updates.autoMemory !== undefined ? updates.autoMemory : current.autoMemory,
       isConfigured:
         updates.isConfigured !== undefined ? updates.isConfigured : current.isConfigured,
     });
