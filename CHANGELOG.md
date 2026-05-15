@@ -5,6 +5,22 @@ All notable changes to the Open Cowork AI agent desktop app will be documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.1] - 2026-05-15
+
+### Changed
+
+- 项目 Logo 全面更换为卡通奶牛形象：侧边栏、欢迎页、favicon、应用图标、系统托盘图标全部替换
+- 新增 `scripts/generate-cow-logo.py`：从 `resources/cow.png` 一键生成全套图标资源（icon.png/ico/icns、logo、favicon、tray-icon）
+
+### Fixed
+
+- 修复 Windows 安装包图标显示为 Electron 默认图标的问题：手动构建多尺寸 ICO（16/24/32/48/64/128/256），确保 Windows 安装程序和任务栏正确显示奶牛图标
+
+### Release
+
+- Published Windows installer `Open-Cowork-3.5.1-win-x64.exe` with `.blockmap` and `latest.yml` for auto-update.
+- GitHub Release: https://github.com/SageFoundry/open-cowork/releases/tag/v3.5.1
+
 ## [3.5.0] - 2026-05-15
 
 ### Added
