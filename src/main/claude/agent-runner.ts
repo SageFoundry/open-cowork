@@ -99,6 +99,11 @@ import {
   syncConfiguredSkillsToRuntimeDir,
   syncUserSkillsToDir,
 } from '../skills/skill-paths';
+import {
+  isPlanModeToolAllowed,
+  getPlanModeScratchDir,
+  type PlanModeToolDecision,
+} from './plan-mode-guard';
 
 // Virtual workspace path shown to the model (hides real sandbox path)
 const VIRTUAL_WORKSPACE_PATH = '/workspace';
@@ -132,6 +137,28 @@ function escapeXmlText(text: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
+}
+
+function buildPlanModeRuntimePrompt(sessionId: string, cwd: string): string {
+  const scratchDir = getPlanModeScratchDir(cwd, sessionId);
+  return `<current_mode>
+CURRENT MODE: PLAN MODE
+
+You are planning, not implementing. Research the codebase, ask clarifying questions when needed, and produce an actionable plan.
+
+Allowed during plan mode:
+- Read and search project files.
+- Run read-only inspection commands and tests/typechecks for research.
+- Write temporary research scripts or scratch notes only under: ${scratchDir}
+- Use HTTP GET/HEAD for research.
+
+Not allowed during plan mode:
+- Modify source files, project configuration, git state, dependencies, generated project files, or persistent memory.
+- Start long-running background processes.
+- Use write-capable MCP tools.
+
+The application enforces this at tool execution time. If a tool is denied, switch to a read-only command or the scratch directory above.
+</current_mode>`;
 }
 
 function extractStableHistoryEntries(messages: Message[]): StableHistoryEntry[] {
@@ -531,6 +558,12 @@ async function enrichProcessPathForBuild(): Promise<void> {
  * Bridge MCP tools from MCPManager into pi-coding-agent ToolDefinition[] format.
  * Each MCP tool becomes a customTool whose execute() delegates to mcpManager.callTool().
  */
+type PlanModeGuardedTool = ToolDefinition & {
+  openCoworkPlanMode?: {
+    mcpReadOnlyHint?: boolean;
+  };
+};
+
 function buildMcpCustomTools(mcpManager: MCPManager): ToolDefinition[] {
   const mcpTools = mcpManager.getTools();
   return mcpTools.map((mcpTool) => {
@@ -539,11 +572,14 @@ function buildMcpCustomTools(mcpManager: MCPManager): ToolDefinition[] {
       mcpTool.inputSchema as Record<string, unknown>
     );
 
-    const toolDef: ToolDefinition<TSchema, unknown> = {
+    const toolDef: PlanModeGuardedTool = {
       name: mcpTool.name,
       label: mcpTool.name.replace(/^mcp__/, '').replace(/__/g, ' → '),
       description: mcpTool.description || `MCP tool from ${mcpTool.serverName}`,
       parameters,
+      openCoworkPlanMode: {
+        mcpReadOnlyHint: mcpTool.annotations?.readOnlyHint === true,
+      },
       async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
         try {
           const result = await mcpManager.callTool(mcpTool.name, params as Record<string, unknown>);
@@ -799,6 +835,7 @@ interface AgentRunnerOptions {
     keywords: string[],
     maxResults?: number
   ) => HistorySearchResult[];
+  getSessionPlanMode?: (sessionId: string) => boolean;
 }
 
 interface CachedPiSession {
@@ -830,6 +867,7 @@ export class ClaudeAgentRunner {
     keywords: string[],
     maxResults?: number
   ) => HistorySearchResult[];
+  private getSessionPlanMode?: (sessionId: string) => boolean;
   private pathResolver: PathResolver;
   private mcpManager?: MCPManager;
   // @ts-expect-error stored for future plugin support
@@ -1007,6 +1045,7 @@ ${hints.join('\n')}
     this.saveMessage = options.saveMessage;
     this.requestSudoPassword = options.requestSudoPassword;
     this.searchSessionMessages = options.searchSessionMessages;
+    this.getSessionPlanMode = options.getSessionPlanMode;
     this.pathResolver = pathResolver;
     this.mcpManager = mcpManager;
     this._pluginRuntimeService = pluginRuntimeService;
@@ -1138,6 +1177,58 @@ ${hints.join('\n')}
     ]
       .filter(Boolean)
       .join('\n\n');
+  }
+
+  private isSessionInPlanMode(sessionId: string): boolean {
+    return this.getSessionPlanMode?.(sessionId) ?? false;
+  }
+
+  private static planModeDeniedToolResult(decision: PlanModeToolDecision) {
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: decision.reason || 'Plan mode is active. This tool call is not allowed.',
+        },
+      ],
+      details: undefined as unknown,
+    };
+  }
+
+  private wrapToolsWithPlanModeGuard(
+    tools: ToolDefinition[],
+    sessionId: string,
+    effectiveCwd: string
+  ): ToolDefinition[] {
+    return tools.map((tool) => {
+      const originalExecute = tool.execute;
+      const guardMetadata = (tool as PlanModeGuardedTool).openCoworkPlanMode;
+      return {
+        ...tool,
+        execute: async (
+          toolCallId: string,
+          params: unknown,
+          signal: AbortSignal | undefined,
+          onUpdate: ((update: unknown) => void) | undefined,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ctx: any
+        ) => {
+          const decision = isPlanModeToolAllowed({
+            toolName: tool.name,
+            params,
+            cwd: effectiveCwd,
+            sessionId,
+            getPlanMode: (id) => this.isSessionInPlanMode(id),
+            mcpReadOnlyHint: guardMetadata?.mcpReadOnlyHint,
+          });
+          if (!decision.allowed) {
+            logCtx('[PlanModeGuard] Tool blocked:', tool.name, decision.reason || '');
+            return ClaudeAgentRunner.planModeDeniedToolResult(decision);
+          }
+          return originalExecute(toolCallId, params, signal, onUpdate, ctx);
+        },
+      } as ToolDefinition;
+    });
   }
 
   private buildBackgroundTaskTool(
@@ -2349,7 +2440,6 @@ ${hints.join('\n')}
         this.piSessions.delete(session.id);
         cachedSession = undefined;
       }
-
       let contextualPrompt = prompt;
       let historyPreamble = '';
       let historyMessagesAvailable = 0;
@@ -2399,6 +2489,10 @@ ${hints.join('\n')}
       } else {
         // Reusing session — SDK already has the full conversation context
         logCtx('[ClaudeAgentRunner] Reusing existing SDK session for:', session.id);
+      }
+
+      if (session.planMode) {
+        contextualPrompt = `${buildPlanModeRuntimePrompt(session.id, effectiveCwd)}\n\n${contextualPrompt}`;
       }
 
       logTiming('before building MCP servers config', runStartTime);
@@ -2571,10 +2665,24 @@ CRITICAL: All visible thinking (reasoning shown to the user) MUST be written in 
 - Do NOT default to English for thinking when the language is set to Chinese.
 - This is a hard configuration setting — do not override it based on user message content.
 </thinking_language>`;
+      const planModeCapabilitiesPrompt = `<plan_mode_capabilities>
+Open Cowork supports a Plan Mode. This stable section describes the mode; the current turn will explicitly say whether Plan Mode is active.
+
+When the current turn says Plan Mode is active:
+- Your job is to research, analyze, ask clarifying questions, and produce an implementation plan. Do not implement the change.
+- You may read/search project files and run read-only inspection commands, tests, and typechecks for research.
+- You may create temporary research scripts, notes, or scratch data only in the plan-mode scratch directory named in the current_mode prompt.
+- You must not modify source files, project configuration, dependency manifests, generated project files, git state, background processes, persistent memory, or external services.
+- HTTP research is limited to GET/HEAD. Write-capable MCP tools and persistent memory write tools are unavailable.
+- If a tool call is denied by the Plan Mode guard, adapt by using a read-only inspection command or the scratch directory.
+
+When Plan Mode is not active, follow the normal behavioral rules and tool permissions.
+</plan_mode_capabilities>`;
 
       const coworkAppendPrompt = [
         'You are an Open Cowork assistant. Be concise, accurate, and tool-capable.',
         thinkingLangPrompt,
+        planModeCapabilitiesPrompt,
         `CRITICAL BEHAVIORAL RULES:
 1. CHAT FIRST: By default, respond to the user in plain text within the conversation. Do NOT create, write, or edit files unless the user explicitly asks you to (e.g., "create a file", "write this to...", "edit the code", "save as...", mentions a specific file path, or describes code changes they want applied). For questions, summaries, explanations, analysis, and general conversation — always reply directly in chat text.
 2. When a request is actionable, proceed immediately with reasonable assumptions. If you need clarification, ask briefly in plain text.
@@ -3196,16 +3304,33 @@ If autoMemory is enabled, autonomous save_knowledge calls must be rare and must 
         session.id,
         effectiveCwd
       );
-      const shellOverrideTools = shellGuardedTools.filter(
+
+      const guardedShellTools = this.wrapToolsWithPlanModeGuard(
+        shellGuardedTools,
+        session.id,
+        effectiveCwd
+      );
+      const guardedBaseCustomTools = this.wrapToolsWithPlanModeGuard(
+        baseCustomTools,
+        session.id,
+        effectiveCwd
+      );
+
+      const shellOverrideTools = guardedShellTools.filter(
         (tool) => tool.name === 'bash' || tool.name === 'pwsh' || tool.name === 'http'
       );
-      const customTools = [...baseCustomTools, ...shellOverrideTools];
+      const customTools = [...guardedBaseCustomTools, ...shellOverrideTools];
 
       // Diagnostic: log tools being passed to SDK (helps debug Ollama tool use)
       logCtx(`[ClaudeAgentRunner] Session reuse check: cached=${!!cachedSession}`);
       logCtx(`[ClaudeAgentRunner] Model=${piModel.id}, thinkingLevel=${thinkingLevel}`);
+      if (session.planMode) {
+        log(
+          `[ClaudeAgentRunner] PLAN MODE — dynamic tool guard is active; research commands and scratch writes are allowed`
+        );
+      }
       log(
-        `[ClaudeAgentRunner] Built-in tools (${shellGuardedTools.length}): ${shellGuardedTools.map((t: { name?: string; type?: string }) => t.name || t.type).join(', ')}`
+        `[ClaudeAgentRunner] Built-in tools (${guardedShellTools.length}): ${guardedShellTools.map((t: { name?: string; type?: string }) => t.name || t.type).join(', ')}`
       );
       log(
         `[ClaudeAgentRunner] Custom MCP tools (${mcpCustomTools.length}): ${mcpCustomTools.map((t) => t.name).join(', ')}`
@@ -3215,7 +3340,7 @@ If autoMemory is enabled, autonomous save_knowledge calls must be rare and must 
       );
 
       const toolFingerprintInput = {
-        builtIn: shellGuardedTools.map((tool) => describeToolForFingerprint(tool)),
+        builtIn: guardedShellTools.map((tool) => describeToolForFingerprint(tool)),
         custom: customTools.map((tool) => describeToolForFingerprint(tool)),
       };
       const cacheDiagnostics: CacheDiagnosticsPayload = {
@@ -3364,7 +3489,7 @@ If autoMemory is enabled, autonomous save_knowledge calls must be rare and must 
           thinkingLevel,
           authStorage,
           modelRegistry,
-          tools: shellGuardedTools as unknown as ReturnType<typeof createCodingTools>,
+          tools: guardedShellTools as unknown as ReturnType<typeof createCodingTools>,
           customTools,
           sessionManager: PiSessionManager.inMemory(),
           settingsManager: PiSettingsManager.inMemory({

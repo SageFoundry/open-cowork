@@ -339,6 +339,11 @@ export function useIPC() {
             store.setShowSettings(false);
             break;
 
+          case 'session.planMode':
+            store.updateSession(event.payload.sessionId, { planMode: event.payload.planMode });
+            store.setSessionPlanMode(event.payload.sessionId, event.payload.planMode);
+            break;
+
           case 'navigate':
             if (event.payload === 'settings') {
               store.setShowSettings(true);

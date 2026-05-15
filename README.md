@@ -18,7 +18,7 @@
 
 ---
 
-Open Cowork 将 Claude Code、OpenAI、Gemini、DeepSeek 等 AI 模型封装为图形界面，提供虚拟机级别的沙盒隔离（Windows 使用 WSL2，macOS 使用 Lima）、内置 Skills 技能系统（PPTX/DOCX/XLSX/PDF 生成）、MCP 协议集成，以及通过飞书/Slack 进行远程控制。
+Open Cowork 将 Claude Code、OpenAI、Gemini、DeepSeek 等 AI 模型封装为图形界面，提供虚拟机级别的沙盒隔离（Windows 使用 WSL2，macOS 使用 Lima）、内置 Skills 技能系统（PPTX/DOCX/XLSX/PDF 生成）、MCP 协议集成、内置知识记忆系统（项目级去重/合并/跨会话隔离）、双模式 Agent，以及通过飞书/Slack 进行远程控制。
 
 > [!WARNING]
 > Open Cowork 是 AI 协作工具，请对文件修改、删除等操作保持谨慎。VM 沙盒可隔离大多数风险，但仍需自行审查关键操作。
@@ -46,6 +46,7 @@ open-cowork/
 │   │   ├── db/                # SQLite 数据层
 │   │   ├── ipc/               # IPC 处理器
 │   │   ├── mcp/               # MCP 协议集成
+│   │   ├── memory/            # 知识记忆系统 (去重/合并/跨会话隔离)
 │   │   ├── remote/            # 飞书 / Slack 远程控制
 │   │   ├── sandbox/           # 沙盒隔离 (WSL2 / Lima)
 │   │   ├── session/           # 会话与上下文管理
@@ -58,7 +59,16 @@ open-cowork/
 └── .claude/skills/            # 内置技能 (pptx / docx / pdf / xlsx)
 ```
 
-**技术栈**：Electron · React 18 · TypeScript · Vite · Tailwind CSS · Zustand · better-sqlite3
+**技术栈**：Electron · React 18 · TypeScript · Vite · Tailwind CSS · Zustand · better-sqlite3 (含 FTS5 全文检索)
+
+**Agent 模式**：
+
+| 模式 | 说明 | 行为约束 |
+|------|------|----------|
+| **编辑模式**（默认） | 正常执行模式 | 可读取、搜索、编辑文件、执行命令、创建文件 |
+| **计划模式** | 分析与计划模式 | 仅允许读取、搜索、只读命令，禁止修改源文件 |
+
+Agent 通过内置提示词中的 `<plan_mode_capabilities>` 区域感知当前模式，并按对应规则约束自身行为。计划模式适合在需要安全审查、调研分析或制定变更方案时使用。
 
 **沙盒隔离**：
 

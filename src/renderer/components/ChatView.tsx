@@ -16,7 +16,7 @@ import { groupMessagesByTurn } from '../utils/conversation-turns';
 import { AssistantTurnGroup } from './AssistantTurnGroup';
 import { MessageCard } from './MessageCard';
 import type { Message, ContentBlock } from '../types';
-import { Send, Square, Plus, Loader2, Plug, X, Clock, ChevronUp, Settings, Brain } from 'lucide-react';
+import { Send, Square, Plus, Loader2, Plug, X, Clock, ChevronUp, Settings, Brain, ClipboardList } from 'lucide-react';
 import { API_PROVIDER_PRESETS } from '../../shared/api-model-presets';
 
 const CHAT_INPUT_MIN_ROWS = 2;
@@ -1316,6 +1316,51 @@ export function ChatView() {
                         <span
                           className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
                             enableThinking ? 'translate-x-3' : 'translate-x-0'
+                          }`}
+                        />
+                      </span>
+                    </button>
+                  )}
+
+                  {/* Plan mode toggle */}
+                  {isElectron && activeSessionId && (
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={activeSession?.planMode ?? false}
+                      onClick={() => {
+                        const sessionId = activeSessionId!;
+                        const store = useAppStore.getState();
+                        const session = store.sessions.find((s) => s.id === sessionId);
+                        if (!session) return;
+                        const nextPlanMode = !session.planMode;
+                        // Send plan mode change to main process
+                        window.electronAPI.send({
+                          type: 'session.planMode',
+                          payload: { sessionId, planMode: nextPlanMode },
+                        });
+                        // Optimistically update local state
+                        store.updateSession(sessionId, { planMode: nextPlanMode });
+                        store.setSessionPlanMode(sessionId, nextPlanMode);
+                      }}
+                      disabled={isSessionRunning}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] transition-colors ${
+                        activeSession?.planMode
+                          ? 'bg-amber-500/10 border-amber-500/30 text-amber-600 dark:text-amber-400'
+                          : 'border-border-subtle bg-background/60 text-text-muted hover:bg-surface-hover hover:text-text-secondary'
+                      } ${isSessionRunning ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      title={activeSession?.planMode ? t('chat.planModeActive') : t('chat.planModeOff')}
+                    >
+                      <ClipboardList className={`w-3 h-3 ${activeSession?.planMode ? '' : 'opacity-60'}`} />
+                      <span>{t('chat.plan')}</span>
+                      <span
+                        className={`relative inline-block w-7 h-4 rounded-full transition-colors ${
+                          activeSession?.planMode ? 'bg-amber-500' : 'bg-border'
+                        }`}
+                      >
+                        <span
+                          className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
+                            activeSession?.planMode ? 'translate-x-3' : 'translate-x-0'
                           }`}
                         />
                       </span>

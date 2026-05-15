@@ -618,7 +618,10 @@
     "connectorCount_other": "{{count}} connectors",
     "thinking": "Thinking",
     "toggleThinking": "Toggle thinking mode",
-    "thinkingOff": "Off"
+    "thinkingOff": "Off",
+    "plan": "Plan",
+    "planModeActive": "Currently in Plan Mode (read-only)",
+    "planModeOff": "Switch to Plan Mode"
   },
   "context": {
     "progress": "Progress",

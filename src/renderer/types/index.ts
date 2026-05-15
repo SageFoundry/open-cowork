@@ -10,6 +10,7 @@ export interface Session {
   allowedTools: string[];
   memoryEnabled: boolean;
   model?: string;
+  planMode?: boolean;     // When true, agent is in read-only plan/write mode
   createdAt: number;
   updatedAt: number;
 }
@@ -425,7 +426,7 @@ export interface PermissionRule {
 
 // IPC Event types
 export type ClientEvent =
-  | { type: 'session.start'; payload: { title: string; prompt: string; cwd?: string; allowedTools?: string[]; content?: ContentBlock[]; contextConfig?: SessionContextConfig } }
+  | { type: 'session.start'; payload: { title: string; prompt: string; cwd?: string; allowedTools?: string[]; content?: ContentBlock[]; contextConfig?: SessionContextConfig; planMode?: boolean } }
   | { type: 'session.continue'; payload: { sessionId: string; prompt: string; content?: ContentBlock[]; contextConfig?: SessionContextConfig } }
   | { type: 'session.compact'; payload: { sessionId: string } }
   | { type: 'session.stop'; payload: { sessionId: string } }
@@ -443,7 +444,8 @@ export type ClientEvent =
   | { type: 'folder.select'; payload: Record<string, never> }
   | { type: 'workdir.get'; payload: Record<string, never> }
   | { type: 'workdir.set'; payload: { path: string; sessionId?: string } }
-  | { type: 'workdir.select'; payload: { sessionId?: string; currentPath?: string } };
+  | { type: 'workdir.select'; payload: { sessionId?: string; currentPath?: string } }
+  | { type: 'session.planMode'; payload: { sessionId: string; planMode: boolean } };
 
 // Sandbox setup types (app startup)
 export type SandboxSetupPhase = 
@@ -509,6 +511,7 @@ export type ServerEvent =
   | { type: 'session.compactionState'; payload: { sessionId: string; state: SessionCompactionState | null } }
   | { type: 'session.compaction'; payload: { sessionId: string; info: SessionCompactionInfo } }
   | { type: 'session.compactionNotice'; payload: { sessionId: string; level: 'info' | 'warning' | 'error'; message: string } }
+  | { type: 'session.planMode'; payload: { sessionId: string; planMode: boolean } }
   | { type: 'tasks.updated'; payload: { task: BackgroundTask } }
   | { type: 'tasks.logAppended'; payload: BackgroundTaskLogChunk }
   | { type: 'navigate.to'; payload: { page: 'welcome' | 'settings' | 'session'; tab?: string; sessionId?: string } }

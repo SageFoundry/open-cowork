@@ -58,6 +58,7 @@ export interface SessionState {
   tokenBudget: TokenBudgetSnapshot | null;
   latestCompaction: SessionCompactionInfo | null;
   compactionState: SessionCompactionState | null;
+  planMode: boolean;
 }
 
 const DEFAULT_SESSION_STATE: SessionState = {
@@ -78,6 +79,7 @@ const DEFAULT_SESSION_STATE: SessionState = {
   tokenBudget: null,
   latestCompaction: null,
   compactionState: null,
+  planMode: false,
 };
 
 // Helper to immutably update a single session's state within the record
@@ -234,6 +236,7 @@ interface AppState {
   setSessionTokenBudget: (sessionId: string, tokenBudget: TokenBudgetSnapshot | null) => void;
   setSessionCompactionState: (sessionId: string, compactionState: SessionCompactionState | null) => void;
   setSessionCompaction: (sessionId: string, info: SessionCompactionInfo | null) => void;
+  setSessionPlanMode: (sessionId: string, planMode: boolean) => void;
 
   // System theme actions
   setSystemDarkMode: (dark: boolean) => void;
@@ -721,6 +724,17 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) => ({
       sessionStates: patchSession(state.sessionStates, sessionId, { latestCompaction }),
     })),
+  setSessionPlanMode: (sessionId, planMode) =>
+    set((state) => {
+      // Also update the session object itself so it persists
+      const sessions = state.sessions.map((s) =>
+        s.id === sessionId ? { ...s, planMode } : s
+      );
+      return {
+        sessions,
+        sessionStates: patchSession(state.sessionStates, sessionId, { planMode }),
+      };
+    }),
 
   // System theme actions
   setSystemDarkMode: (dark) => set({ systemDarkMode: dark }),

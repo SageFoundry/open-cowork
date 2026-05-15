@@ -1529,7 +1529,8 @@ async function handleClientEvent(event: ClientEvent): Promise<unknown> {
         event.payload.cwd,
         event.payload.allowedTools,
         event.payload.content,
-        event.payload.contextConfig
+        event.payload.contextConfig,
+        event.payload.planMode
       );
 
     case 'session.continue':
@@ -1551,6 +1552,10 @@ async function handleClientEvent(event: ClientEvent): Promise<unknown> {
 
     case 'session.batchDelete':
       return sm.batchDeleteSessions(event.payload.sessionIds);
+
+    case 'session.planMode':
+      sm.updateSessionPlanMode(event.payload.sessionId, event.payload.planMode);
+      return null;
 
     case 'session.list': {
       const sessions = sm.listSessions();

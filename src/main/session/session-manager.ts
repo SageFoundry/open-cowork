@@ -188,6 +188,8 @@ export class SessionManager {
           this.requestSudoPassword(sessionId, toolUseId, command),
         searchSessionMessages: (sessionId: string, keywords: string[], maxResults = 20) =>
           this.searchSessionMessages(sessionId, keywords, maxResults),
+        getSessionPlanMode: (sessionId: string) =>
+          ((this.db.sessions.get(sessionId) as { plan_mode?: number } | null)?.plan_mode ?? 0) === 1,
       },
       this.pathResolver,
       this.mcpManager,
@@ -295,11 +297,12 @@ export class SessionManager {
     cwd?: string,
     allowedTools?: string[],
     content?: ContentBlock[],
-    contextConfig?: SessionContextConfig
+    contextConfig?: SessionContextConfig,
+    planMode?: boolean
   ): Promise<Session> {
     log('[SessionManager] Starting new session:', title);
 
-    const session = this.createSession(title, cwd, allowedTools);
+    const session = this.createSession(title, cwd, allowedTools, planMode);
 
     // Save to database
     this.saveSession(session);
@@ -321,7 +324,7 @@ export class SessionManager {
     return mountedPaths;
   }
 
-  private createSession(title: string, cwd?: string, allowedTools?: string[]): Session {
+  private createSession(title: string, cwd?: string, allowedTools?: string[], planMode?: boolean): Session {
     const now = Date.now();
     // Prefer frontend-provided cwd; fallback to env vars if provided
     const envCwd = process.env.COWORK_WORKDIR || process.env.WORKDIR || process.env.DEFAULT_CWD;
@@ -347,6 +350,7 @@ export class SessionManager {
       ],
       memoryEnabled: false,
       model: configStore.get('model') || undefined,
+      planMode: planMode ?? false,
       createdAt: now,
       updatedAt: now,
     };
@@ -365,6 +369,7 @@ export class SessionManager {
       allowed_tools: JSON.stringify(session.allowedTools),
       memory_enabled: session.memoryEnabled ? 1 : 0,
       model: session.model || null,
+      plan_mode: session.planMode ? 1 : 0,
       created_at: session.createdAt,
       updated_at: session.updatedAt,
     });
@@ -402,6 +407,7 @@ export class SessionManager {
       allowedTools,
       memoryEnabled: row.memory_enabled === 1,
       model: row.model || undefined,
+      planMode: (row as any).plan_mode === 1,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -1503,6 +1509,15 @@ export class SessionManager {
     })();
 
     log('[SessionManager] Batch deleted sessions:', sessionIds.length);
+  }
+
+  updateSessionPlanMode(sessionId: string, planMode: boolean): void {
+    log('[SessionManager] Updating plan mode:', sessionId, planMode);
+    this.db.sessions.update(sessionId, { plan_mode: planMode ? 1 : 0, updated_at: Date.now() });
+    this.sendToRenderer({
+      type: 'session.planMode',
+      payload: { sessionId, planMode },
+    });
   }
 
   // Update session status

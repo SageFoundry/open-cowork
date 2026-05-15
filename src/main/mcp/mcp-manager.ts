@@ -49,6 +49,12 @@ export interface MCPTool {
     properties: Record<string, unknown>;
     required?: string[];
   };
+  annotations?: {
+    readOnlyHint?: boolean;
+    destructiveHint?: boolean;
+    idempotentHint?: boolean;
+    openWorldHint?: boolean;
+  };
   serverId: string;
   serverName: string;
 }
@@ -1346,6 +1352,7 @@ export class MCPManager {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               required: (tool.inputSchema as any)?.required,
             },
+            annotations: (tool as { annotations?: MCPTool['annotations'] }).annotations,
             serverId,
             serverName: config.name,
           });

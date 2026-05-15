@@ -70,6 +70,7 @@ describe('ClaudeAgentRunner pi-coding-agent integration', () => {
   it('uses pi DefaultResourceLoader with additionalSkillPaths and appendSystemPrompt', () => {
     expect(agentRunnerContent).toContain('additionalSkillPaths: skillPaths');
     expect(agentRunnerContent).toContain('appendSystemPrompt: coworkAppendPrompt');
+    expect(agentRunnerContent).toContain('<plan_mode_capabilities>');
     expect(agentRunnerContent).not.toContain('systemPromptOverride');
   });
 

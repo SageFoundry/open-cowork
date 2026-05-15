@@ -618,7 +618,10 @@
     "connectorCount_other": "{{count}} 个连接器",
     "thinking": "思考",
     "toggleThinking": "切换思考模式",
-    "thinkingOff": "关闭"
+    "thinkingOff": "关闭",
+    "plan": "计划",
+    "planModeActive": "当前处于计划模式（只读）",
+    "planModeOff": "切换到计划模式"
   },
   "context": {
     "progress": "进度",
