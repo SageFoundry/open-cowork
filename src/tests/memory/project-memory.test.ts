@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // In-memory storage
 const store = new Map<string, Record<string, unknown>>();
+const sourceStore = new Map<string, Record<string, unknown>>();
+const messageRows: Array<Record<string, unknown>> = [];
 let rowIdCounter = 1;
 let ftsAvailable = true;
 const PROJECT_PATH = 'e:\\workspace\\project-a';
@@ -66,6 +68,63 @@ function mockPrepare(sql: string): {
     };
   }
 
+  // INSERT INTO knowledge_sources
+  if (/INSERT OR IGNORE INTO knowledge_sources/i.test(sql.trim())) {
+    return {
+      run: (...params: unknown[]) => {
+        const knowledgeId = params[1] as string;
+        const messageId = params[3] as string;
+        const duplicate = Array.from(sourceStore.values()).some(
+          (record) => record.knowledge_id === knowledgeId && record.message_id === messageId
+        );
+        if (!duplicate) {
+          sourceStore.set(params[0] as string, {
+            id: params[0] as string,
+            knowledge_id: knowledgeId,
+            session_id: params[2] as string,
+            message_id: messageId,
+            turn_index: params[4] as number,
+            role: params[5] as string,
+            timestamp: params[6] as number,
+            snippet: params[7] as string,
+            created_at: params[8] as number,
+          });
+        }
+        return {};
+      },
+      get: defaultGet,
+      all: defaultAll,
+    };
+  }
+
+  // SELECT * FROM knowledge_sources WHERE knowledge_id = ?
+  if (/SELECT \* FROM knowledge_sources/i.test(sql.trim())) {
+    return {
+      run: defaultRun,
+      get: defaultGet,
+      all: (...params: unknown[]) => {
+        const knowledgeId = params[0] as string;
+        return Array.from(sourceStore.values())
+          .filter((record) => record.knowledge_id === knowledgeId)
+          .sort((a, b) => (a.timestamp as number) - (b.timestamp as number) || (a.turn_index as number) - (b.turn_index as number));
+      },
+    };
+  }
+
+  // SELECT id, role, content, timestamp FROM messages WHERE session_id = ?
+  if (/SELECT id, role, content, timestamp FROM messages/i.test(sql.trim())) {
+    return {
+      run: defaultRun,
+      get: defaultGet,
+      all: (...params: unknown[]) => {
+        const sessionId = params[0] as string;
+        return messageRows
+          .filter((record) => record.session_id === sessionId)
+          .sort((a, b) => (a.timestamp as number) - (b.timestamp as number));
+      },
+    };
+  }
+
   // DELETE FROM knowledge_fts
   if (/DELETE FROM knowledge_fts/i.test(sql.trim())) {
     return {
@@ -82,7 +141,13 @@ function mockPrepare(sql: string): {
   if (/DELETE FROM knowledge WHERE/i.test(sql.trim()) && /id/i.test(sql)) {
     return {
       run: (...params: unknown[]) => {
-        store.delete(params[0] as string);
+        const id = params[0] as string;
+        store.delete(id);
+        for (const [sourceId, source] of sourceStore) {
+          if (source.knowledge_id === id) {
+            sourceStore.delete(sourceId);
+          }
+        }
         return {};
       },
       get: defaultGet,
@@ -220,6 +285,7 @@ vi.mock('../../main/db/database', () => ({
     raw: {
       prepare: (sql: string) => mockPrepare(sql),
       exec: () => {},
+      transaction: (fn: (...args: any[]) => any) => (...args: any[]) => fn(...args),
     },
   }),
 }));
@@ -229,6 +295,8 @@ const { ProjectMemoryService } = await import('../../main/memory/project-memory'
 describe('ProjectMemoryService', () => {
   beforeEach(() => {
     store.clear();
+    sourceStore.clear();
+    messageRows.length = 0;
     rowIdCounter = 1;
     ftsAvailable = true;
   });
@@ -384,5 +452,78 @@ describe('ProjectMemoryService', () => {
 
     expect(service.getKnowledge(entry.id)?.title).toBe('Fallback Memory');
     expect(service.searchKnowledge('keyword absent', PROJECT_PATH).some((r) => r.id === entry.id)).toBe(true);
+  });
+
+  it('stores bounded source evidence and dedupes repeated message bindings', () => {
+    const service = new ProjectMemoryService();
+    const entry = service.saveKnowledge({
+      sessionId: 'session-1',
+      projectPath: PROJECT_PATH,
+      type: 'decision',
+      title: 'Evidence test',
+      content: 'Memory should point back to source evidence.',
+      importance: 4,
+      source: 'manual',
+      tags: [],
+    });
+
+    service.addKnowledgeSources(entry.id, [
+      {
+        sessionId: 'session-1',
+        messageId: 'message-1',
+        turnIndex: 2,
+        role: 'user',
+        timestamp: 10,
+        snippet: '用户确认记忆需要能回查来源对话。'.repeat(80),
+      },
+      {
+        sessionId: 'session-1',
+        messageId: 'message-1',
+        turnIndex: 2,
+        role: 'user',
+        timestamp: 10,
+        snippet: '重复来源不应再次写入。',
+      },
+    ]);
+
+    const evidence = service.getKnowledgeEvidence(entry.id, { mode: 'snippets', maxChars: 500 });
+    expect(service.listKnowledgeSources(entry.id)).toHaveLength(1);
+    expect(evidence.returnedChars).toBeLessThanOrEqual(500);
+    expect(evidence.truncated).toBe(true);
+  });
+
+  it('returns a small history window around evidence sources', () => {
+    const service = new ProjectMemoryService();
+    const entry = service.saveKnowledge({
+      sessionId: 'session-1',
+      projectPath: PROJECT_PATH,
+      type: 'decision',
+      title: 'Window test',
+      content: 'Evidence windows should stay local.',
+      importance: 4,
+      source: 'manual',
+      tags: [],
+    });
+    for (let i = 0; i < 6; i++) {
+      messageRows.push({
+        id: `message-${i}`,
+        session_id: 'session-1',
+        role: i % 2 === 0 ? 'user' : 'assistant',
+        content: JSON.stringify([{ type: 'text', text: `message text ${i}` }]),
+        timestamp: i,
+      });
+    }
+    service.addKnowledgeSources(entry.id, [{
+      sessionId: 'session-1',
+      messageId: 'message-3',
+      turnIndex: 3,
+      role: 'assistant',
+      timestamp: 3,
+      snippet: 'center',
+    }]);
+
+    const evidence = service.getKnowledgeEvidence(entry.id, { mode: 'window', maxChars: 6000, windowTurns: 1 });
+    expect(evidence.sources.map((source) => source.messageId)).toEqual(['message-2', 'message-3', 'message-4']);
+    expect(evidence.sources.every((source) => source.sessionId === 'session-1')).toBe(true);
   });
 });

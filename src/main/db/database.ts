@@ -437,6 +437,23 @@ function initializeSchema(database: Database.Database): void {
     ensureColumn(database, 'knowledge', 'project_path', 'project_path TEXT');
     backfillKnowledgeProjectPaths(database);
 
+    database.exec(`
+    CREATE TABLE IF NOT EXISTS knowledge_sources (
+      id TEXT PRIMARY KEY,
+      knowledge_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      turn_index INTEGER NOT NULL,
+      role TEXT NOT NULL,
+      timestamp INTEGER NOT NULL,
+      snippet TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (knowledge_id) REFERENCES knowledge(id) ON DELETE CASCADE,
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+      UNIQUE(knowledge_id, message_id)
+    )
+  `);
+
     // Create FTS5 virtual table for knowledge full-text search when supported.
     initializeKnowledgeFts(database);
 
@@ -459,6 +476,16 @@ function initializeSchema(database: Database.Database): void {
     database.exec(`
     CREATE INDEX IF NOT EXISTS idx_knowledge_updated 
     ON knowledge(updated_at DESC)
+  `);
+
+    database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_knowledge_sources_knowledge
+    ON knowledge_sources(knowledge_id, created_at)
+  `);
+
+    database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_knowledge_sources_session_message
+    ON knowledge_sources(session_id, message_id)
   `);
 
     // Create skills table (for future use)

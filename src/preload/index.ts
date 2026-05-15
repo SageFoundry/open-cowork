@@ -161,6 +161,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('memory.list', cwd),
     get: (id: string, cwd?: string | null): Promise<any> =>
       ipcRenderer.invoke('memory.get', id, cwd),
+    evidence: (id: string, cwd?: string | null, options?: { mode?: 'snippets' | 'window'; maxChars?: number }): Promise<any> =>
+      ipcRenderer.invoke('memory.evidence', id, cwd, options),
     delete: (id: string, cwd?: string | null): Promise<void> =>
       ipcRenderer.invoke('memory.delete', id, cwd),
     save: (entry: { type: string; title: string; content: string; importance?: number; tags?: string[]; sessionId?: string; projectPath?: string | null }): Promise<{ id: string }> =>
@@ -479,6 +481,25 @@ declare global {
           sessionId: string | null;
           createdAt: number;
           updatedAt: number;
+        } | null>;
+        evidence: (id: string, cwd?: string | null, options?: {
+          mode?: 'snippets' | 'window';
+          maxChars?: number;
+        }) => Promise<{
+          sources: Array<{
+            id: string;
+            knowledgeId: string;
+            sessionId: string;
+            messageId: string;
+            turnIndex: number;
+            role: 'user' | 'assistant';
+            timestamp: number;
+            snippet: string;
+            createdAt: number;
+          }>;
+          returnedChars: number;
+          maxChars: number;
+          truncated: boolean;
         } | null>;
         delete: (id: string, cwd?: string | null) => Promise<void>;
         save: (entry: {

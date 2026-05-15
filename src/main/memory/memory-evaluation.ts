@@ -1,8 +1,17 @@
-import type { KnowledgeEntry, KnowledgeType, ProjectMemoryService } from './project-memory';
+import type {
+  KnowledgeEntry,
+  KnowledgeSourceCandidate,
+  KnowledgeType,
+  ProjectMemoryService,
+} from './project-memory';
+import { normalizeProjectPath } from './project-memory';
 
 export interface MemoryEvaluationMessage {
+  id?: string;
+  sessionId?: string;
   role: string;
   content: string | unknown[];
+  timestamp?: number;
 }
 
 export interface MemoryEvaluationAction {
@@ -68,10 +77,12 @@ export function extractTextFromMemoryMessage(message: MemoryEvaluationMessage): 
 
 export function buildMemoryExtractionPrompt(
   messages: MemoryEvaluationMessage[],
-  existingEntries: KnowledgeEntry[]
+  existingEntries: KnowledgeEntry[],
+  options?: { language?: string }
 ): { systemPrompt: string; prompt: string } {
   const transcript = serializeRecentMessages(messages);
   const existing = serializeExistingKnowledge(existingEntries);
+  const outputLanguage = options?.language === 'en' ? 'English' : 'Chinese (中文)';
 
   return {
     systemPrompt: `You extract durable project memory for Open Cowork.
@@ -87,6 +98,7 @@ Compare against existing memory before deciding:
 
 Allowed types: fact, preference, decision, reference, project.
 Importance must be 1-5. Use 4-5 only for critical, reusable knowledge.
+Write title, content, and reason in ${outputLanguage}. Preserve code identifiers, paths, API names, model names, and product names exactly when needed.
 Return at most ${MAX_ACTIONS_TO_APPLY} create/update actions.`,
     prompt: `Existing memory:
 ${existing}
@@ -171,10 +183,17 @@ export function buildCandidateEvaluationAction(
 export function applyMemoryActions(
   service: ProjectMemoryService,
   actions: MemoryEvaluationAction[],
-  options: { sessionId: string | null; projectPath: string | null; source: 'manual' | 'auto'; maxChanges?: number }
+  options: {
+    sessionId: string | null;
+    projectPath: string | null;
+    source: 'manual' | 'auto';
+    maxChanges?: number;
+    sourceMessages?: KnowledgeSourceCandidate[];
+  }
 ): AppliedMemoryActions {
   const result: AppliedMemoryActions = { created: 0, updated: 0, ignored: 0, entries: [], reasons: [] };
   const maxChanges = options.maxChanges ?? MAX_ACTIONS_TO_APPLY;
+  const normalizedProjectPath = normalizeProjectPath(options.projectPath);
   const existing = service.listKnowledge(options.projectPath);
   let appliedChanges = 0;
 
@@ -219,6 +238,11 @@ export function applyMemoryActions(
         result.reasons.push(action.reason || 'Update target not found.');
         continue;
       }
+      if (normalizedProjectPath && target.projectPath !== normalizedProjectPath) {
+        result.ignored++;
+        result.reasons.push(action.reason || 'Update target belongs to another project.');
+        continue;
+      }
 
       service.updateKnowledge(target.id, {
         type: action.type,
@@ -229,6 +253,7 @@ export function applyMemoryActions(
       });
       const updated = service.getKnowledge(target.id);
       if (updated) {
+        service.addKnowledgeSources(updated.id, options.sourceMessages ?? []);
         replaceExisting(existing, updated);
         result.entries.push(updated);
       }
@@ -248,12 +273,47 @@ export function applyMemoryActions(
       tags: action.tags ?? [],
     });
     existing.push(created);
+    service.addKnowledgeSources(created.id, options.sourceMessages ?? []);
     result.entries.push(created);
     result.created++;
     appliedChanges++;
   }
 
   return result;
+}
+
+export function buildKnowledgeSourceCandidates(
+  messages: MemoryEvaluationMessage[],
+  options?: { maxMessages?: number }
+): KnowledgeSourceCandidate[] {
+  const maxMessages = Math.max(1, Math.min(options?.maxMessages ?? 24, 80));
+  const candidates: KnowledgeSourceCandidate[] = [];
+
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
+    if (message.role !== 'user' && message.role !== 'assistant') {
+      continue;
+    }
+    const sessionId = message.sessionId;
+    const messageId = message.id;
+    if (!sessionId || !messageId) {
+      continue;
+    }
+    const text = extractTextFromMemoryMessage(message).trim();
+    if (!text) {
+      continue;
+    }
+    candidates.push({
+      sessionId,
+      messageId,
+      turnIndex: index,
+      role: message.role,
+      timestamp: message.timestamp ?? Date.now(),
+      snippet: text.replace(/\r\n/g, '\n').replace(/[ \t]+/g, ' ').slice(0, 600),
+    });
+  }
+
+  return candidates.slice(-maxMessages);
 }
 
 export function serializeExistingKnowledge(entries: KnowledgeEntry[]): string {

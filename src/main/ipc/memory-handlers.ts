@@ -4,6 +4,7 @@ import { completeWithClaudeSdk } from '../claude/claude-sdk-one-shot';
 import { configStore } from '../config/config-store';
 import {
   applyMemoryActions,
+  buildKnowledgeSourceCandidates,
   buildMemoryExtractionPrompt,
   parseMemoryEvaluationResponse,
 } from '../memory/memory-evaluation';
@@ -39,6 +40,17 @@ export function registerMemoryHandlers({
     const projectPath = normalizeProjectPath(cwd);
     if (!projectPath || entry.projectPath !== projectPath) return null;
     return entry;
+  });
+
+  ipcMain.handle('memory.evidence', (_event, id: string, cwd?: string | null, options?: {
+    mode?: 'snippets' | 'window';
+    maxChars?: number;
+  }) => {
+    const entry = service.getKnowledge(id);
+    if (!entry) return null;
+    const projectPath = normalizeProjectPath(cwd);
+    if (!projectPath || entry.projectPath !== projectPath) return null;
+    return service.getKnowledgeEvidence(id, options);
   });
 
   ipcMain.handle('memory.delete', (_event, id: string, cwd?: string | null) => {
@@ -77,7 +89,9 @@ export function registerMemoryHandlers({
       return { entries: 0 };
     }
     const existingEntries = service.listKnowledge(projectPath);
-    const { prompt, systemPrompt } = buildMemoryExtractionPrompt(messages, existingEntries);
+    const { prompt, systemPrompt } = buildMemoryExtractionPrompt(messages, existingEntries, {
+      language: configStore.get('language') ?? 'zh',
+    });
     const response = await completeWithClaudeSdk(prompt, systemPrompt, configStore.getAll());
     const actions = parseMemoryEvaluationResponse(response.text);
     if (actions.length === 0) {
@@ -88,6 +102,7 @@ export function registerMemoryHandlers({
       sessionId,
       projectPath,
       source: 'manual',
+      sourceMessages: buildKnowledgeSourceCandidates(messages),
     });
 
     return { entries: applied.created + applied.updated };

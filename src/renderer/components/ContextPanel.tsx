@@ -26,6 +26,9 @@ import {
   Star,
   Trash2,
   Sparkles,
+  Bot,
+  Search,
+  SlidersHorizontal,
 } from 'lucide-react';
 import type { TraceStep, MCPServerInfo, BackgroundTask } from '../types';
 
@@ -39,7 +42,46 @@ interface MemoryListItem {
   updatedAt: number;
 }
 
+type MemoryDetail = {
+  id: string;
+  title: string;
+  content: string;
+  type: string;
+  importance: number;
+  tags: string[];
+  createdAt: number;
+  updatedAt: number;
+  sessionId: string | null;
+  source: string;
+};
+
+type MemoryEvidence = {
+  sources: Array<{
+    id: string;
+    knowledgeId: string;
+    sessionId: string;
+    messageId: string;
+    turnIndex: number;
+    role: 'user' | 'assistant';
+    timestamp: number;
+    snippet: string;
+    createdAt: number;
+  }>;
+  returnedChars: number;
+  maxChars: number;
+  truncated: boolean;
+};
+
 const EMPTY_STEPS: TraceStep[] = [];
+const PANEL_MEMORY_LIMIT = 20;
+const MANAGER_MEMORY_PAGE_SIZE = 20;
+const MEMORY_TYPE_KEYS: Record<string, string> = {
+  decision: 'context.memoryTypes.decision',
+  preference: 'context.memoryTypes.preference',
+  fact: 'context.memoryTypes.fact',
+  reference: 'context.memoryTypes.reference',
+  project: 'context.memoryTypes.project',
+};
 
 export function ContextPanel() {
   const { t } = useTranslation();
@@ -63,7 +105,16 @@ export function ContextPanel() {
   const [copiedPath, setCopiedPath] = useState(false);
   const [isChangingDir, setIsChangingDir] = useState(false);
   const [memoryList, setMemoryList] = useState<MemoryListItem[]>([]);
-  const [memoryDetail, setMemoryDetail] = useState<{ id: string; title: string; content: string; type: string; importance: number; tags: string[]; createdAt: number; updatedAt: number; sessionId: string | null; source: string } | null>(null);
+  const [memoryDetail, setMemoryDetail] = useState<MemoryDetail | null>(null);
+  const [memoryManagerDetail, setMemoryManagerDetail] = useState<MemoryDetail | null>(null);
+  const [memoryEvidence, setMemoryEvidence] = useState<MemoryEvidence | null>(null);
+  const [memoryManagerEvidence, setMemoryManagerEvidence] = useState<MemoryEvidence | null>(null);
+  const [isLoadingEvidence, setIsLoadingEvidence] = useState(false);
+  const [memoryManagerOpen, setMemoryManagerOpen] = useState(false);
+  const [memorySearchQuery, setMemorySearchQuery] = useState('');
+  const [memoryTypeFilter, setMemoryTypeFilter] = useState('all');
+  const [memoryImportanceFilter, setMemoryImportanceFilter] = useState('all');
+  const [memoryManagerPage, setMemoryManagerPage] = useState(1);
   const [memoryLoadError, setMemoryLoadError] = useState<string | null>(null);
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractResult, setExtractResult] = useState<string | null>(null);
@@ -136,6 +187,49 @@ export function ContextPanel() {
   const activeSession = activeSessionId ? sessions.find((s) => s.id === activeSessionId) : null;
   const currentWorkingDir = activeSession?.cwd || workingDir;
   const activeProjectId = getProjectIdForCwd(currentWorkingDir);
+  const formatMemoryType = useCallback(
+    (type: string) => t(MEMORY_TYPE_KEYS[type] ?? 'context.memoryTypes.unknown', { type }),
+    [t]
+  );
+  const sortedMemoryList = useMemo(
+    () => [...memoryList].sort((a, b) => b.importance - a.importance || b.updatedAt - a.updatedAt),
+    [memoryList]
+  );
+  const panelMemoryList = useMemo(
+    () => sortedMemoryList.slice(0, PANEL_MEMORY_LIMIT),
+    [sortedMemoryList]
+  );
+  const filteredMemoryList = useMemo(() => {
+    const query = memorySearchQuery.trim().toLowerCase();
+    return sortedMemoryList.filter((item) => {
+      if (memoryTypeFilter !== 'all' && item.type !== memoryTypeFilter) return false;
+      if (memoryImportanceFilter === 'high' && item.importance < 4) return false;
+      if (memoryImportanceFilter === 'normal' && item.importance >= 4) return false;
+      if (!query) return true;
+      return [
+        item.title,
+        item.type,
+        formatMemoryType(item.type),
+        ...item.tags,
+      ].some((value) => value.toLowerCase().includes(query));
+    });
+  }, [formatMemoryType, memoryImportanceFilter, memorySearchQuery, memoryTypeFilter, sortedMemoryList]);
+  const memoryManagerPageCount = Math.max(1, Math.ceil(filteredMemoryList.length / MANAGER_MEMORY_PAGE_SIZE));
+  const pagedMemoryList = useMemo(() => {
+    const safePage = Math.min(memoryManagerPage, memoryManagerPageCount);
+    const start = (safePage - 1) * MANAGER_MEMORY_PAGE_SIZE;
+    return filteredMemoryList.slice(start, start + MANAGER_MEMORY_PAGE_SIZE);
+  }, [filteredMemoryList, memoryManagerPage, memoryManagerPageCount]);
+
+  useEffect(() => {
+    setMemoryManagerPage(1);
+  }, [memorySearchQuery, memoryTypeFilter, memoryImportanceFilter]);
+
+  useEffect(() => {
+    if (memoryManagerPage > memoryManagerPageCount) {
+      setMemoryManagerPage(memoryManagerPageCount);
+    }
+  }, [memoryManagerPage, memoryManagerPageCount]);
 
   // Session info computations
   const messages = useMemo(
@@ -221,6 +315,9 @@ export function ContextPanel() {
           setMemoryLoadError(null);
           setMemoryList(list);
           setMemoryDetail(null);
+          setMemoryManagerDetail(null);
+          setMemoryEvidence(null);
+          setMemoryManagerEvidence(null);
         }
       } catch (error) {
         if (!cancelled) {
@@ -318,6 +415,14 @@ export function ContextPanel() {
     try {
       await window.electronAPI.memory.delete(id, currentWorkingDir);
       setMemoryList((prev) => prev.filter((m) => m.id !== id));
+      if (memoryDetail?.id === id) {
+        setMemoryDetail(null);
+        setMemoryEvidence(null);
+      }
+      if (memoryManagerDetail?.id === id) {
+        setMemoryManagerDetail(null);
+        setMemoryManagerEvidence(null);
+      }
     } catch (error) {
       console.error('Failed to delete memory:', error);
       setGlobalNotice({
@@ -337,9 +442,86 @@ export function ContextPanel() {
     try {
       const entry = await window.electronAPI.memory.get(id, currentWorkingDir);
       setMemoryDetail(entry);
+      setMemoryEvidence(null);
+      if (entry) {
+        setIsLoadingEvidence(true);
+        try {
+          const evidence = await window.electronAPI.memory.evidence(id, currentWorkingDir, {
+            mode: 'snippets',
+            maxChars: 3000,
+          });
+          setMemoryEvidence(evidence);
+        } finally {
+          setIsLoadingEvidence(false);
+        }
+      }
     } catch (error) {
       console.error('Failed to load memory detail:', error);
       setMemoryLoadError(t('context.memoryLoadFailed'));
+      setIsLoadingEvidence(false);
+    }
+  };
+
+  const handleViewManagedMemoryDetail = async (id: string) => {
+    if (!window.electronAPI?.memory) {
+      setMemoryLoadError(t('context.memoryUnavailable'));
+      return;
+    }
+
+    try {
+      const entry = await window.electronAPI.memory.get(id, currentWorkingDir);
+      setMemoryManagerDetail(entry);
+      setMemoryManagerEvidence(null);
+      if (entry) {
+        setIsLoadingEvidence(true);
+        try {
+          const evidence = await window.electronAPI.memory.evidence(id, currentWorkingDir, {
+            mode: 'snippets',
+            maxChars: 3000,
+          });
+          setMemoryManagerEvidence(evidence);
+        } finally {
+          setIsLoadingEvidence(false);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load managed memory detail:', error);
+      setMemoryLoadError(t('context.memoryLoadFailed'));
+      setIsLoadingEvidence(false);
+    }
+  };
+
+  const handleLoadMemoryWindow = async () => {
+    if (!memoryDetail || !window.electronAPI?.memory) return;
+    setIsLoadingEvidence(true);
+    try {
+      const evidence = await window.electronAPI.memory.evidence(memoryDetail.id, currentWorkingDir, {
+        mode: 'window',
+        maxChars: 6000,
+      });
+      setMemoryEvidence(evidence);
+    } catch (error) {
+      console.error('Failed to load memory evidence window:', error);
+      setMemoryLoadError(t('context.memoryLoadFailed'));
+    } finally {
+      setIsLoadingEvidence(false);
+    }
+  };
+
+  const handleLoadManagedMemoryWindow = async () => {
+    if (!memoryManagerDetail || !window.electronAPI?.memory) return;
+    setIsLoadingEvidence(true);
+    try {
+      const evidence = await window.electronAPI.memory.evidence(memoryManagerDetail.id, currentWorkingDir, {
+        mode: 'window',
+        maxChars: 6000,
+      });
+      setMemoryManagerEvidence(evidence);
+    } catch (error) {
+      console.error('Failed to load managed memory evidence window:', error);
+      setMemoryLoadError(t('context.memoryLoadFailed'));
+    } finally {
+      setIsLoadingEvidence(false);
     }
   };
 
@@ -674,8 +856,9 @@ export function ContextPanel() {
           onClick={() => setMemoryOpen(!memoryOpen)}
           className="w-full px-4 py-2.5 flex items-center justify-between hover:bg-surface-hover transition-colors"
         >
-          <span className="text-xs font-medium text-text-muted uppercase tracking-wider">
-            🧠 {t('context.memory')}
+          <span className="flex items-center gap-1.5 text-xs font-medium text-text-muted uppercase tracking-wider">
+            <Brain className="w-3.5 h-3.5 text-text-muted opacity-70" />
+            <span>{t('context.memory')}</span>
           </span>
           {memoryOpen ? (
             <ChevronUp className="w-3.5 h-3.5 text-text-muted" />
@@ -686,32 +869,39 @@ export function ContextPanel() {
 
         {memoryOpen && (
           <div className="px-4 pb-2 space-y-2">
-            {/* Auto Memory Toggle */}
-            <div className="flex items-center justify-between py-1">
-              <span className="text-xs text-text-secondary">{t('context.autoMemory')}</span>
+            <div className="flex items-center gap-2">
               <button
                 onClick={handleToggleAutoMemory}
-                className={`relative w-8 h-4 rounded-full transition-colors ${autoMemory ? 'bg-accent-primary' : 'bg-border-muted'}`}
+                      className={`flex flex-1 items-center justify-between gap-2 px-2.5 py-1.5 rounded-md border text-xs transition-colors ${
+                        autoMemory
+                          ? 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                          : 'border-border-muted bg-surface/70 text-text-secondary hover:bg-surface-hover'
+                      }`}
+                    >
+                      <span className="inline-flex items-center gap-1.5 min-w-0">
+                        <Bot className={`w-3.5 h-3.5 ${autoMemory ? 'text-amber-600 dark:text-amber-400' : 'text-text-muted'}`} />
+                        <span className="truncate">{t('context.autoMemory')}</span>
+                      </span>
+                      <span className={`relative w-7 h-3.5 rounded-full shrink-0 transition-colors ${autoMemory ? 'bg-amber-500' : 'bg-border-muted'}`}>
+                        <span
+                          className={`absolute top-0.5 left-0.5 w-2.5 h-2.5 rounded-full bg-white shadow-sm transition-transform ${autoMemory ? 'translate-x-3.5' : ''}`}
+                        />
+                      </span>
+                    </button>
+
+              <button
+                onClick={handleExtractMemory}
+                disabled={isExtracting || !activeSessionId}
+                className="flex flex-1 items-center justify-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border border-border-muted bg-surface/80 text-text-secondary hover:bg-surface-hover hover:border-border-subtle transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <span
-                  className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white transition-transform ${autoMemory ? 'translate-x-4' : ''}`}
-                />
+                {isExtracting ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="w-3.5 h-3.5 text-text-muted" />
+                )}
+                <span className="truncate">{t('context.extractMemory')}</span>
               </button>
             </div>
-
-            {/* Extract Memory Button */}
-            <button
-              onClick={handleExtractMemory}
-              disabled={isExtracting || !activeSessionId}
-              className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs rounded-md bg-surface-hover hover:bg-border-muted transition-colors disabled:opacity-50"
-            >
-              {isExtracting ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <Sparkles className="w-3.5 h-3.5" />
-              )}
-              <span>{t('context.extractMemory')}</span>
-            </button>
 
             {/* Extract Result Feedback */}
             {extractResult && (
@@ -732,8 +922,24 @@ export function ContextPanel() {
                 <span>{t('context.noMemoryYet')}</span>
               </div>
             ) : (
-              <div className="max-h-64 overflow-y-auto space-y-1">
-                {memoryList.map((item) => {
+              <div className="space-y-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] text-text-muted">
+                    {t('context.topMemoryCount', {
+                      shown: Math.min(panelMemoryList.length, PANEL_MEMORY_LIMIT),
+                      total: memoryList.length,
+                    })}
+                  </span>
+                  <button
+                    onClick={() => setMemoryManagerOpen(true)}
+                    className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md text-text-secondary hover:bg-surface-hover transition-colors"
+                  >
+                    <SlidersHorizontal className="w-3 h-3" />
+                    <span>{t('context.manageMemory')}</span>
+                  </button>
+                </div>
+                <div className="max-h-64 overflow-y-auto space-y-1">
+                {panelMemoryList.map((item) => {
                   const TypeIcon = item.type === 'preference' ? Star : item.type === 'decision' ? Brain : BookOpen;
                   return (
                     <div
@@ -748,7 +954,7 @@ export function ContextPanel() {
                           <span className={`text-[10px] px-1 py-0.5 rounded shrink-0 ${
                             item.importance >= 4 ? 'bg-yellow-500/10 text-yellow-600' : 'bg-surface-hover text-text-muted'
                           }`}>
-                            {item.type}
+                            {formatMemoryType(item.type)}
                           </span>
                         </div>
                         <div className="text-[10px] text-text-muted mt-0.5">
@@ -764,17 +970,234 @@ export function ContextPanel() {
                     </div>
                   );
                 })}
+                {memoryList.length > PANEL_MEMORY_LIMIT && (
+                  <button
+                    onClick={() => setMemoryManagerOpen(true)}
+                    className="w-full px-2 py-1.5 text-[11px] rounded-md text-text-secondary hover:bg-surface-hover transition-colors"
+                  >
+                    {t('context.viewMoreMemory')}
+                  </button>
+                )}
+                </div>
               </div>
             )}
           </div>
         )}
       </div>
 
-      {/* Memory Detail Modal */}
-      {memoryDetail && (
+      {memoryManagerOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-          onClick={() => setMemoryDetail(null)}
+          onClick={() => setMemoryManagerOpen(false)}
+        >
+          <div
+            className="bg-surface rounded-xl shadow-xl w-[min(920px,calc(100vw-32px))] h-[min(720px,calc(100vh-48px))] overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-border-muted flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-text-primary">{t('context.manageMemory')}</h3>
+                <p className="text-xs text-text-muted mt-1">{t('context.memoryManagerHint')}</p>
+              </div>
+              <button
+                onClick={() => setMemoryManagerOpen(false)}
+                className="p-1.5 hover:bg-surface-hover rounded-md transition-colors"
+              >
+                <ChevronDown className="w-4 h-4 text-text-muted" />
+              </button>
+            </div>
+
+            <div className="px-5 py-3 border-b border-border-muted flex flex-wrap items-center gap-2">
+              <div className="relative flex-1 min-w-[220px]">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted" />
+                <input
+                  value={memorySearchQuery}
+                  onChange={(event) => setMemorySearchQuery(event.target.value)}
+                  placeholder={t('context.searchMemory')}
+                  className="w-full pl-8 pr-3 py-1.5 rounded-md border border-border-muted bg-surface text-xs text-text-primary placeholder:text-text-muted outline-none focus:border-accent-primary/50"
+                />
+              </div>
+              <select
+                value={memoryTypeFilter}
+                onChange={(event) => setMemoryTypeFilter(event.target.value)}
+                className="px-2.5 py-1.5 rounded-md border border-border-muted bg-surface text-xs text-text-secondary outline-none focus:border-accent-primary/50"
+              >
+                <option value="all">{t('context.allMemoryTypes')}</option>
+                <option value="decision">{formatMemoryType('decision')}</option>
+                <option value="preference">{formatMemoryType('preference')}</option>
+                <option value="fact">{formatMemoryType('fact')}</option>
+                <option value="reference">{formatMemoryType('reference')}</option>
+                <option value="project">{formatMemoryType('project')}</option>
+              </select>
+              <select
+                value={memoryImportanceFilter}
+                onChange={(event) => setMemoryImportanceFilter(event.target.value)}
+                className="px-2.5 py-1.5 rounded-md border border-border-muted bg-surface text-xs text-text-secondary outline-none focus:border-accent-primary/50"
+              >
+                <option value="all">{t('context.allImportance')}</option>
+                <option value="high">{t('context.highImportance')}</option>
+                <option value="normal">{t('context.normalImportance')}</option>
+              </select>
+              <span className="text-[11px] text-text-muted ml-auto">
+                {t('context.memoryResultCount', { count: filteredMemoryList.length })}
+              </span>
+            </div>
+
+            <div className="flex-1 min-h-0 grid grid-cols-[minmax(280px,360px)_1fr]">
+              <div className="border-r border-border-muted min-h-0 flex flex-col">
+                <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-1">
+                  {filteredMemoryList.length === 0 ? (
+                    <div className="flex items-center gap-2 py-4 px-2 text-xs text-text-muted">
+                      <BookOpen className="w-3.5 h-3.5" />
+                      <span>{t('context.noMemoryResults')}</span>
+                    </div>
+                  ) : (
+                    pagedMemoryList.map((item) => {
+                      const TypeIcon = item.type === 'preference' ? Star : item.type === 'decision' ? Brain : BookOpen;
+                      const selected = memoryManagerDetail?.id === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          onClick={() => handleViewManagedMemoryDetail(item.id)}
+                          className={`w-full text-left flex items-start gap-2 px-2.5 py-2 rounded-md transition-colors ${
+                            selected ? 'bg-surface-hover' : 'hover:bg-surface-hover'
+                          }`}
+                        >
+                          <TypeIcon className="w-3.5 h-3.5 text-text-muted shrink-0 mt-0.5" />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-xs text-text-primary truncate">{item.title}</span>
+                              <span className={`text-[10px] px-1 py-0.5 rounded shrink-0 ${
+                                item.importance >= 4 ? 'bg-yellow-500/10 text-yellow-600' : 'bg-surface-hover text-text-muted'
+                              }`}>
+                                {formatMemoryType(item.type)}
+                              </span>
+                            </div>
+                            <div className="text-[10px] text-text-muted mt-0.5">
+                              {t('context.importance')}: {item.importance} · {new Date(item.updatedAt).toLocaleDateString()}
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+                {filteredMemoryList.length > MANAGER_MEMORY_PAGE_SIZE && (
+                  <div className="border-t border-border-muted px-3 py-2 flex items-center justify-between gap-2">
+                    <button
+                      onClick={() => setMemoryManagerPage((page) => Math.max(1, page - 1))}
+                      disabled={memoryManagerPage <= 1}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-text-secondary hover:bg-surface-hover disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                      {t('context.previousPage')}
+                    </button>
+                    <span className="text-[11px] text-text-muted">
+                      {t('context.memoryPageStatus', {
+                        page: Math.min(memoryManagerPage, memoryManagerPageCount),
+                        total: memoryManagerPageCount,
+                      })}
+                    </span>
+                    <button
+                      onClick={() => setMemoryManagerPage((page) => Math.min(memoryManagerPageCount, page + 1))}
+                      disabled={memoryManagerPage >= memoryManagerPageCount}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-text-secondary hover:bg-surface-hover disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
+                    >
+                      {t('context.nextPage')}
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="min-w-0 overflow-y-auto p-5">
+                {!memoryManagerDetail ? (
+                  <div className="h-full flex items-center justify-center text-xs text-text-muted">
+                    {t('context.selectMemoryToView')}
+                  </div>
+                ) : (
+                  <div className="max-w-2xl">
+                    <div className="flex items-start justify-between gap-3 mb-3">
+                      <div className="min-w-0">
+                        <h3 className="text-sm font-semibold text-text-primary break-words">{memoryManagerDetail.title}</h3>
+                        <div className="text-[11px] text-text-muted mt-1">
+                          {formatMemoryType(memoryManagerDetail.type)} · {t('context.importance')}: {memoryManagerDetail.importance} · {new Date(memoryManagerDetail.updatedAt).toLocaleString()}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleDeleteMemory(memoryManagerDetail.id)}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs text-error hover:bg-error/10 transition-colors"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        {t('context.deleteMemory')}
+                      </button>
+                    </div>
+                    <div className="text-xs text-text-secondary leading-relaxed whitespace-pre-wrap break-words">
+                      {memoryManagerDetail.content}
+                    </div>
+                    {memoryManagerDetail.tags.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-3">
+                        {memoryManagerDetail.tags.map((tag) => (
+                          <span key={tag} className="text-[10px] px-1.5 py-0.5 bg-surface-hover text-text-muted rounded">
+                            #{tag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <div className="mt-5 border-t border-border-muted pt-3">
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <div className="flex items-center gap-1.5 text-[11px] font-medium text-text-muted uppercase tracking-wider">
+                          <MessageSquare className="w-3.5 h-3.5" />
+                          <span>{t('context.memoryEvidence')}</span>
+                        </div>
+                        <button
+                          onClick={handleLoadManagedMemoryWindow}
+                          disabled={isLoadingEvidence || !memoryManagerEvidence || memoryManagerEvidence.sources.length === 0}
+                          className="text-[11px] px-2 py-1 rounded bg-surface-hover hover:bg-border-muted text-text-secondary disabled:opacity-50 transition-colors"
+                        >
+                          {isLoadingEvidence ? t('context.loading') : t('context.nearbyConversation')}
+                        </button>
+                      </div>
+                      {isLoadingEvidence && !memoryManagerEvidence ? (
+                        <div className="flex items-center gap-2 text-xs text-text-muted">
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>{t('context.loadingEvidence')}</span>
+                        </div>
+                      ) : !memoryManagerEvidence || memoryManagerEvidence.sources.length === 0 ? (
+                        <div className="text-xs text-text-muted">{t('context.noEvidence')}</div>
+                      ) : (
+                        <div className="space-y-2">
+                          <div className="text-[10px] text-text-muted">
+                            {memoryManagerEvidence.returnedChars}/{memoryManagerEvidence.maxChars} chars
+                            {memoryManagerEvidence.truncated ? ' · truncated' : ''}
+                          </div>
+                          {memoryManagerEvidence.sources.map((source) => (
+                            <div key={source.id} className="rounded-md border border-border-muted bg-surface-hover/50 p-2">
+                              <div className="flex items-center justify-between gap-2 text-[10px] text-text-muted mb-1">
+                                <span>{source.role} · turn #{source.turnIndex}</span>
+                                <span>{new Date(source.timestamp).toLocaleString()}</span>
+                              </div>
+                              <div className="text-[11px] leading-5 text-text-secondary whitespace-pre-wrap break-words">
+                                {source.snippet}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Memory Detail Modal */}
+      {memoryDetail && !memoryManagerOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => { setMemoryDetail(null); setMemoryEvidence(null); }}
         >
           <div
             className="bg-surface rounded-xl shadow-xl max-w-lg w-full mx-4 max-h-[80vh] overflow-y-auto p-5"
@@ -784,11 +1207,11 @@ export function ContextPanel() {
               <div>
                 <h3 className="text-sm font-semibold text-text-primary">{memoryDetail.title}</h3>
                 <span className="text-[11px] text-text-muted">
-                  {memoryDetail.type} · {t('context.importance')}: {memoryDetail.importance} · {new Date(memoryDetail.createdAt).toLocaleString()}
+                  {formatMemoryType(memoryDetail.type)} · {t('context.importance')}: {memoryDetail.importance} · {new Date(memoryDetail.createdAt).toLocaleString()}
                 </span>
               </div>
               <button
-                onClick={() => setMemoryDetail(null)}
+                onClick={() => { setMemoryDetail(null); setMemoryEvidence(null); }}
                 className="p-1 hover:bg-surface-hover rounded"
               >
                 <ChevronDown className="w-4 h-4 text-text-muted" />
@@ -796,6 +1219,49 @@ export function ContextPanel() {
             </div>
             <div className="text-xs text-text-secondary leading-relaxed whitespace-pre-wrap">
               {memoryDetail.content}
+            </div>
+            <div className="mt-4 border-t border-border-muted pt-3">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <div className="flex items-center gap-1.5 text-[11px] font-medium text-text-muted uppercase tracking-wider">
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  <span>{t('context.memoryEvidence')}</span>
+                </div>
+                <button
+                  onClick={handleLoadMemoryWindow}
+                  disabled={isLoadingEvidence || !memoryEvidence || memoryEvidence.sources.length === 0}
+                  className="text-[11px] px-2 py-1 rounded bg-surface-hover hover:bg-border-muted text-text-secondary disabled:opacity-50 transition-colors"
+                >
+                  {isLoadingEvidence ? t('context.loading') : t('context.nearbyConversation')}
+                </button>
+              </div>
+              {isLoadingEvidence && !memoryEvidence ? (
+                <div className="flex items-center gap-2 text-xs text-text-muted">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>{t('context.loadingEvidence')}</span>
+                </div>
+              ) : !memoryEvidence || memoryEvidence.sources.length === 0 ? (
+                <div className="text-xs text-text-muted">
+                  {t('context.noEvidence')}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="text-[10px] text-text-muted">
+                    {memoryEvidence.returnedChars}/{memoryEvidence.maxChars} chars
+                    {memoryEvidence.truncated ? ' · truncated' : ''}
+                  </div>
+                  {memoryEvidence.sources.map((source) => (
+                    <div key={source.id} className="rounded-md border border-border-muted bg-surface-hover/50 p-2">
+                      <div className="flex items-center justify-between gap-2 text-[10px] text-text-muted mb-1">
+                        <span>{source.role} · turn #{source.turnIndex}</span>
+                        <span>{new Date(source.timestamp).toLocaleString()}</span>
+                      </div>
+                      <div className="text-[11px] leading-5 text-text-secondary whitespace-pre-wrap break-words">
+                        {source.snippet}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
             {memoryDetail.tags.length > 0 && (
               <div className="flex flex-wrap gap-1 mt-3">

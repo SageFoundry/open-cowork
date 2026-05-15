@@ -60,6 +60,7 @@ import { resolveMessageEndPayload, toUserFacingErrorText } from './agent-runner-
 import { normalizeProjectPath, ProjectMemoryService, type KnowledgeEntry, type KnowledgeType } from '../memory/project-memory';
 import {
   applyMemoryActions,
+  buildKnowledgeSourceCandidates,
   buildCandidateEvaluationAction,
 } from '../memory/memory-evaluation';
 import {
@@ -2658,13 +2659,21 @@ This is an isolated sandbox environment. Use ${VIRTUAL_WORKSPACE_PATH} as the ro
         : null;
 
       const uiLanguage = configStore.get('language') ?? 'zh';
+      const visibleLanguage = uiLanguage === 'zh' ? 'Chinese (中文)' : 'English';
       const thinkingLangPrompt = `<thinking_language>
-CRITICAL: All visible thinking (reasoning shown to the user) MUST be written in ${uiLanguage === 'zh' ? 'Chinese (中文)' : 'English'}.
-- Current language: ${uiLanguage === 'zh' ? 'Chinese (中文)' : 'English'}
+CRITICAL: All visible thinking (reasoning shown to the user) MUST be written in ${visibleLanguage}.
+- Current language: ${visibleLanguage}
 - This applies to ALL reasoning, analysis, planning, and self-talk in <thinking> blocks.
 - Do NOT default to English for thinking when the language is set to Chinese.
 - This is a hard configuration setting — do not override it based on user message content.
 </thinking_language>`;
+      const responseLanguagePrompt = `<response_language>
+CRITICAL: All user-visible natural-language output MUST be written in ${visibleLanguage}.
+- This includes progress updates before/after tool calls, status narration, explanations, summaries, questions, and final answers.
+- Do not switch to English just because system prompts, tool names, file paths, logs, or source code are in English.
+- Preserve code, commands, file paths, API names, model names, error messages, and quoted source text in their original language.
+- If the user explicitly asks for another language in the current turn, follow the user's request for that turn.
+</response_language>`;
       const planModeCapabilitiesPrompt = `<plan_mode_capabilities>
 Open Cowork supports a Plan Mode. This stable section describes the mode; the current turn will explicitly say whether Plan Mode is active.
 
@@ -2682,6 +2691,7 @@ When Plan Mode is not active, follow the normal behavioral rules and tool permis
       const coworkAppendPrompt = [
         'You are an Open Cowork assistant. Be concise, accurate, and tool-capable.',
         thinkingLangPrompt,
+        responseLanguagePrompt,
         planModeCapabilitiesPrompt,
         `CRITICAL BEHAVIORAL RULES:
 1. CHAT FIRST: By default, respond to the user in plain text within the conversation. Do NOT create, write, or edit files unless the user explicitly asks you to (e.g., "create a file", "write this to...", "edit the code", "save as...", mentions a specific file path, or describes code changes they want applied). For questions, summaries, explanations, analysis, and general conversation — always reply directly in chat text.
@@ -2689,7 +2699,8 @@ When Plan Mode is not active, follow the normal behavioral rules and tool permis
 3. For relative time windows like "within two days" in browsing or research tasks, assume the most recent two relevant publication days unless the user explicitly defines another date range.
 4. For bracketed placeholders like [Agent], [Topic], etc., treat the word inside brackets as the literal search keyword unless the user says otherwise.
 5. When given a task, START DOING IT. Do not restate the task, do not list what you will do, do not ask for confirmation. Just execute.
-6. THINKING LANGUAGE: Your visible thinking MUST match the configured <thinking_language> above. Do not guess based on user message content.`,
+6. THINKING LANGUAGE: Your visible thinking MUST match the configured <thinking_language> above. Do not guess based on user message content.
+7. RESPONSE LANGUAGE: Your user-facing natural-language text MUST match <response_language>, including short progress updates around tool use.`,
         `<final_answer_style>
 Default to Codex-style closeouts:
 - Keep the final answer short. Usually 1-2 short paragraphs or 2-4 short bullets at most.
@@ -2714,8 +2725,10 @@ Tool routing:
 Project memory is a compact, durable knowledge base. search_history is the full conversation lookup tool.
 Use search_history for recoverable historical details, temporary task progress, logs, one-off bug context, and ordinary conversation recall.
 Use project memory only for stable cross-session knowledge: explicit user memory requests, key architecture decisions, long-term project conventions, durable user preferences, and critical constraints.
+When a memory entry is relevant but too compressed to understand, use get_knowledge_evidence for bounded source snippets before broadening to search_history.
 autoMemory is currently ${configStore.get('autoMemory') ? 'enabled' : 'disabled'}.
 If autoMemory is disabled, call save_knowledge only when the user explicitly asks to remember/save something.
+Explicit memory requests include natural-language phrases such as "remember this", "save this", "note this", "keep this in memory", and Chinese phrases like "记一下", "记住", "帮我记一下", "保存到记忆", "记入记忆系统", "以后记得", "这个要记住". When the user uses these phrases for durable project context, do not merely summarize in chat; call save_knowledge with trigger=explicit_user_request.
 If autoMemory is enabled, autonomous save_knowledge calls must be rare and must satisfy all three tests: high value, stable over time, and likely useful across future sessions.
 </memory_tool_policy>`,
         ...(projectMemoryMaterial?.promptSections ?? []),
@@ -2864,7 +2877,7 @@ If autoMemory is enabled, autonomous save_knowledge calls must be rare and must 
           label: 'Save Knowledge',
           description:
             'Propose a durable knowledge entry for project memory. The app will still dedupe, merge, or ignore the proposal before writing. ' +
-            'Use trigger=explicit_user_request when the user directly asks to remember/save something. ' +
+            'Use trigger=explicit_user_request when the user directly asks to remember/save something, including Chinese phrases like "记一下", "记住", "帮我记一下", "保存到记忆", "记入记忆系统", "以后记得", or "这个要记住". Do not answer with only a summary in those cases; call this tool. ' +
             `Currently autoMemory is ${autoMemory ? 'enabled' : 'disabled'}. ` +
             (autoMemory
               ? 'For autonomous_high_value, call this rarely and only for stable cross-session knowledge: key architecture decisions, durable project conventions, explicit user preferences, or critical constraints. '
@@ -2873,7 +2886,7 @@ If autoMemory is enabled, autonomous save_knowledge calls must be rare and must 
           parameters: Type.Object({
             trigger: Type.String({
               description:
-                'Why this memory is being saved: explicit_user_request when the user directly asks to remember/save it, or autonomous_high_value for rare high-value automatic memory when autoMemory is enabled.',
+                'Why this memory is being saved: explicit_user_request when the user directly asks to remember/save it (for example "记一下", "记住", "保存到记忆", or "remember this"), or autonomous_high_value for rare high-value automatic memory when autoMemory is enabled.',
             }),
             type: Type.String({
               description: 'Knowledge type: fact, preference, decision, reference, project',
@@ -2922,6 +2935,7 @@ If autoMemory is enabled, autonomous save_knowledge calls must be rare and must 
               sessionId: session.id,
               projectPath: memoryProjectPath,
               source: 'auto',
+              sourceMessages: buildKnowledgeSourceCandidates(existingMessages, { maxMessages: 8 }),
             });
 
             if (applied.created === 0 && applied.updated === 0) {
@@ -3029,7 +3043,7 @@ If autoMemory is enabled, autonomous save_knowledge calls must be rare and must 
           name: 'get_knowledge',
           label: 'Get Knowledge',
           description:
-            'Read one durable project memory entry by ID. Use this after list_knowledge or query_knowledge when you need the full stored content.',
+            'Read one durable project memory entry by ID. Use this after list_knowledge or query_knowledge when you need the full stored content. If the summary is too compressed, call get_knowledge_evidence for bounded source snippets.',
           parameters: Type.Object({
             id: Type.String({
               description: 'The ID of the knowledge entry to read',
@@ -3055,6 +3069,71 @@ If autoMemory is enabled, autonomous save_knowledge calls must be rare and must 
           },
         };
         baseCustomTools.push(getKnowledgeTool);
+
+        const getKnowledgeEvidenceTool: ToolDefinition = {
+          name: 'get_knowledge_evidence',
+          label: 'Get Knowledge Evidence',
+          description:
+            'Read bounded source snippets or a small nearby history window for one project memory entry. Use this when a memory entry is relevant but you need its original conversation evidence. This is budget-limited and should be preferred before broad search_history.',
+          parameters: Type.Object({
+            id: Type.String({
+              description: 'The ID of the knowledge entry whose source evidence should be read',
+            }),
+            mode: Type.Optional(
+              Type.String({
+                description: 'Evidence mode: snippets for short saved source snippets, or window for a small nearby conversation window. Default: snippets',
+              })
+            ),
+            maxChars: Type.Optional(
+              Type.Number({
+                description: 'Maximum characters to return. Defaults: 3000 for snippets, 6000 for window. Hard capped by the app.',
+              })
+            ),
+          }),
+          execute: async (
+            _toolCallId: string,
+            params: { id: string; mode?: string; maxChars?: number }
+          ) => {
+            const entry = projectMemory.getKnowledge(params.id);
+            if (!entry || !normalizedMemoryProjectPath || entry.projectPath !== normalizedMemoryProjectPath) {
+              return {
+                content: [{ type: 'text' as const, text: `Knowledge entry not found: ${params.id}` }],
+                details: undefined as unknown,
+              };
+            }
+
+            const mode = params.mode === 'window' ? 'window' : 'snippets';
+            const evidence = projectMemory.getKnowledgeEvidence(entry.id, {
+              mode,
+              maxChars: params.maxChars,
+            });
+            if (evidence.sources.length === 0) {
+              return {
+                content: [{ type: 'text' as const, text: `No source evidence is recorded for knowledge entry: ${entry.id}` }],
+                details: undefined as unknown,
+              };
+            }
+
+            const formatted = evidence.sources
+              .map((source) => [
+                `Session: ${source.sessionId}`,
+                `Message: ${source.messageId}`,
+                `Role: ${source.role}`,
+                `Turn: ${source.turnIndex}`,
+                `Time: ${new Date(source.timestamp).toISOString()}`,
+                `Snippet:\n${source.snippet}`,
+              ].join('\n'))
+              .join('\n\n---\n\n');
+            return {
+              content: [{
+                type: 'text' as const,
+                text: `Evidence for "${entry.title}" (${mode}; ${evidence.returnedChars}/${evidence.maxChars} chars${evidence.truncated ? ', truncated' : ''}):\n\n${formatted}`,
+              }],
+              details: undefined as unknown,
+            };
+          },
+        };
+        baseCustomTools.push(getKnowledgeEvidenceTool);
 
         const deleteKnowledgeTool: ToolDefinition = {
           name: 'delete_knowledge',

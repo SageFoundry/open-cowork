@@ -860,12 +860,14 @@ export class SessionManager {
   }
 
   private async generateCompactionSummary(messages: Message[]): Promise<string> {
+    const language = (configStore.get('language') ?? 'zh') === 'zh' ? 'Chinese (中文)' : 'English';
     const serializedHistory = messages
       .map((message) => this.serializeMessageForCompaction(message))
       .filter(Boolean)
       .join('\n\n');
     const prompt = [
       'Summarize the earlier conversation so the assistant can continue with limited context.',
+      `Write the summary in ${language}. Preserve code identifiers, commands, file paths, API names, and quoted errors exactly when needed.`,
       'Focus on user goals, constraints, decisions, important tool findings, errors that still matter, and unfinished work.',
       'Earlier history:',
       serializedHistory.slice(0, 24000),
@@ -874,7 +876,7 @@ export class SessionManager {
     try {
       const result = await completeWithClaudeSdk(
         prompt,
-        COMPACTION_SUMMARY_SYSTEM_PROMPT,
+        `${COMPACTION_SUMMARY_SYSTEM_PROMPT}\n\nWrite all natural-language summary text in ${language}.`,
         configStore.getAll()
       );
       const text = result.text.trim();

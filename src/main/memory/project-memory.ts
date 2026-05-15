@@ -32,6 +32,34 @@ export interface KnowledgeEntry {
   updatedAt: number;
 }
 
+export interface KnowledgeSource {
+  id: string;
+  knowledgeId: string;
+  sessionId: string;
+  messageId: string;
+  turnIndex: number;
+  role: 'user' | 'assistant';
+  timestamp: number;
+  snippet: string;
+  createdAt: number;
+}
+
+export interface KnowledgeSourceCandidate {
+  sessionId: string;
+  messageId: string;
+  turnIndex: number;
+  role: 'user' | 'assistant';
+  timestamp: number;
+  snippet: string;
+}
+
+export interface KnowledgeEvidenceResult {
+  sources: KnowledgeSource[];
+  returnedChars: number;
+  maxChars: number;
+  truncated: boolean;
+}
+
 /**
  * Prompt material built from relevant knowledge
  */
@@ -42,6 +70,9 @@ export interface ProjectMemoryPromptMaterial {
 }
 
 const VALID_TYPES = new Set<string>(['fact', 'preference', 'decision', 'reference', 'project']);
+const DEFAULT_EVIDENCE_SNIPPETS_CHARS = 3000;
+const DEFAULT_EVIDENCE_WINDOW_CHARS = 6000;
+const MAX_EVIDENCE_CHARS = 12000;
 
 export function normalizeProjectPath(cwd: string | null | undefined): string | null {
   const trimmed = cwd?.trim();
@@ -259,6 +290,62 @@ export class ProjectMemoryService {
     db.prepare('DELETE FROM knowledge WHERE id = ?').run(id);
   }
 
+  addKnowledgeSources(knowledgeId: string, sources: KnowledgeSourceCandidate[]): void {
+    if (sources.length === 0) {
+      return;
+    }
+
+    const now = Date.now();
+    const stmt = this.getDb().prepare(`
+      INSERT OR IGNORE INTO knowledge_sources
+        (id, knowledge_id, session_id, message_id, turn_index, role, timestamp, snippet, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const tx = this.getDb().transaction((items: KnowledgeSourceCandidate[]) => {
+      for (const source of items) {
+        const snippet = cleanSnippet(source.snippet, 600);
+        if (!snippet) {
+          continue;
+        }
+        stmt.run(
+          uuidv4(),
+          knowledgeId,
+          source.sessionId,
+          source.messageId,
+          Math.max(0, Math.floor(source.turnIndex)),
+          source.role,
+          source.timestamp,
+          snippet,
+          now
+        );
+      }
+    });
+    tx(sources);
+  }
+
+  listKnowledgeSources(knowledgeId: string): KnowledgeSource[] {
+    const rows = this.getDb()
+      .prepare('SELECT * FROM knowledge_sources WHERE knowledge_id = ? ORDER BY timestamp ASC, turn_index ASC')
+      .all(knowledgeId) as Record<string, unknown>[];
+    return rows.map((row) => this.rowToSource(row));
+  }
+
+  getKnowledgeEvidence(
+    knowledgeId: string,
+    options?: { mode?: 'snippets' | 'window'; maxChars?: number; windowTurns?: number }
+  ): KnowledgeEvidenceResult {
+    const mode = options?.mode === 'window' ? 'window' : 'snippets';
+    const maxChars = normalizeEvidenceBudget(
+      options?.maxChars,
+      mode === 'window' ? DEFAULT_EVIDENCE_WINDOW_CHARS : DEFAULT_EVIDENCE_SNIPPETS_CHARS
+    );
+    const baseSources = this.listKnowledgeSources(knowledgeId);
+    const sources = mode === 'window'
+      ? this.buildWindowEvidence(baseSources, options?.windowTurns ?? 2)
+      : baseSources;
+    return limitEvidenceSources(sources, maxChars);
+  }
+
   /**
    * Get a single knowledge entry by ID
    */
@@ -412,6 +499,89 @@ Knowledge is stored as structured entries (facts, preferences, decisions, refere
     };
   }
 
+  private rowToSource(row: Record<string, unknown>): KnowledgeSource {
+    return {
+      id: row.id as string,
+      knowledgeId: row.knowledge_id as string,
+      sessionId: row.session_id as string,
+      messageId: row.message_id as string,
+      turnIndex: (row.turn_index as number) ?? 0,
+      role: row.role === 'assistant' ? 'assistant' : 'user',
+      timestamp: (row.timestamp as number) ?? 0,
+      snippet: (row.snippet as string) ?? '',
+      createdAt: (row.created_at as number) ?? 0,
+    };
+  }
+
+  private buildWindowEvidence(sources: KnowledgeSource[], windowTurns: number): KnowledgeSource[] {
+    const radius = Math.max(0, Math.min(5, Math.floor(windowTurns)));
+    const bySession = new Map<string, KnowledgeSource[]>();
+    for (const source of sources) {
+      const list = bySession.get(source.sessionId) ?? [];
+      list.push(source);
+      bySession.set(source.sessionId, list);
+    }
+
+    const windows: KnowledgeSource[] = [];
+    const seen = new Set<string>();
+    for (const [sessionId, sessionSources] of bySession) {
+      const messages = this.loadSessionMessageSources(sessionId);
+      for (const source of sessionSources) {
+        const indexById = messages.findIndex((message) => message.messageId === source.messageId);
+        const center = indexById >= 0 ? indexById : source.turnIndex;
+        const start = Math.max(0, center - radius);
+        const end = Math.min(messages.length - 1, center + radius);
+        for (let index = start; index <= end; index++) {
+          const message = messages[index];
+          const key = `${source.knowledgeId}:${message.messageId}`;
+          if (seen.has(key)) {
+            continue;
+          }
+          seen.add(key);
+          windows.push({
+            id: `${source.id}:${message.messageId}`,
+            knowledgeId: source.knowledgeId,
+            sessionId,
+            messageId: message.messageId,
+            turnIndex: index,
+            role: message.role,
+            timestamp: message.timestamp,
+            snippet: message.snippet,
+            createdAt: source.createdAt,
+          });
+        }
+      }
+    }
+    return windows.sort((a, b) => a.timestamp - b.timestamp || a.turnIndex - b.turnIndex);
+  }
+
+  private loadSessionMessageSources(sessionId: string): KnowledgeSourceCandidate[] {
+    const rows = this.getDb()
+      .prepare('SELECT id, role, content, timestamp FROM messages WHERE session_id = ? ORDER BY timestamp ASC')
+      .all(sessionId) as Array<{ id: string; role: string; content: string; timestamp: number }>;
+
+    const result: KnowledgeSourceCandidate[] = [];
+    for (let index = 0; index < rows.length; index++) {
+      const row = rows[index];
+      if (row.role !== 'user' && row.role !== 'assistant') {
+        continue;
+      }
+      const snippet = cleanSnippet(extractMessageTextFromStoredContent(row.content), 1200);
+      if (!snippet) {
+        continue;
+      }
+      result.push({
+        sessionId,
+        messageId: row.id,
+        turnIndex: index,
+        role: row.role,
+        timestamp: row.timestamp,
+        snippet,
+      });
+    }
+    return result;
+  }
+
   /**
    * Build an FTS5 query string from user input
    */
@@ -444,5 +614,92 @@ Knowledge is stored as structured entries (facts, preferences, decisions, refere
       .sort((a, b) => b.score - a.score || b.entry.importance - a.entry.importance)
       .slice(0, 5)
       .map((item) => item.entry);
+  }
+}
+
+function normalizeEvidenceBudget(value: number | undefined, fallback: number): number {
+  if (!Number.isFinite(value ?? NaN)) {
+    return fallback;
+  }
+  return Math.max(500, Math.min(MAX_EVIDENCE_CHARS, Math.floor(value as number)));
+}
+
+function limitEvidenceSources(sources: KnowledgeSource[], maxChars: number): KnowledgeEvidenceResult {
+  const limited: KnowledgeSource[] = [];
+  let returnedChars = 0;
+  let truncated = false;
+
+  for (const source of sources) {
+    const remaining = maxChars - returnedChars;
+    if (remaining <= 0) {
+      truncated = true;
+      break;
+    }
+
+    let snippet = source.snippet.trim();
+    if (!snippet) {
+      continue;
+    }
+    if (snippet.length > remaining) {
+      snippet = `${snippet.slice(0, Math.max(0, remaining - 16)).trimEnd()}\n...[truncated]`;
+      truncated = true;
+    }
+    returnedChars += snippet.length;
+    limited.push({ ...source, snippet });
+
+    if (truncated) {
+      break;
+    }
+  }
+
+  return {
+    sources: limited,
+    returnedChars,
+    maxChars,
+    truncated: truncated || limited.length < sources.length,
+  };
+}
+
+function cleanSnippet(value: string, maxChars: number): string {
+  const normalized = value.replace(/\r\n/g, '\n').replace(/[ \t]+/g, ' ').trim();
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxChars - 16)).trimEnd()}\n...[truncated]`;
+}
+
+function extractMessageTextFromStoredContent(raw: string): string {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    const blocks = Array.isArray(parsed) ? parsed : [parsed];
+    return blocks
+      .map((block) => {
+        if (typeof block !== 'object' || block === null || !('type' in block)) {
+          return '';
+        }
+        const record = block as Record<string, unknown>;
+        if (record.type === 'text') {
+          return typeof record.text === 'string' ? record.text : '';
+        }
+        if (record.type === 'tool_use') {
+          return typeof record.name === 'string' ? `[tool_use: ${record.name}]` : '[tool_use]';
+        }
+        if (record.type === 'tool_result') {
+          return typeof record.content === 'string' ? `[tool_result]\n${record.content.slice(0, 500)}` : '[tool_result]';
+        }
+        if (record.type === 'file_attachment') {
+          const filename = typeof record.filename === 'string' ? record.filename : 'file';
+          const relativePath = typeof record.relativePath === 'string' ? record.relativePath : '';
+          return `[file_attachment] ${filename}${relativePath ? ` (${relativePath})` : ''}`;
+        }
+        if (record.type === 'image') {
+          return '[image]';
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n');
+  } catch {
+    return '';
   }
 }

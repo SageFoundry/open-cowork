@@ -3,6 +3,7 @@ import type { KnowledgeEntry } from '../../main/memory/project-memory';
 import {
   applyMemoryActions,
   buildCandidateEvaluationAction,
+  buildKnowledgeSourceCandidates,
   buildMemoryExtractionPrompt,
   parseMemoryEvaluationResponse,
 } from '../../main/memory/memory-evaluation';
@@ -169,6 +170,34 @@ describe('memory evaluation', () => {
     expect(entries[0].content).toContain('should not use embeddings');
     expect(entries[0].tags).toContain('no-embedding');
   });
+
+  it('builds source candidates from persisted messages', () => {
+    const sources = buildKnowledgeSourceCandidates([
+      {
+        id: 'message-1',
+        sessionId: 'session-1',
+        role: 'user',
+        timestamp: 10,
+        content: [{ type: 'text', text: '请记住这个项目约定。' }],
+      },
+      {
+        id: 'message-2',
+        sessionId: 'session-1',
+        role: 'system',
+        timestamp: 11,
+        content: [{ type: 'text', text: 'hidden' }],
+      },
+    ]);
+
+    expect(sources).toHaveLength(1);
+    expect(sources[0]).toMatchObject({
+      sessionId: 'session-1',
+      messageId: 'message-1',
+      turnIndex: 0,
+      role: 'user',
+    });
+    expect(sources[0].snippet).toContain('项目约定');
+  });
 });
 
 function createFakeMemoryService(entries: KnowledgeEntry[]) {
@@ -192,5 +221,6 @@ function createFakeMemoryService(entries: KnowledgeEntry[]) {
       entries.push(saved);
       return saved;
     },
+    addKnowledgeSources: () => undefined,
   } as any;
 }
