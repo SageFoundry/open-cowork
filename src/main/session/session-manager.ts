@@ -64,7 +64,6 @@ import { buildScheduledTaskTitle } from '../../shared/schedule/task-title';
 import {
   buildTokenBudgetSnapshot,
   estimateMessagesTokens,
-  estimateTextTokens,
   getStrategyThresholds,
 } from '../context/context-budget';
 import {
@@ -77,6 +76,10 @@ import {
 } from '../context/context-compaction';
 import { ProjectMemoryService } from '../memory/project-memory';
 import { resolveKnownModelSpecs } from '../claude/pi-model-resolution';
+import {
+  buildWorkspaceInfoPrompt,
+  estimateEffectiveSystemPromptTokens,
+} from '../claude/prompt-contract';
 import type { SkillsManager } from '../skills/skills-manager';
 import type { BackgroundTaskService } from '../background/background-task-service';
 
@@ -88,7 +91,6 @@ interface AgentRunner {
 
 const WORKSPACE_MOUNT_VIRTUAL_PATH = '/mnt/workspace';
 const TITLE_GENERATION_TIMEOUT_MS = 20000;
-const BASE_SYSTEM_PROMPT_TOKEN_ESTIMATE = 1800;
 const COMPACTION_SUMMARY_SYSTEM_PROMPT = `Summarize earlier conversation history for a coding agent that must continue the same task with limited context.
 Keep only durable, high-value information:
 - the user's goal, constraints, and preferences
@@ -711,13 +713,19 @@ export class SessionManager {
   }
 
   private estimateSystemPromptTokens(session: Session, userPrompt: string): number {
+    const allConfig = configStore.getAll();
     const promptMaterial = session.cwd
       ? this.projectMemoryService.buildPromptMaterial(session.cwd, userPrompt)
       : null;
-    const memoryTokens = promptMaterial
-      ? estimateTextTokens(promptMaterial.promptSections.join('\n\n'))
-      : 0;
-    return BASE_SYSTEM_PROMPT_TOKEN_ESTIMATE + memoryTokens;
+    return estimateEffectiveSystemPromptTokens({
+      visibleLanguage: allConfig.language === 'zh' ? 'Chinese (中文)' : 'English',
+      workspaceInfoPrompt: buildWorkspaceInfoPrompt({
+        isSandboxed: false,
+        workingDir: session.cwd,
+      }),
+      autoMemoryEnabled: Boolean(allConfig.autoMemory),
+      projectMemorySections: promptMaterial?.promptSections,
+    });
   }
 
   private emitTokenBudget(sessionId: string, snapshot: TokenBudgetSnapshot): void {
@@ -1520,6 +1528,14 @@ export class SessionManager {
       type: 'session.planMode',
       payload: { sessionId, planMode },
     });
+  }
+
+  renameSession(sessionId: string, title: string): boolean {
+    const normalizedTitle = title.trim().replace(/\s+/g, ' ').slice(0, 120);
+    if (!normalizedTitle) {
+      return false;
+    }
+    return this.updateSessionTitle(sessionId, normalizedTitle);
   }
 
   // Update session status

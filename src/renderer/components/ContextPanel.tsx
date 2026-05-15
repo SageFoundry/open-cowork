@@ -90,6 +90,7 @@ export function ContextPanel() {
   const sessionStates = useAppStore((s) => s.sessionStates);
   const backgroundTasks = useAppStore((s) => s.backgroundTasks);
   const backgroundTaskLogs = useAppStore((s) => s.backgroundTaskLogs);
+  const memoryChangedAt = useAppStore((s) => s.memoryChangedAt);
   const appConfig = useAppStore((s) => s.appConfig);
   const contextPanelCollapsed = useAppStore((s) => s.contextPanelCollapsed);
   const toggleContextPanel = useAppStore((s) => s.toggleContextPanel);
@@ -330,7 +331,7 @@ export function ContextPanel() {
     load();
 
     return () => { cancelled = true; };
-  }, [activeSessionId, contextPanelCollapsed, currentWorkingDir, steps.length, t]);
+  }, [activeSessionId, contextPanelCollapsed, currentWorkingDir, memoryChangedAt, steps.length, t]);
 
   // Load autoMemory state from config
   useEffect(() => {

@@ -432,6 +432,7 @@ export type ClientEvent =
   | { type: 'session.stop'; payload: { sessionId: string } }
   | { type: 'session.delete'; payload: { sessionId: string } }
   | { type: 'session.batchDelete'; payload: { sessionIds: string[] } }
+  | { type: 'session.rename'; payload: { sessionId: string; title: string } }
   | { type: 'session.list'; payload: Record<string, never> }
   | {
       type: 'session.getMessages';
@@ -512,6 +513,7 @@ export type ServerEvent =
   | { type: 'session.compaction'; payload: { sessionId: string; info: SessionCompactionInfo } }
   | { type: 'session.compactionNotice'; payload: { sessionId: string; level: 'info' | 'warning' | 'error'; message: string } }
   | { type: 'session.planMode'; payload: { sessionId: string; planMode: boolean } }
+  | { type: 'memory.changed'; payload: { projectPath: string | null; action: 'create' | 'update' | 'delete' | 'extract'; id?: string } }
   | { type: 'tasks.updated'; payload: { task: BackgroundTask } }
   | { type: 'tasks.logAppended'; payload: BackgroundTaskLogChunk }
   | { type: 'navigate.to'; payload: { page: 'welcome' | 'settings' | 'session'; tab?: string; sessionId?: string } }

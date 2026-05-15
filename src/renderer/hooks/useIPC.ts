@@ -344,6 +344,10 @@ export function useIPC() {
             store.setSessionPlanMode(event.payload.sessionId, event.payload.planMode);
             break;
 
+          case 'memory.changed':
+            store.markMemoryChanged(event.payload.projectPath);
+            break;
+
           case 'navigate':
             if (event.payload === 'settings') {
               store.setShowSettings(true);
@@ -724,6 +728,25 @@ export function useIPC() {
     ]
   );
 
+  const renameSession = useCallback(
+    async (sessionId: string, title: string): Promise<boolean> => {
+      const normalizedTitle = title.trim().replace(/\s+/g, ' ').slice(0, 120);
+      if (!normalizedTitle) return false;
+
+      if (!isElectron) {
+        updateSession(sessionId, { title: normalizedTitle });
+        return true;
+      }
+
+      const updated = await invoke<boolean>({
+        type: 'session.rename',
+        payload: { sessionId, title: normalizedTitle },
+      });
+      return Boolean(updated);
+    },
+    [invoke, isElectron, updateSession]
+  );
+
   const deleteSession = useCallback(
     (sessionId: string) => {
       useAppStore.getState().removeSession(sessionId);
@@ -914,6 +937,7 @@ export function useIPC() {
     startSession,
     continueSession,
     stopSession,
+    renameSession,
     deleteSession,
     batchDeleteSessions,
     listSessions,

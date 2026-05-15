@@ -582,6 +582,7 @@
     "settings": "设置",
     "themeToggle": "切换主题",
     "manage": "管理",
+    "renameSession": "重命名",
     "selectAll": "全选",
     "deselectAll": "取消全选",
     "nSelected": "已选 {{count}} 个",

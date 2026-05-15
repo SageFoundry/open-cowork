@@ -1553,6 +1553,9 @@ async function handleClientEvent(event: ClientEvent): Promise<unknown> {
     case 'session.batchDelete':
       return sm.batchDeleteSessions(event.payload.sessionIds);
 
+    case 'session.rename':
+      return sm.renameSession(event.payload.sessionId, event.payload.title);
+
     case 'session.planMode':
       sm.updateSessionPlanMode(event.payload.sessionId, event.payload.planMode);
       return null;

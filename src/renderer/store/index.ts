@@ -142,6 +142,10 @@ interface AppState {
   backgroundTasks: BackgroundTask[];
   backgroundTaskLogs: Record<string, string>;
 
+  // Project memory
+  memoryChangedAt: number;
+  memoryChangedProjectPath: string | null;
+
   // Sandbox setup
   sandboxSetupProgress: SandboxSetupProgress | null;
   isSandboxSetupComplete: boolean;
@@ -222,6 +226,9 @@ interface AppState {
   appendBackgroundTaskLog: (taskId: string, text: string) => void;
   setBackgroundTaskLog: (taskId: string, text: string) => void;
 
+  // Project memory actions
+  markMemoryChanged: (projectPath: string | null) => void;
+
   // Sandbox setup actions
   setSandboxSetupProgress: (progress: SandboxSetupProgress | null) => void;
   setSandboxSetupComplete: (complete: boolean) => void;
@@ -297,6 +304,8 @@ export const useAppStore = create<AppState>((set) => ({
   workingDir: null,
   backgroundTasks: [],
   backgroundTaskLogs: {},
+  memoryChangedAt: 0,
+  memoryChangedProjectPath: null,
   sandboxSetupProgress: null,
   isSandboxSetupComplete: false,
   sandboxSyncStatus: null,
@@ -697,6 +706,9 @@ export const useAppStore = create<AppState>((set) => ({
         [taskId]: text,
       },
     })),
+
+  markMemoryChanged: (projectPath) =>
+    set({ memoryChangedAt: Date.now(), memoryChangedProjectPath: projectPath }),
 
   // Sandbox setup actions
   setSandboxSetupProgress: (progress) => set({ sandboxSetupProgress: progress }),

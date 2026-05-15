@@ -384,7 +384,8 @@ describe('ProjectMemoryService', () => {
     const joined = material.promptSections.join('\n');
     expect(joined).toContain('Alice Preferences');
     expect(joined).toContain('project_memory_guidance');
-    expect(joined).toContain('project_memory_index');
+    expect(joined).toContain('project_memory_relevant');
+    expect(joined).not.toContain('project_memory_index');
   });
 
   it('skips memory injection when user asks to ignore memory', () => {

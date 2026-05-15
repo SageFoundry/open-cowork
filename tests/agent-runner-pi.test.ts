@@ -24,9 +24,8 @@ describe('ClaudeAgentRunner pi-coding-agent integration', () => {
   });
 
   it('uses standard markdown link guidance for sources citations', () => {
-    expect(agentRunnerContent).toContain(
-      'otherwise use standard Markdown links: [Title](https://claude.ai/chat/URL)'
-    );
+    expect(agentRunnerContent).toContain('buildOpenCoworkAppendPrompt');
+    expect(agentRunnerContent).not.toContain('https://claude.ai/chat/URL');
   });
 
   it('avoids duplicating the current user prompt in contextual history assembly', () => {
@@ -70,7 +69,8 @@ describe('ClaudeAgentRunner pi-coding-agent integration', () => {
   it('uses pi DefaultResourceLoader with additionalSkillPaths and appendSystemPrompt', () => {
     expect(agentRunnerContent).toContain('additionalSkillPaths: skillPaths');
     expect(agentRunnerContent).toContain('appendSystemPrompt: coworkAppendPrompt');
-    expect(agentRunnerContent).toContain('<plan_mode_capabilities>');
+    expect(agentRunnerContent).toContain('buildPlanModeRuntimePrompt');
+    expect(agentRunnerContent).not.toContain('<plan_mode_capabilities>');
     expect(agentRunnerContent).not.toContain('systemPromptOverride');
   });
 
@@ -93,9 +93,7 @@ describe('ClaudeAgentRunner pi-coding-agent integration', () => {
   });
 
   it('nudges the model to proceed with reasonable assumptions', () => {
-    expect(agentRunnerContent).toContain('proceed immediately with reasonable assumptions');
-    expect(agentRunnerContent).toContain('within two days');
-    expect(agentRunnerContent).toContain('most recent two relevant publication days');
+    expect(agentRunnerContent).toContain('buildOpenCoworkAppendPrompt');
   });
 
   it('routes MCP image results through structured helpers instead of stringifying base64 into text', () => {
@@ -119,11 +117,8 @@ describe('ClaudeAgentRunner pi-coding-agent integration', () => {
   });
 
   it('chat-first behavioral rules are present', () => {
-    expect(agentRunnerContent).toContain('CHAT FIRST');
-    expect(agentRunnerContent).toContain(
-      'Do NOT create, write, or edit files unless the user explicitly asks'
-    );
-    expect(agentRunnerContent).toContain('START DOING IT');
+    expect(agentRunnerContent).toContain('buildOpenCoworkAppendPrompt');
+    expect(agentRunnerContent).not.toContain('START DOING IT');
   });
 
   it('provides an explicit background command tool with readiness waiting', () => {

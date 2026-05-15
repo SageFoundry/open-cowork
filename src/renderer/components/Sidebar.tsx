@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAppStore } from '../store';
 import { useIPC } from '../hooks/useIPC';
@@ -16,6 +16,7 @@ import {
   ListChecks,
   Check,
   Folder,
+  Pencil,
 } from 'lucide-react';
 import { DEFAULT_PROJECT_ID, type ProjectSummary, type Session } from '../types';
 import {
@@ -50,11 +51,16 @@ export function Sidebar() {
   const {
     deleteSession,
     batchDeleteSessions,
+    renameSession,
     getSessionMessages,
     getSessionTraceSteps,
     isElectron,
   } = useIPC();
   const [hoveredSession, setHoveredSession] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ session: Session; x: number; y: number } | null>(null);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState('');
+  const skipRenameCommitRef = useRef(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -109,6 +115,22 @@ export function Sidebar() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isSelectMode]);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const closeMenu = () => setContextMenu(null);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeMenu();
+    };
+    window.addEventListener('click', closeMenu);
+    window.addEventListener('scroll', closeMenu, true);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('click', closeMenu);
+      window.removeEventListener('scroll', closeMenu, true);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [contextMenu]);
 
   useEffect(() => {
     if (!activeProjectId || activeProject || activeProjectId === DEFAULT_PROJECT_ID) return;
@@ -264,7 +286,52 @@ export function Sidebar() {
 
   const handleDeleteSession = (e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation();
+    setContextMenu(null);
     deleteSession(sessionId);
+  };
+
+  const handleSessionContextMenu = (event: React.MouseEvent, session: Session) => {
+    if (isSelectMode) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setHoveredSession(session.id);
+    setContextMenu({
+      session,
+      x: Math.min(event.clientX, window.innerWidth - 180),
+      y: Math.min(event.clientY, window.innerHeight - 96),
+    });
+  };
+
+  const startRenamingSession = (session: Session) => {
+    setContextMenu(null);
+    skipRenameCommitRef.current = false;
+    setEditingSessionId(session.id);
+    setEditingTitle(session.title);
+  };
+
+  const cancelRenamingSession = () => {
+    skipRenameCommitRef.current = true;
+    setEditingSessionId(null);
+    setEditingTitle('');
+  };
+
+  const commitRenamingSession = async () => {
+    if (skipRenameCommitRef.current) {
+      skipRenameCommitRef.current = false;
+      setEditingSessionId(null);
+      setEditingTitle('');
+      return;
+    }
+    if (!editingSessionId) return;
+    const session = sessions.find((item) => item.id === editingSessionId);
+    const nextTitle = editingTitle.trim().replace(/\s+/g, ' ').slice(0, 120);
+    cancelRenamingSession();
+    if (!session || !nextTitle || nextTitle === session.title) return;
+    try {
+      await renameSession(session.id, nextTitle);
+    } catch (error) {
+      console.error('[Sidebar] Failed to rename session:', error);
+    }
   };
 
   const toggleTheme = () => {
@@ -431,6 +498,12 @@ export function Sidebar() {
                 }}
                 onHoverSession={setHoveredSession}
                 onDeleteSession={handleDeleteSession}
+                onSessionContextMenu={handleSessionContextMenu}
+                editingSessionId={editingSessionId}
+                editingTitle={editingTitle}
+                onEditingTitleChange={setEditingTitle}
+                onCommitRename={commitRenamingSession}
+                onCancelRename={cancelRenamingSession}
                 t={t}
               />
             ))}
@@ -521,6 +594,29 @@ export function Sidebar() {
           </div>
         </div>
       )}
+
+      {contextMenu && (
+        <div
+          className="fixed z-50 w-40 rounded-lg border border-border-muted bg-surface shadow-xl p-1"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button
+            onClick={() => startRenamingSession(contextMenu.session)}
+            className="w-full flex items-center gap-2 px-2.5 py-2 rounded-md text-[13px] text-text-secondary hover:bg-surface-hover hover:text-text-primary transition-colors"
+          >
+            <Pencil className="w-3.5 h-3.5" />
+            <span>{t('sidebar.renameSession')}</span>
+          </button>
+          <button
+            onClick={(event) => handleDeleteSession(event, contextMenu.session.id)}
+            className="w-full flex items-center gap-2 px-2.5 py-2 rounded-md text-[13px] text-error hover:bg-error/10 transition-colors"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>{t('common.delete')}</span>
+          </button>
+        </div>
+      )}
     </aside>
   );
 }
@@ -538,6 +634,12 @@ type ProjectSectionProps = {
   onSessionClick: (session: Session) => void;
   onHoverSession: (sessionId: string | null) => void;
   onDeleteSession: (e: React.MouseEvent, sessionId: string) => void;
+  onSessionContextMenu: (event: React.MouseEvent, session: Session) => void;
+  editingSessionId: string | null;
+  editingTitle: string;
+  onEditingTitleChange: (title: string) => void;
+  onCommitRename: () => void;
+  onCancelRename: () => void;
   t: Translate;
 };
 
@@ -554,6 +656,12 @@ function ProjectSection({
   onSessionClick,
   onHoverSession,
   onDeleteSession,
+  onSessionContextMenu,
+  editingSessionId,
+  editingTitle,
+  onEditingTitleChange,
+  onCommitRename,
+  onCancelRename,
   t,
 }: ProjectSectionProps) {
   return (
@@ -596,10 +704,12 @@ function ProjectSection({
             sessions.map((session) => {
               const isActive = activeSessionId === session.id;
               const isSelected = selectedIds.has(session.id);
+              const isEditing = editingSessionId === session.id;
               return (
                 <div
                   key={session.id}
                   onClick={() => onSessionClick(session)}
+                  onContextMenu={(event) => onSessionContextMenu(event, session)}
                   onMouseEnter={() => onHoverSession(session.id)}
                   onMouseLeave={() => onHoverSession(null)}
                   className={`group/session relative cursor-pointer rounded-lg px-2 py-1.5 transition-colors ${
@@ -623,9 +733,30 @@ function ProjectSection({
                       </div>
                     )}
                     <div className="min-w-0 flex-1">
-                      <div className="text-[13px] font-medium leading-5 text-text-primary truncate">
-                        {session.title}
-                      </div>
+                      {isEditing ? (
+                        <input
+                          autoFocus
+                          value={editingTitle}
+                          onChange={(event) => onEditingTitleChange(event.target.value)}
+                          onClick={(event) => event.stopPropagation()}
+                          onBlur={onCommitRename}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault();
+                              event.currentTarget.blur();
+                            } else if (event.key === 'Escape') {
+                              event.preventDefault();
+                              onCancelRename();
+                              event.currentTarget.blur();
+                            }
+                          }}
+                          className="w-full rounded-md border border-accent/40 bg-background px-1.5 py-0.5 text-[13px] font-medium leading-5 text-text-primary outline-none"
+                        />
+                      ) : (
+                        <div className="text-[13px] font-medium leading-5 text-text-primary truncate">
+                          {session.title}
+                        </div>
+                      )}
                     </div>
                     <span className="text-[11px] leading-5 text-text-muted flex-shrink-0">
                       {formatSessionAge(session.updatedAt || session.createdAt, t)}

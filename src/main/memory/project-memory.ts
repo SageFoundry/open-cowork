@@ -430,22 +430,17 @@ export class ProjectMemoryService {
     const projectPath = normalizeProjectPath(cwd);
     const entries = this.searchKnowledge(userPrompt, projectPath);
 
-    // Also include high-importance entries that might be relevant
-    const highImportance = this.listKnowledge(projectPath).filter((e) => e.importance >= 4 && !entries.some((m) => m.id === e.id));
-    const allEntries = [...entries, ...highImportance].slice(0, 6);
+    const allKnowledge = this.listKnowledge(projectPath);
+    const highImportance = allKnowledge
+      .filter((e) => e.importance >= 4 && !entries.some((m) => m.id === e.id))
+      .slice(0, 2);
+    const allEntries = [...entries, ...highImportance].slice(0, 4);
 
     // Mark accessed
     for (const e of allEntries) {
       this.markAccessed(e.id);
     }
 
-    // Build index summary
-    const indexSummary = this.listKnowledge(projectPath)
-      .slice(0, 20)
-      .map((e) => `- ${e.title} [${e.type}]${e.importance >= 4 ? ' (important)' : ''}`)
-      .join('\n');
-
-    // Build relevant entries section
     const relevantSection = allEntries.length > 0
       ? allEntries
           .map(
@@ -464,8 +459,8 @@ Use project memory only for durable information that cannot be derived from the 
 Ignore project memory when it conflicts with the user's current instruction or with the checked-out code.
 Do not treat project memory as a task list, recent diff log, or temporary scratchpad.
 Knowledge is stored as structured entries (facts, preferences, decisions, references).
+Use memory tools to inspect additional entries when the current task needs them.
 </project_memory_guidance>`,
-        `<project_memory_index>\n${indexSummary || '(no indexed knowledge)'}\n</project_memory_index>`,
         relevantSection
           ? `<project_memory_relevant>\n${relevantSection}\n</project_memory_relevant>`
           : '',

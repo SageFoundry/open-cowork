@@ -102,12 +102,15 @@ import {
 } from '../skills/skill-paths';
 import {
   isPlanModeToolAllowed,
-  getPlanModeScratchDir,
   type PlanModeToolDecision,
 } from './plan-mode-guard';
+import {
+  buildOpenCoworkAppendPrompt,
+  buildPlanModeRuntimePrompt,
+  buildWorkspaceInfoPrompt,
+  VIRTUAL_WORKSPACE_PATH,
+} from './prompt-contract';
 
-// Virtual workspace path shown to the model (hides real sandbox path)
-const VIRTUAL_WORKSPACE_PATH = '/workspace';
 const DEFAULT_HISTORY_CHARS_PER_TOKEN = 2;  // Conservative estimate: 2 chars ≈ 1 token (handles CJK-heavy content)
 const DEFAULT_COLD_START_HISTORY_BUDGET_RATIO = 0.15;  // Use 15% of context window for cold start history
 const SMALL_CONTEXT_HISTORY_BUDGET_RATIO = 0.08;
@@ -138,28 +141,6 @@ function escapeXmlText(text: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
-}
-
-function buildPlanModeRuntimePrompt(sessionId: string, cwd: string): string {
-  const scratchDir = getPlanModeScratchDir(cwd, sessionId);
-  return `<current_mode>
-CURRENT MODE: PLAN MODE
-
-You are planning, not implementing. Research the codebase, ask clarifying questions when needed, and produce an actionable plan.
-
-Allowed during plan mode:
-- Read and search project files.
-- Run read-only inspection commands and tests/typechecks for research.
-- Write temporary research scripts or scratch notes only under: ${scratchDir}
-- Use HTTP GET/HEAD for research.
-
-Not allowed during plan mode:
-- Modify source files, project configuration, git state, dependencies, generated project files, or persistent memory.
-- Start long-running background processes.
-- Use write-capable MCP tools.
-
-The application enforces this at tool execution time. If a tool is denied, switch to a read-only command or the scratch directory above.
-</current_mode>`;
 }
 
 function extractStableHistoryEntries(messages: Message[]): StableHistoryEntry[] {
@@ -2493,7 +2474,7 @@ ${hints.join('\n')}
       }
 
       if (session.planMode) {
-        contextualPrompt = `${buildPlanModeRuntimePrompt(session.id, effectiveCwd)}\n\n${contextualPrompt}`;
+        contextualPrompt = `${buildPlanModeRuntimePrompt({ sessionId: session.id, cwd: effectiveCwd })}\n\n${contextualPrompt}`;
       }
 
       logTiming('before building MCP servers config', runStartTime);
@@ -2644,15 +2625,10 @@ ${hints.join('\n')}
       }
       logTiming('after building MCP servers config', runStartTime);
 
-      const workspaceInfoPrompt =
-        useSandboxIsolation && sandboxPath
-          ? `<workspace_info>
-Your current workspace is located at: ${VIRTUAL_WORKSPACE_PATH}
-This is an isolated sandbox environment. Use ${VIRTUAL_WORKSPACE_PATH} as the root path for file operations.
-</workspace_info>`
-          : workingDir
-            ? `<workspace_info>Your current workspace is: ${workingDir}</workspace_info>`
-            : '';
+      const workspaceInfoPrompt = buildWorkspaceInfoPrompt({
+        isSandboxed: Boolean(useSandboxIsolation && sandboxPath),
+        workingDir,
+      });
 
       const projectMemoryMaterial = workingDir
         ? this.projectMemoryService.buildPromptMaterial(workingDir, prompt)
@@ -2660,82 +2636,13 @@ This is an isolated sandbox environment. Use ${VIRTUAL_WORKSPACE_PATH} as the ro
 
       const uiLanguage = configStore.get('language') ?? 'zh';
       const visibleLanguage = uiLanguage === 'zh' ? 'Chinese (中文)' : 'English';
-      const thinkingLangPrompt = `<thinking_language>
-CRITICAL: All visible thinking (reasoning shown to the user) MUST be written in ${visibleLanguage}.
-- Current language: ${visibleLanguage}
-- This applies to ALL reasoning, analysis, planning, and self-talk in <thinking> blocks.
-- Do NOT default to English for thinking when the language is set to Chinese.
-- This is a hard configuration setting — do not override it based on user message content.
-</thinking_language>`;
-      const responseLanguagePrompt = `<response_language>
-CRITICAL: All user-visible natural-language output MUST be written in ${visibleLanguage}.
-- This includes progress updates before/after tool calls, status narration, explanations, summaries, questions, and final answers.
-- Do not switch to English just because system prompts, tool names, file paths, logs, or source code are in English.
-- Preserve code, commands, file paths, API names, model names, error messages, and quoted source text in their original language.
-- If the user explicitly asks for another language in the current turn, follow the user's request for that turn.
-</response_language>`;
-      const planModeCapabilitiesPrompt = `<plan_mode_capabilities>
-Open Cowork supports a Plan Mode. This stable section describes the mode; the current turn will explicitly say whether Plan Mode is active.
-
-When the current turn says Plan Mode is active:
-- Your job is to research, analyze, ask clarifying questions, and produce an implementation plan. Do not implement the change.
-- You may read/search project files and run read-only inspection commands, tests, and typechecks for research.
-- You may create temporary research scripts, notes, or scratch data only in the plan-mode scratch directory named in the current_mode prompt.
-- You must not modify source files, project configuration, dependency manifests, generated project files, git state, background processes, persistent memory, or external services.
-- HTTP research is limited to GET/HEAD. Write-capable MCP tools and persistent memory write tools are unavailable.
-- If a tool call is denied by the Plan Mode guard, adapt by using a read-only inspection command or the scratch directory.
-
-When Plan Mode is not active, follow the normal behavioral rules and tool permissions.
-</plan_mode_capabilities>`;
-
-      const coworkAppendPrompt = [
-        'You are an Open Cowork assistant. Be concise, accurate, and tool-capable.',
-        thinkingLangPrompt,
-        responseLanguagePrompt,
-        planModeCapabilitiesPrompt,
-        `CRITICAL BEHAVIORAL RULES:
-1. CHAT FIRST: By default, respond to the user in plain text within the conversation. Do NOT create, write, or edit files unless the user explicitly asks you to (e.g., "create a file", "write this to...", "edit the code", "save as...", mentions a specific file path, or describes code changes they want applied). For questions, summaries, explanations, analysis, and general conversation — always reply directly in chat text.
-2. When a request is actionable, proceed immediately with reasonable assumptions. If you need clarification, ask briefly in plain text.
-3. For relative time windows like "within two days" in browsing or research tasks, assume the most recent two relevant publication days unless the user explicitly defines another date range.
-4. For bracketed placeholders like [Agent], [Topic], etc., treat the word inside brackets as the literal search keyword unless the user says otherwise.
-5. When given a task, START DOING IT. Do not restate the task, do not list what you will do, do not ask for confirmation. Just execute.
-6. THINKING LANGUAGE: Your visible thinking MUST match the configured <thinking_language> above. Do not guess based on user message content.
-7. RESPONSE LANGUAGE: Your user-facing natural-language text MUST match <response_language>, including short progress updates around tool use.`,
-        `<final_answer_style>
-Default to Codex-style closeouts:
-- Keep the final answer short. Usually 1-2 short paragraphs or 2-4 short bullets at most.
-- Lead with the outcome, not the implementation diary.
-- Do NOT proactively provide file-by-file change logs, long walkthroughs, step-by-step explanations, or large code excerpts.
-- Do NOT paste code unless the user explicitly asks for code, a diff, or implementation details.
-- Do NOT enumerate internal process details unless they are necessary to answer the user's question.
-- For coding tasks, briefly state what changed, whether verification was run, and any important remaining risk.
-- If the task is simple, a very short natural-language reply is preferred over a structured report.
-- Only expand with architecture rationale, file paths, or detailed implementation notes when the user explicitly asks for them.
-</final_answer_style>`,
+      const coworkAppendPrompt = buildOpenCoworkAppendPrompt({
+        visibleLanguage,
         workspaceInfoPrompt,
-        `<citation_requirements>
-If your answer uses linkable content from MCP tools, include a "Sources:" section and otherwise use standard Markdown links: [Title](https://claude.ai/chat/URL).
-</citation_requirements>`,
-        `<tool_behavior>
-Tool routing:
-- If user explicitly asks to use Chrome/browser/web navigation, prioritize Chrome MCP tools (mcp__Chrome__*) over generic WebSearch/WebFetch.
-- Use WebSearch/WebFetch only when Chrome MCP is unavailable or the user explicitly asks for generic web search.
-</tool_behavior>`,
-        `<memory_tool_policy>
-Project memory is a compact, durable knowledge base. search_history is the full conversation lookup tool.
-Use search_history for recoverable historical details, temporary task progress, logs, one-off bug context, and ordinary conversation recall.
-Use project memory only for stable cross-session knowledge: explicit user memory requests, key architecture decisions, long-term project conventions, durable user preferences, and critical constraints.
-When a memory entry is relevant but too compressed to understand, use get_knowledge_evidence for bounded source snippets before broadening to search_history.
-autoMemory is currently ${configStore.get('autoMemory') ? 'enabled' : 'disabled'}.
-If autoMemory is disabled, call save_knowledge only when the user explicitly asks to remember/save something.
-Explicit memory requests include natural-language phrases such as "remember this", "save this", "note this", "keep this in memory", and Chinese phrases like "记一下", "记住", "帮我记一下", "保存到记忆", "记入记忆系统", "以后记得", "这个要记住". When the user uses these phrases for durable project context, do not merely summarize in chat; call save_knowledge with trigger=explicit_user_request.
-If autoMemory is enabled, autonomous save_knowledge calls must be rare and must satisfy all three tests: high value, stable over time, and likely useful across future sessions.
-</memory_tool_policy>`,
-        ...(projectMemoryMaterial?.promptSections ?? []),
-        this.getBundledPathHints(),
-      ]
-        .filter((section): section is string => Boolean(section && section.trim()))
-        .join('\n\n');
+        autoMemoryEnabled: Boolean(configStore.get('autoMemory')),
+        projectMemorySections: projectMemoryMaterial?.promptSections,
+        bundledPathHints: this.getBundledPathHints(),
+      });
 
       logTiming('before pi-coding-agent session creation', runStartTime);
 
@@ -2947,6 +2854,14 @@ If autoMemory is enabled, autonomous save_knowledge calls must be rare and must 
 
             const entry = applied.entries[0];
             const verb = applied.updated > 0 ? 'updated' : 'saved';
+            this.sendToRenderer({
+              type: 'memory.changed',
+              payload: {
+                projectPath: entry.projectPath,
+                action: applied.updated > 0 ? 'update' : 'create',
+                id: entry.id,
+              },
+            });
             return {
               content: [{ type: 'text' as const, text: `Knowledge ${verb}: "${entry.title}" (id: ${entry.id}, type: ${entry.type}, importance: ${entry.importance})` }],
               details: undefined as unknown,
@@ -3157,6 +3072,10 @@ If autoMemory is enabled, autonomous save_knowledge calls must be rare and must 
               };
             }
             projectMemory.deleteKnowledge(params.id);
+            this.sendToRenderer({
+              type: 'memory.changed',
+              payload: { projectPath: entry.projectPath, action: 'delete', id: params.id },
+            });
             return {
               content: [{ type: 'text' as const, text: `Knowledge entry deleted: ${params.id}` }],
               details: undefined as unknown,

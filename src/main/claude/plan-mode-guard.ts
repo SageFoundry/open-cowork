@@ -18,6 +18,19 @@ export interface PlanModeToolDecision {
 export const PLAN_MODE_DENIED_MESSAGE =
   'Plan mode is active. This action may modify workspace state. Use a read-only inspection command or write scratch files under tmp/plan-mode/<sessionId>.';
 
+export const PLAN_MODE_ALLOWED_ACTIONS = [
+  'Read and search project files.',
+  'Run read-only inspection commands and tests/typechecks for research.',
+  'Write temporary research scripts or scratch notes only under the plan-mode scratch directory.',
+  'Use HTTP GET/HEAD for research.',
+] as const;
+
+export const PLAN_MODE_BLOCKED_ACTIONS = [
+  'Modify source files, project configuration, dependencies, generated project files, git state, persistent memory, or external services.',
+  'Start long-running background processes.',
+  'Use write-capable MCP tools.',
+] as const;
+
 const READ_ONLY_MEMORY_TOOLS = new Set([
   'search_history',
   'query_knowledge',

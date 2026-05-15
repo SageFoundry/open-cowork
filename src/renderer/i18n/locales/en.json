@@ -582,6 +582,7 @@
     "settings": "Settings",
     "themeToggle": "Toggle theme",
     "manage": "Manage",
+    "renameSession": "Rename",
     "selectAll": "Select All",
     "deselectAll": "Deselect All",
     "nSelected": "{{count}} selected",

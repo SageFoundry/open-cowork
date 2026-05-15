@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron';
+import { BrowserWindow, ipcMain } from 'electron';
 import { normalizeProjectPath, ProjectMemoryService } from '../memory/project-memory';
 import { completeWithClaudeSdk } from '../claude/claude-sdk-one-shot';
 import { configStore } from '../config/config-store';
@@ -8,6 +8,21 @@ import {
   buildMemoryExtractionPrompt,
   parseMemoryEvaluationResponse,
 } from '../memory/memory-evaluation';
+
+function notifyMemoryChanged(
+  projectPath: string | null,
+  action: 'create' | 'update' | 'delete' | 'extract',
+  id?: string
+): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send('server-event', {
+        type: 'memory.changed',
+        payload: { projectPath, action, id },
+      });
+    }
+  }
+}
 
 export interface RegisterMemoryHandlersDeps {
   getSessionMessages: (sessionId: string) => Array<{ role: string; content: string | unknown[] }>;
@@ -58,6 +73,7 @@ export function registerMemoryHandlers({
     const projectPath = normalizeProjectPath(cwd);
     if (!entry || !projectPath || entry.projectPath !== projectPath) return;
     service.deleteKnowledge(id);
+    notifyMemoryChanged(projectPath, 'delete', id);
   });
 
   ipcMain.handle('memory.save', (_event, entry: {
@@ -79,6 +95,7 @@ export function registerMemoryHandlers({
       source: 'manual',
       tags: entry.tags ?? [],
     });
+    notifyMemoryChanged(result.projectPath, 'create', result.id);
     return { id: result.id };
   });
 
@@ -104,6 +121,9 @@ export function registerMemoryHandlers({
       source: 'manual',
       sourceMessages: buildKnowledgeSourceCandidates(messages),
     });
+    if (applied.created > 0 || applied.updated > 0) {
+      notifyMemoryChanged(projectPath, 'extract', applied.entries[0]?.id);
+    }
 
     return { entries: applied.created + applied.updated };
   });
