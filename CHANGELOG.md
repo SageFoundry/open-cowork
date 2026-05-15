@@ -5,6 +5,32 @@ All notable changes to the Open Cowork AI agent desktop app will be documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.0] - 2026-05-15
+
+### Added
+
+- 计划模式底层行为重构：工具列表稳定 + 每轮动态注入模式提示 + 工具执行前动态拦截，切换模式不再重建 SDK session
+- 计划模式下支持只读操作：文件读取、代码搜索、只读调研命令、测试/typecheck 运行、临时脚本写入 `tmp/plan-mode/<sessionId>/`
+- `<plan_mode_capabilities>` 稳定系统提示，让模型长期了解计划模式能力边界
+- `<current_mode>` 动态提示，每轮告知模型当前模式和 scratch 目录
+- `plan-mode-guard` 单测覆盖只读/写操作拦截场景
+- MCP tool metadata 保留 `readOnlyHint`，计划模式下放行可信只读 MCP 工具
+- 计划模式零开销：切换计划/执行模式时不再重建 piSession，充分利用 SDK 缓存
+
+### Changed
+
+- 聊天输入区计划模式按钮改为 switch 样式：只显示图标、计划 和滑块状态，不再用"执行/开/关"等易混淆文字
+- 计划模式拦截逻辑统一到工具执行前守护函数，而非切换时过滤工具列表
+
+### Fixed
+
+- 频繁切换计划/执行模式不再破坏 piSession 上下文缓存
+
+### Release
+
+- Published Windows installer `Open-Cowork-3.5.0-win-x64.exe` with `.blockmap` and `latest.yml` for auto-update.
+- GitHub Release: https://github.com/SageFoundry/open-cowork/releases/tag/v3.5.0
+
 ## [3.4.0] - 2026-05-14
 
 ### Added
@@ -291,7 +317,8 @@ First stable release of the 3.3.x series. Graduated from 9 beta releases with 30
 
 - Initial release of Open Cowork — open-source AI agent desktop app with one-click install for Windows and macOS
 
-[Unreleased]: https://github.com/SageFoundry/open-cowork/compare/v3.4.0...HEAD
+[Unreleased]: https://github.com/SageFoundry/open-cowork/compare/v3.5.0...HEAD
+[3.5.0]: https://github.com/SageFoundry/open-cowork/compare/v3.4.0...v3.5.0
 [3.4.0]: https://github.com/SageFoundry/open-cowork/compare/v3.3.9...v3.4.0
 [3.3.9]: https://github.com/SageFoundry/open-cowork/compare/v3.3.8...v3.3.9
 [3.3.8]: https://github.com/SageFoundry/open-cowork/compare/v3.3.7...v3.3.8
