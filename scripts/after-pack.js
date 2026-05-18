@@ -12,6 +12,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 /**
  * Map electron-builder arch names to koffi directory names.
@@ -69,6 +70,49 @@ function findDirs(basePath, dirName) {
   return results;
 }
 
+function getAppInfoValue(appInfo, key, fallback = '') {
+  const value = appInfo?.[key];
+  return typeof value === 'function' ? value.call(appInfo) : value ?? fallback;
+}
+
+function editWindowsExecutableResources(context, appOutDir) {
+  const appInfo = context.packager.appInfo;
+  const exeName = `${getAppInfoValue(appInfo, 'productFilename', 'Open Cowork')}.exe`;
+  const exePath = path.join(appOutDir, exeName);
+  const rceditPath = path.resolve(__dirname, '..', 'node_modules', 'electron-winstaller', 'vendor', 'rcedit.exe');
+  const iconPath = path.resolve(__dirname, '..', 'resources', 'icon.ico');
+
+  if (!fs.existsSync(exePath)) {
+    throw new Error(`Windows executable not found: ${exePath}`);
+  }
+  if (!fs.existsSync(rceditPath)) {
+    throw new Error(`rcedit.exe not found: ${rceditPath}`);
+  }
+  if (!fs.existsSync(iconPath)) {
+    throw new Error(`Windows icon not found: ${iconPath}`);
+  }
+
+  const productName = getAppInfoValue(appInfo, 'productName', 'Open Cowork');
+  const version = getAppInfoValue(appInfo, 'version', '0.0.0');
+  const copyright = getAppInfoValue(appInfo, 'copyright', '');
+  const companyName = getAppInfoValue(appInfo, 'companyName', 'Open Cowork Team');
+
+  execFileSync(rceditPath, [
+    exePath,
+    '--set-icon', iconPath,
+    '--set-version-string', 'FileDescription', productName,
+    '--set-version-string', 'ProductName', productName,
+    '--set-version-string', 'InternalName', exeName,
+    '--set-version-string', 'OriginalFilename', exeName,
+    '--set-version-string', 'CompanyName', companyName,
+    '--set-version-string', 'LegalCopyright', copyright,
+    '--set-file-version', version,
+    '--set-product-version', version,
+  ], { stdio: 'inherit' });
+
+  console.log(`  ✓ Windows exe resources: icon/version applied to ${exeName}`);
+}
+
 /**
  * @param {import('electron-builder').AfterPackContext} context
  */
@@ -79,6 +123,10 @@ module.exports = async function afterPack(context) {
   const platform = electronPlatformName; // 'darwin', 'win32', 'linux'
 
   console.log(`\n🧹 after-pack: cleaning ${platform}-${archName} build...`);
+
+  if (platform === 'win32') {
+    editWindowsExecutableResources(context, appOutDir);
+  }
 
   // Determine the app resources path
   let resourcesDir;

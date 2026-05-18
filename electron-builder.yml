@@ -61,12 +61,16 @@ asarUnpack:
   - node_modules/utf-8-validate/**/*.node
 
 win:
-  icon: resources/icon.ico
+  icon: icon.ico
   target:
     - target: nsis
       arch:
         - x64
   artifactName: ${productName}-${version}-win-${arch}.${ext}
+  # Keep electron-builder's built-in Windows resource editor disabled because it
+  # downloads winCodeSign, whose archive contains symlinks that fail on Windows
+  # without Developer Mode/admin rights. scripts/after-pack.js applies the icon
+  # and version resources with the bundled rcedit.exe instead.
   signAndEditExecutable: false
   extraResources:
     - from: .bundle-resources/mcp
@@ -81,7 +85,7 @@ win:
       to: skills
 
 mac:
-  icon: resources/icon.icns
+  icon: icon.icns
   target:
     - target: dir
       arch:
@@ -113,7 +117,7 @@ mac:
       to: skills
 
 linux:
-  icon: resources/icon.png
+  icon: icon.png
   target:
     - target: AppImage
       arch:
