@@ -15,4 +15,10 @@ describe('ChatView stop control', () => {
     expect(chatViewContent).toContain('stopSession(activeSessionId);');
     expect(chatViewContent).toContain('onClick={handleStop}');
   });
+
+  it('refocuses composer after returning to an active chat', () => {
+    expect(chatViewContent).toContain('const focusChatInput = useCallback');
+    expect(chatViewContent).toContain('window.setTimeout(focusChatInput, 150)');
+    expect(chatViewContent).toContain("window.addEventListener('focus', handleWindowFocus)");
+  });
 });

@@ -9,7 +9,6 @@ import type {
   AppConfig,
   SandboxSetupProgress,
   SandboxSyncStatus,
-  SkillsStorageChangeEvent,
   SessionCompactionInfo,
   SessionCompactionState,
   TokenBudgetSnapshot,
@@ -152,8 +151,6 @@ interface AppState {
 
   // Sandbox sync (per-session)
   sandboxSyncStatus: SandboxSyncStatus | null;
-  skillsStorageChangedAt: number;
-  skillsStorageChangeEvent: SkillsStorageChangeEvent | null;
 
   // System theme (from OS native theme)
   systemDarkMode: boolean;
@@ -235,8 +232,6 @@ interface AppState {
 
   // Sandbox sync actions
   setSandboxSyncStatus: (status: SandboxSyncStatus | null) => void;
-  setSkillsStorageChangedAt: (timestamp: number) => void;
-  setSkillsStorageChangeEvent: (event: SkillsStorageChangeEvent | null) => void;
 
   // Context window actions
   setSessionContextWindow: (sessionId: string, contextWindow: number) => void;
@@ -309,8 +304,6 @@ export const useAppStore = create<AppState>((set) => ({
   sandboxSetupProgress: null,
   isSandboxSetupComplete: false,
   sandboxSyncStatus: null,
-  skillsStorageChangedAt: 0,
-  skillsStorageChangeEvent: null,
   systemDarkMode: false,
 
   // Session actions
@@ -716,8 +709,6 @@ export const useAppStore = create<AppState>((set) => ({
 
   // Sandbox sync actions
   setSandboxSyncStatus: (status) => set({ sandboxSyncStatus: status }),
-  setSkillsStorageChangedAt: (timestamp) => set({ skillsStorageChangedAt: timestamp }),
-  setSkillsStorageChangeEvent: (event) => set({ skillsStorageChangeEvent: event }),
 
   // Context window actions
   setSessionContextWindow: (sessionId, contextWindow) =>

@@ -10,8 +10,6 @@ import {
   Plus,
   Loader2,
   FolderOpen,
-  Globe,
-  RefreshCw,
   X,
 } from 'lucide-react';
 import type { Skill, PluginCatalogItemV2, InstalledPlugin, PluginComponentKind } from '../../types';
@@ -27,10 +25,12 @@ export function SettingsSkills({ isActive }: { isActive: boolean }) {
   useEffect(() => {
     tRef.current = t;
   }, [t]);
-  const skillsStorageChangedAt = useAppStore((state) => state.skillsStorageChangedAt);
-  const skillsStorageChangeEvent = useAppStore((state) => state.skillsStorageChangeEvent);
+  const activeSessionId = useAppStore((state) => state.activeSessionId);
+  const sessions = useAppStore((state) => state.sessions);
+  const workingDir = useAppStore((state) => state.workingDir);
+  const activeSession = sessions.find((session) => session.id === activeSessionId);
+  const currentProjectPath = activeSession?.cwd || workingDir || '';
   const [skills, setSkills] = useState<Skill[]>([]);
-  const [storagePath, setStoragePath] = useState('');
   const [plugins, setPlugins] = useState<PluginCatalogItemV2[]>([]);
   const [installedPluginsByKey, setInstalledPluginsByKey] = useState<
     Record<string, InstalledPlugin>
@@ -42,6 +42,11 @@ export function SettingsSkills({ isActive }: { isActive: boolean }) {
   const [pluginToastMessage, setPluginToastMessage] = useState('');
   const [error, setError] = useState<LocalizedBanner | null>(null);
   const [success, setSuccess] = useState<LocalizedBanner | null>(null);
+  const [pendingDeleteSkill, setPendingDeleteSkill] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+  const [pendingUninstallPlugin, setPendingUninstallPlugin] = useState<InstalledPlugin | null>(null);
   const pluginToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const componentOrder: PluginComponentKind[] = ['skills', 'commands', 'agents', 'hooks', 'mcp'];
 
@@ -82,23 +87,6 @@ export function SettingsSkills({ isActive }: { isActive: boolean }) {
     return [...keys];
   }
 
-  useEffect(() => {
-    if (!skillsStorageChangeEvent) {
-      return;
-    }
-    if (skillsStorageChangeEvent.reason === 'fallback') {
-      setError({ text: t('skills.storagePathFallback') });
-      return;
-    }
-    if (skillsStorageChangeEvent.reason === 'watcher_error') {
-      setError({
-        text: t('skills.storageWatcherError', {
-          message: skillsStorageChangeEvent.message || '',
-        }),
-      });
-    }
-  }, [skillsStorageChangeEvent, t]);
-
   function showPluginInstallToast(message: string) {
     setPluginToastMessage(message);
     if (pluginToastTimerRef.current) {
@@ -112,33 +100,13 @@ export function SettingsSkills({ isActive }: { isActive: boolean }) {
 
   const loadSkills = useCallback(async (silent = false) => {
     try {
-      const [skillsResult, storagePathResult] = await Promise.allSettled([
-        window.electronAPI.skills.getAll(),
-        window.electronAPI.skills.getStoragePath(),
-      ]);
-      const errors: string[] = [];
-
-      if (skillsResult.status === 'fulfilled') {
-        setSkills(skillsResult.value || []);
-      } else {
-        errors.push(
-          skillsResult.reason instanceof Error
-            ? skillsResult.reason.message
-            : tRef.current('skills.failedToLoad')
-        );
-      }
-      if (storagePathResult.status === 'fulfilled') {
-        setStoragePath(storagePathResult.value || '');
-      } else {
-        errors.push(
-          storagePathResult.reason instanceof Error
-            ? storagePathResult.reason.message
-            : tRef.current('skills.storagePathUnavailable')
-        );
-      }
-
-      if (errors.length > 0) {
-        throw new Error(errors.join(' | '));
+      const skillsResult = await Promise.resolve(
+        window.electronAPI.skills.getAll(
+          currentProjectPath ? { projectPath: currentProjectPath } : undefined
+        )
+      );
+      if (skillsResult) {
+        setSkills(skillsResult || []);
       }
 
       if (!silent) {
@@ -155,7 +123,7 @@ export function SettingsSkills({ isActive }: { isActive: boolean }) {
         });
       }
     }
-  }, []);
+  }, [currentProjectPath]);
 
   useEffect(() => {
     if (!isElectron || !isActive) {
@@ -174,12 +142,6 @@ export function SettingsSkills({ isActive }: { isActive: boolean }) {
       }
     };
   }, [isActive, loadSkills]);
-
-  useEffect(() => {
-    if (isElectron && isActive && skillsStorageChangedAt > 0) {
-      void loadSkills(true);
-    }
-  }, [isActive, loadSkills, skillsStorageChangedAt]);
 
   async function loadPlugins() {
     try {
@@ -223,7 +185,11 @@ export function SettingsSkills({ isActive }: { isActive: boolean }) {
     await loadPlugins();
   }
 
-  async function handleInstall() {
+  async function handleInstall(scope: 'global' | 'project') {
+    if (scope === 'project' && !currentProjectPath) {
+      setError({ text: t('skills.projectPathRequired') });
+      return;
+    }
     try {
       const folderPath = await window.electronAPI.invoke<string | null>({
         type: 'folder.select',
@@ -239,45 +205,23 @@ export function SettingsSkills({ isActive }: { isActive: boolean }) {
         return;
       }
 
-      const result = await window.electronAPI.skills.install(folderPath);
+      const result = await window.electronAPI.skills.install({
+        skillPath: folderPath,
+        scope,
+        projectPath: scope === 'project' ? currentProjectPath : undefined,
+      });
       if (result.success) {
         await loadSkills();
         setError(null);
-        setSuccess(null);
+        setSuccess({
+          text:
+            scope === 'project'
+              ? t('skills.projectInstallSuccess')
+              : t('skills.globalInstallSuccess'),
+        });
       }
     } catch (err) {
       setError({ text: err instanceof Error ? err.message : t('skills.failedToInstall') });
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
-  async function handleSelectStoragePath() {
-    try {
-      const folderPath = await window.electronAPI.invoke<string | null>({
-        type: 'folder.select',
-        payload: {},
-      });
-      if (!folderPath) return;
-
-      setIsLoading(true);
-      const result = await window.electronAPI.skills.setStoragePath(folderPath, true);
-      if (result.success) {
-        setStoragePath(result.path);
-        await loadSkills(true);
-        setError(null);
-        setSuccess({
-          text: t('skills.storagePathUpdated', {
-            migrated: result.migratedCount,
-            skipped: result.skippedCount,
-          }),
-        });
-        setTimeout(() => setSuccess(null), 5000);
-      }
-    } catch (err) {
-      setError({
-        text: err instanceof Error ? err.message : t('skills.storagePathUpdateFailed'),
-      });
     } finally {
       setIsLoading(false);
     }
@@ -291,7 +235,6 @@ export function SettingsSkills({ isActive }: { isActive: boolean }) {
         setError({ text: result.error || t('skills.storagePathOpenFailed') });
         return;
       }
-      setStoragePath(result.path);
       setError(null);
     } catch (err) {
       setError({ text: err instanceof Error ? err.message : t('skills.storagePathOpenFailed') });
@@ -300,21 +243,17 @@ export function SettingsSkills({ isActive }: { isActive: boolean }) {
     }
   }
 
-  async function handleRefreshSkills() {
-    setIsLoading(true);
-    try {
-      await loadSkills();
-    } finally {
-      setIsLoading(false);
-    }
+  async function handleDelete(skillId: string, skillName: string) {
+    setPendingDeleteSkill({ id: skillId, name: skillName });
   }
 
-  async function handleDelete(skillId: string, skillName: string) {
-    if (!confirm(t('skills.deleteSkill', { name: skillName }))) return;
+  async function confirmDeleteSkill() {
+    if (!pendingDeleteSkill) return;
 
     setIsLoading(true);
     try {
-      await window.electronAPI.skills.delete(skillId);
+      await window.electronAPI.skills.delete(pendingDeleteSkill.id);
+      setPendingDeleteSkill(null);
       await loadSkills();
     } catch (err) {
       setError({ text: err instanceof Error ? err.message : t('skills.failedToDelete') });
@@ -386,16 +325,20 @@ export function SettingsSkills({ isActive }: { isActive: boolean }) {
   }
 
   async function handleUninstallPlugin(plugin: InstalledPlugin) {
-    if (!confirm(t('skills.pluginUninstall', { name: plugin.name }))) {
-      return;
-    }
+    setPendingUninstallPlugin(plugin);
+  }
 
-    setPluginActionKey(`uninstall:${plugin.pluginId}`);
+  async function confirmUninstallPlugin() {
+    if (!pendingUninstallPlugin) return;
+
+    setPluginActionKey(`uninstall:${pendingUninstallPlugin.pluginId}`);
     setError(null);
     try {
-      await window.electronAPI.plugins.uninstall(plugin.pluginId);
+      await window.electronAPI.plugins.uninstall(pendingUninstallPlugin.pluginId);
+      const pluginName = pendingUninstallPlugin.name;
+      setPendingUninstallPlugin(null);
       await loadPlugins();
-      showPluginInstallToast(t('skills.pluginUninstalled', { name: plugin.name }));
+      showPluginInstallToast(t('skills.pluginUninstalled', { name: pluginName }));
     } catch (err) {
       setError({ text: err instanceof Error ? err.message : t('skills.pluginInstallFailed') });
     } finally {
@@ -420,41 +363,6 @@ export function SettingsSkills({ isActive }: { isActive: boolean }) {
           {success.key ? t(success.key) : success.text}
         </div>
       )}
-
-      <SettingsContentSection
-        title={t('skills.storagePathTitle')}
-        description={t('skills.storagePathHint')}
-      >
-        <div className="text-xs text-text-muted break-all">
-          {storagePath || t('skills.storagePathUnavailable')}
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-          <button
-            onClick={handleSelectStoragePath}
-            disabled={isLoading}
-            className="w-full py-2.5 px-3 rounded-lg border border-border hover:border-accent hover:bg-accent/5 transition-all flex items-center justify-center gap-2 text-text-secondary hover:text-accent disabled:opacity-50"
-          >
-            <FolderOpen className="w-4 h-4" />
-            {t('skills.selectStoragePath')}
-          </button>
-          <button
-            onClick={handleOpenStoragePath}
-            disabled={isLoading}
-            className="w-full py-2.5 px-3 rounded-lg border border-border hover:border-accent hover:bg-accent/5 transition-all flex items-center justify-center gap-2 text-text-secondary hover:text-accent disabled:opacity-50"
-          >
-            <Globe className="w-4 h-4" />
-            {t('skills.openStoragePath')}
-          </button>
-          <button
-            onClick={handleRefreshSkills}
-            disabled={isLoading}
-            className="w-full py-2.5 px-3 rounded-lg border border-border hover:border-accent hover:bg-accent/5 transition-all flex items-center justify-center gap-2 text-text-secondary hover:text-accent disabled:opacity-50"
-          >
-            <RefreshCw className="w-4 h-4" />
-            {t('skills.refreshSkills')}
-          </button>
-        </div>
-      </SettingsContentSection>
 
       {/* Built-in Skills */}
       <SettingsContentSection
@@ -497,6 +405,42 @@ export function SettingsSkills({ isActive }: { isActive: boolean }) {
       </SettingsContentSection>
 
       <SettingsContentSection
+        title={t('skills.installTargetsTitle')}
+        description={
+          currentProjectPath
+            ? t('skills.currentProjectPath', { path: currentProjectPath })
+            : t('skills.noCurrentProjectPath')
+        }
+      >
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+          <button
+            onClick={() => handleInstall('global')}
+            disabled={isLoading}
+            className="w-full py-3 px-4 rounded-lg border border-border-subtle hover:border-accent hover:bg-accent/5 transition-all flex items-center justify-center gap-2 text-text-secondary hover:text-accent disabled:opacity-50"
+          >
+            <Plus className="w-5 h-5" />
+            {t('skills.installGlobalSkill')}
+          </button>
+          <button
+            onClick={() => handleInstall('project')}
+            disabled={isLoading || !currentProjectPath}
+            className="w-full py-3 px-4 rounded-lg border border-border-subtle hover:border-accent hover:bg-accent/5 transition-all flex items-center justify-center gap-2 text-text-secondary hover:text-accent disabled:opacity-50"
+          >
+            <Package className="w-5 h-5" />
+            {t('skills.installProjectSkill')}
+          </button>
+          <button
+            onClick={handleOpenStoragePath}
+            disabled={isLoading}
+            className="w-full py-3 px-4 rounded-lg border border-border-subtle hover:border-accent hover:bg-accent/5 transition-all flex items-center justify-center gap-2 text-text-secondary hover:text-accent disabled:opacity-50"
+          >
+            <FolderOpen className="w-5 h-5" />
+            {t('skills.openGlobalSkillsDir')}
+          </button>
+        </div>
+      </SettingsContentSection>
+
+      <SettingsContentSection
         title={t('skills.pluginsTitle')}
         description={t('skills.pluginsDesc')}
       >
@@ -512,14 +456,6 @@ export function SettingsSkills({ isActive }: { isActive: boolean }) {
               <Package className="w-5 h-5" />
             )}
             {t('skills.browsePlugins')}
-          </button>
-          <button
-            onClick={handleInstall}
-            disabled={isLoading}
-            className="w-full py-3 px-4 rounded-lg border-2 border-dashed border-border-subtle hover:border-accent hover:bg-accent/5 transition-all flex items-center justify-center gap-2 text-text-secondary hover:text-accent disabled:opacity-50"
-          >
-            <Plus className="w-5 h-5" />
-            {t('skills.installSkillFromFolder')}
           </button>
         </div>
       </SettingsContentSection>
@@ -730,6 +666,28 @@ export function SettingsSkills({ isActive }: { isActive: boolean }) {
         </div>
       )}
 
+      {pendingDeleteSkill && (
+        <ConfirmOverlay
+          title={t('skills.deleteSkillTitle')}
+          message={t('skills.deleteSkill', { name: pendingDeleteSkill.name })}
+          confirmLabel={t('common.delete')}
+          onCancel={() => setPendingDeleteSkill(null)}
+          onConfirm={confirmDeleteSkill}
+          isLoading={isLoading}
+        />
+      )}
+
+      {pendingUninstallPlugin && (
+        <ConfirmOverlay
+          title={t('skills.pluginUninstallTitle')}
+          message={t('skills.pluginUninstall', { name: pendingUninstallPlugin.name })}
+          confirmLabel={t('skills.pluginManageUninstall')}
+          onCancel={() => setPendingUninstallPlugin(null)}
+          onConfirm={confirmUninstallPlugin}
+          isLoading={pluginActionKey !== null}
+        />
+      )}
+
       {pluginToastMessage && (
         <div className="fixed right-6 bottom-6 z-[80] max-w-md rounded-lg border border-success/30 bg-surface px-4 py-3 shadow-elevated">
           <div className="flex items-start gap-2 text-success text-sm">
@@ -738,6 +696,52 @@ export function SettingsSkills({ isActive }: { isActive: boolean }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ConfirmOverlay({
+  title,
+  message,
+  confirmLabel,
+  onCancel,
+  onConfirm,
+  isLoading,
+}: {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+  isLoading: boolean;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <div className="fixed inset-0 z-[90] bg-black/45 flex items-center justify-center p-4">
+      <div className="w-full max-w-md rounded-lg border border-border bg-surface shadow-elevated p-5">
+        <h3 className="text-base font-semibold text-text-primary">{title}</h3>
+        <p className="mt-2 text-sm leading-6 text-text-secondary">{message}</p>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={isLoading}
+            className="px-4 py-2 rounded-lg border border-border text-text-secondary hover:bg-surface-hover disabled:opacity-50"
+          >
+            {t('common.cancel')}
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={isLoading}
+            className="px-4 py-2 rounded-lg bg-error text-white hover:bg-error/90 disabled:opacity-50 inline-flex items-center gap-2"
+          >
+            {isLoading && <Loader2 className="w-4 h-4 animate-spin" />}
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -755,6 +759,12 @@ function SkillCard({
 }) {
   const { t } = useTranslation();
   const isBuiltin = skill.type === 'builtin';
+  const sourceLabel =
+    skill.source === 'project'
+      ? t('skills.sourceProject')
+      : skill.source === 'global'
+        ? t('skills.sourceGlobal')
+        : skill.type.toUpperCase();
 
   return (
     <div className="rounded-lg border border-border bg-surface p-4">
@@ -774,7 +784,7 @@ function SkillCard({
                     : 'bg-success/10 text-success'
               }`}
             >
-              {skill.type.toUpperCase()}
+              {sourceLabel}
             </span>
           </div>
           {skill.description && (

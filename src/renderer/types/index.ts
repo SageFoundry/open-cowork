@@ -290,12 +290,14 @@ export interface Skill {
   name: string;
   description?: string;
   type: SkillType;
+  source?: SkillSource;
   enabled: boolean;
   config?: Record<string, unknown>;
   createdAt: number;
 }
 
 export type SkillType = 'builtin' | 'mcp' | 'custom';
+export type SkillSource = 'builtin' | 'global' | 'project';
 
 export type PluginComponentKind = 'skills' | 'commands' | 'agents' | 'hooks' | 'mcp';
 
@@ -365,12 +367,6 @@ export interface PluginInstallResult {
   installedSkills: string[];
   skippedSkills: string[];
   errors: string[];
-}
-
-export interface SkillsStorageChangeEvent {
-  path: string;
-  reason: 'updated' | 'path_changed' | 'fallback' | 'watcher_error';
-  message?: string;
 }
 
 // Memory types
@@ -504,7 +500,6 @@ export type ServerEvent =
   | { type: 'config.status'; payload: { isConfigured: boolean; config: AppConfig } }
   | { type: 'sandbox.progress'; payload: SandboxSetupProgress }
   | { type: 'sandbox.sync'; payload: SandboxSyncStatus }
-  | { type: 'skills.storageChanged'; payload: SkillsStorageChangeEvent }
   | { type: 'plugins.runtimeApplied'; payload: { sessionId: string; plugins: Array<{ name: string; path: string }> } }
   | { type: 'workdir.changed'; payload: { path: string } }
   | { type: 'session.contextInfo'; payload: { sessionId: string; contextWindow: number } }

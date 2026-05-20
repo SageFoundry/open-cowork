@@ -1,28 +1,31 @@
 /**
  * @module main/skills/skills-manager
  *
- * Skill discovery and lifecycle (999 lines).
+ * Skill discovery and lifecycle.
  *
  * Responsibilities:
  * - Discovers built-in skills from .claude/skills/ directories
  * - Parses SKILL.md front-matter for metadata (name, description, triggers)
- * - Hot-reload via chokidar file watcher
  * - Plugin install/uninstall from npm-style package specs
  *
- * Dependencies: config-store, database, chokidar
+ * Three skill sources:
+ *   1. Built-in skills: app.asar/.claude/skills/ (read-only, shipped with app)
+ *   2. Global skills: %APPDATA%/open-cowork/skills/ (the single user-managed directory)
+ *   3. Project skills: <project>/.skills/ (per-project)
+ *
+ * Dependencies: database
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import chokidar, { type FSWatcher } from 'chokidar';
 import type { Skill, PluginInstallResult } from '../../renderer/types';
 import type { DatabaseInstance } from '../db/database';
 import { log, logError, logWarn } from '../utils/logger';
 import { isPathWithinRoot } from '../../shared/path-containment';
 import {
-  getDefaultGlobalSkillsPath,
-  getUserClaudeSkillsDir,
+  getGlobalSkillsDir,
+  getLegacyAppSkillsDir,
+  getProjectSkillsDir,
   resolveBuiltinSkillsPath,
-  resolveGlobalSkillsPath,
 } from './skill-paths';
 
 /**
@@ -74,54 +77,151 @@ interface PluginManifest {
   version?: string;
 }
 
+export type SkillInstallScope = 'global' | 'project';
+
+const LEGACY_MIGRATION_MARKER = '.legacy-skills-migrated';
+
 interface SkillsManagerOptions {
-  getConfiguredGlobalSkillsPath?: () => string | undefined;
-  setConfiguredGlobalSkillsPath?: (nextPath: string) => void;
-  watchStorage?: boolean;
-}
-
-export interface SkillsStorageChangeEvent {
-  path: string;
-  reason: 'updated' | 'path_changed' | 'fallback' | 'watcher_error';
-  message?: string;
-}
-
-export interface SetGlobalSkillsPathResult {
-  path: string;
-  migratedCount: number;
-  skippedCount: number;
+  getLegacyConfiguredGlobalSkillsPath?: () => string | undefined;
+  clearLegacyConfiguredGlobalSkillsPath?: () => void;
 }
 
 /**
  * SkillsManager - Manages skill loading and MCP server lifecycle
  *
  * Skills loading priority:
- * 1. Project-level: <project>/.skills/ or <project>/skills/
- * 2. Global: <userData>/claude/skills/ (includes ~/.claude/skills read-only)
- * 3. Built-in skills
+ * 1. Project-level: <project>/.skills/
+ * 2. Global: %APPDATA%/open-cowork/skills/
+ * 3. Built-in skills (read-only)
  */
 export class SkillsManager {
   private db: DatabaseInstance;
   private loadedSkills: Map<string, Skill> = new Map();
   private runningServers: Map<string, { process: unknown; skill: Skill }> = new Map();
-  private getConfiguredGlobalSkillsPathFn?: () => string | undefined;
-  private setConfiguredGlobalSkillsPathFn?: (nextPath: string) => void;
-  private watchStorageEnabled: boolean;
-  private storageWatcher: FSWatcher | null = null;
-  private storagePollingTimer: NodeJS.Timeout | null = null;
-  private lastStorageSignature = '';
   private loadedGlobalSkillsSignature = '';
   private globalSkillsLoaded = false;
-  private storageCallbacks = new Set<(event: SkillsStorageChangeEvent) => void>();
+  private loadedProjectSkillsSignature = '';
+  private loadedProjectPath = '';
+  private projectSkillsLoaded = false;
+  private getLegacyConfiguredGlobalSkillsPathFn?: () => string | undefined;
+  private clearLegacyConfiguredGlobalSkillsPathFn?: () => void;
 
   constructor(db: DatabaseInstance, options: SkillsManagerOptions = {}) {
     this.db = db;
-    this.getConfiguredGlobalSkillsPathFn = options.getConfiguredGlobalSkillsPath;
-    this.setConfiguredGlobalSkillsPathFn = options.setConfiguredGlobalSkillsPath;
-    this.watchStorageEnabled = options.watchStorage === true;
+    this.getLegacyConfiguredGlobalSkillsPathFn = options.getLegacyConfiguredGlobalSkillsPath;
+    this.clearLegacyConfiguredGlobalSkillsPathFn = options.clearLegacyConfiguredGlobalSkillsPath;
+    this.migrateLegacyGlobalSkills();
     this.loadBuiltinSkills();
-    if (this.watchStorageEnabled) {
-      this.startStorageWatcher();
+  }
+
+  /**
+   * Non-destructively import legacy global skills into the fixed Open Cowork
+   * global skills directory. Existing target skills win.
+   */
+  private migrateLegacyGlobalSkills(): void {
+    const targetDir = getGlobalSkillsDir();
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+
+    const legacyDirs = new Set<string>();
+    legacyDirs.add(getLegacyAppSkillsDir());
+    const configuredPath = (this.getLegacyConfiguredGlobalSkillsPathFn?.() || '').trim();
+    if (configuredPath) {
+      legacyDirs.add(path.resolve(configuredPath));
+    }
+
+    const markerPath = path.join(targetDir, LEGACY_MIGRATION_MARKER);
+    const markerExists = fs.existsSync(markerPath);
+    for (const sourceDir of legacyDirs) {
+      if (!sourceDir || path.resolve(sourceDir) === path.resolve(targetDir)) {
+        continue;
+      }
+      if (markerExists && sourceDir === getLegacyAppSkillsDir()) {
+        continue;
+      }
+      this.importLegacySkills(sourceDir, targetDir);
+    }
+
+    if (!markerExists) {
+      try {
+        fs.writeFileSync(markerPath, String(Date.now()), 'utf8');
+      } catch (err) {
+        logWarn(`[Skills] Failed to write legacy migration marker: ${err}`);
+      }
+    }
+
+    if (configuredPath) {
+      try {
+        this.clearLegacyConfiguredGlobalSkillsPathFn?.();
+      } catch (err) {
+        logWarn(`[Skills] Failed to clear legacy skills path config: ${err}`);
+      }
+    }
+  }
+
+  private importLegacySkills(sourceDir: string, targetDir: string): void {
+    if (!fs.existsSync(sourceDir)) {
+      return;
+    }
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(sourceDir);
+    } catch {
+      return;
+    }
+    if (!stat.isDirectory()) {
+      return;
+    }
+
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(sourceDir, { withFileTypes: true });
+    } catch (err) {
+      logWarn(`[Skills] Failed to read legacy skills directory ${sourceDir}: ${err}`);
+      return;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) {
+        continue;
+      }
+      if (/[/\\]|\.\./.test(entry.name)) {
+        logWarn(`[Skills] Skipping legacy skill with unsafe name: ${entry.name}`);
+        continue;
+      }
+      const sourcePath = path.join(sourceDir, entry.name);
+      const targetPath = path.join(targetDir, entry.name);
+      if (!fs.existsSync(path.join(sourcePath, 'SKILL.md'))) {
+        continue;
+      }
+      if (fs.existsSync(targetPath) || isDanglingSymlink(targetPath)) {
+        logWarn(`[Skills] Skipping legacy skill migration because target exists: ${targetPath}`);
+        continue;
+      }
+      try {
+        this.moveDirectorySyncSafe(sourcePath, targetPath);
+        log(`[Skills] Migrated legacy skill: ${sourcePath} -> ${targetPath}`);
+      } catch (err) {
+        logWarn(`[Skills] Failed to migrate legacy skill ${sourcePath}: ${err}`);
+      }
+    }
+  }
+
+  private moveDirectorySyncSafe(source: string, target: string): void {
+    try {
+      fs.renameSync(source, target);
+      return;
+    } catch (renameError) {
+      try {
+        this.copyDirectorySyncSafe(source, target);
+        fs.rmSync(source, { recursive: true, force: true });
+      } catch (copyError) {
+        if (fs.existsSync(target)) {
+          fs.rmSync(target, { recursive: true, force: true });
+        }
+        throw copyError ?? renameError;
+      }
     }
   }
 
@@ -165,6 +265,7 @@ export class SkillsManager {
             name: metadata.name,
             description: metadata.description,
             type: 'builtin',
+            source: 'builtin',
             enabled: true,
             createdAt: Date.now(),
           };
@@ -198,68 +299,29 @@ export class SkillsManager {
       paths.push(builtin);
     }
 
-    // 2. Global skills (userData/claude/skills)
-    const global = this.getGlobalSkillsPath();
-    if (global && fs.existsSync(global)) {
+    // 2. Global skills (%APPDATA%/open-cowork/skills/)
+    const global = getGlobalSkillsDir();
+    if (fs.existsSync(global)) {
       paths.push(global);
     }
 
     // 3. Project-level skills
     if (projectPath) {
-      const projectSkillsDirs = [
-        path.join(projectPath, '.skills'),
-        path.join(projectPath, 'skills'),
-      ];
-      for (const dir of projectSkillsDirs) {
-        if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
-          paths.push(dir);
-        }
+      const projectSkillsDir = getProjectSkillsDir(projectPath);
+      if (fs.existsSync(projectSkillsDir) && fs.statSync(projectSkillsDir).isDirectory()) {
+        paths.push(projectSkillsDir);
       }
     }
 
     return paths;
   }
 
-  private getDefaultGlobalSkillsPath(): string {
-    return getDefaultGlobalSkillsPath();
-  }
-
+  /**
+   * Get the global skills directory path.
+   * This is the single directory where all user-installed skills live.
+   */
   getGlobalSkillsPath(): string {
-    const fallbackPath = this.getDefaultGlobalSkillsPath();
-    const configuredPath = (this.getConfiguredGlobalSkillsPathFn?.() || '').trim();
-    return resolveGlobalSkillsPath({
-      configuredPath,
-      validateConfiguredPath: true,
-      onFallback: (_fallbackPath, preferredPath) => {
-        logWarn(
-          `[Skills] Configured skills path is unavailable, fallback to default: ${preferredPath}`
-        );
-        this.setConfiguredGlobalSkillsPathFn?.('');
-        this.emitStorageEvent({
-          path: fallbackPath,
-          reason: 'fallback',
-          message: 'Configured skills directory is unavailable, fallback to default directory.',
-        });
-      },
-    });
-  }
-
-  onStorageChanged(callback: (event: SkillsStorageChangeEvent) => void): () => void {
-    this.storageCallbacks.add(callback);
-    return () => {
-      this.storageCallbacks.delete(callback);
-    };
-  }
-
-  private emitStorageEvent(event: SkillsStorageChangeEvent): void {
-    this.invalidateGlobalSkillsCache();
-    for (const callback of this.storageCallbacks) {
-      try {
-        callback(event);
-      } catch (error) {
-        logError('[Skills] Storage change callback failed:', error);
-      }
-    }
+    return getGlobalSkillsDir();
   }
 
   private clearSkillsBySource(source: 'project' | 'global'): void {
@@ -274,6 +336,12 @@ export class SkillsManager {
   private invalidateGlobalSkillsCache(): void {
     this.loadedGlobalSkillsSignature = '';
     this.globalSkillsLoaded = false;
+  }
+
+  private invalidateProjectSkillsCache(): void {
+    this.loadedProjectSkillsSignature = '';
+    this.loadedProjectPath = '';
+    this.projectSkillsLoaded = false;
   }
 
   private computeStorageSignature(storagePath: string): string {
@@ -300,170 +368,36 @@ export class SkillsManager {
     }
   }
 
-  private stopStorageWatcher(): void {
-    if (this.storageWatcher) {
-      this.storageWatcher.close().catch((error) => {
-        logError('[Skills] Failed to close storage watcher:', error);
-      });
-      this.storageWatcher = null;
-    }
-    if (this.storagePollingTimer) {
-      clearInterval(this.storagePollingTimer);
-      this.storagePollingTimer = null;
-    }
-  }
-
-  private startStoragePolling(storagePath: string): void {
-    if (this.storagePollingTimer) {
-      return;
-    }
-    this.storagePollingTimer = setInterval(() => {
-      const nextSignature = this.computeStorageSignature(storagePath);
-      if (nextSignature !== this.lastStorageSignature) {
-        this.lastStorageSignature = nextSignature;
-        this.emitStorageEvent({ path: storagePath, reason: 'updated' });
-      }
-    }, 3000);
-  }
-
-  private startStorageWatcher(): void {
-    this.stopStorageWatcher();
-    const storagePath = this.getGlobalSkillsPath();
-    this.lastStorageSignature = this.computeStorageSignature(storagePath);
-
-    try {
-      this.storageWatcher = chokidar.watch(storagePath, {
-        ignoreInitial: true,
-        depth: 3,
-        awaitWriteFinish: {
-          stabilityThreshold: 200,
-          pollInterval: 100,
-        },
-      });
-      this.storageWatcher.on('all', () => {
-        const nextSignature = this.computeStorageSignature(storagePath);
-        if (nextSignature !== this.lastStorageSignature) {
-          this.lastStorageSignature = nextSignature;
-          this.emitStorageEvent({ path: storagePath, reason: 'updated' });
-        }
-      });
-      this.storageWatcher.on('error', (error) => {
-        logError('[Skills] Storage watcher failed:', error);
-        this.emitStorageEvent({
-          path: storagePath,
-          reason: 'watcher_error',
-          message: error instanceof Error ? error.message : String(error),
-        });
-        this.startStoragePolling(storagePath);
-      });
-    } catch (error) {
-      logError('[Skills] Failed to start storage watcher:', error);
-      this.emitStorageEvent({
-        path: storagePath,
-        reason: 'watcher_error',
-        message: error instanceof Error ? error.message : String(error),
-      });
-      this.startStoragePolling(storagePath);
-    }
-  }
-
-  /**
-   * Remove dangling symlinks from a directory (e.g. leftover links to a
-   * previous app bundle after an upgrade).
-   */
-  private cleanDanglingSymlinks(dir: string): void {
-    let entries: string[];
-    try {
-      entries = fs.readdirSync(dir);
-    } catch {
-      return; // directory unreadable — nothing to clean
-    }
-    for (const entry of entries) {
-      const entryPath = path.join(dir, entry);
-      if (isDanglingSymlink(entryPath)) {
-        try {
-          fs.unlinkSync(entryPath);
-          log(`[Skills] Cleaned up dangling symlink: ${entryPath}`);
-        } catch (err) {
-          logWarn(`[Skills] Could not remove dangling symlink ${entryPath}: ${err}`);
-        }
-      }
-    }
-  }
-
-  private getUserSkillsPath(): string {
-    return getUserClaudeSkillsDir();
-  }
-
-  private async importUserSkills(globalSkillsPath: string): Promise<void> {
-    const userSkillsPath = this.getUserSkillsPath();
-    if (!fs.existsSync(userSkillsPath)) {
-      return;
-    }
-
-    const entries = fs.readdirSync(userSkillsPath, { withFileTypes: true });
-    for (const entry of entries) {
-      // Dirent.isDirectory() returns false for symlinks; check symlinks separately
-      const sourcePath = path.join(userSkillsPath, entry.name);
-      if (entry.isSymbolicLink()) {
-        if (isDanglingSymlink(sourcePath)) {
-          logWarn(`[Skills] Skipping dangling symlink in user skills: ${sourcePath}`);
-          continue;
-        }
-        // Valid symlink — resolve to check if it's a directory
-        try {
-          if (!fs.statSync(sourcePath).isDirectory()) continue;
-        } catch {
-          continue;
-        }
-      } else if (!entry.isDirectory()) {
-        continue;
-      }
-
-      const targetPath = path.join(globalSkillsPath, entry.name);
-
-      // Clean up dangling symlinks at the target before re-importing
-      if (isDanglingSymlink(targetPath)) {
-        try {
-          fs.unlinkSync(targetPath);
-          logWarn(`[Skills] Removed dangling symlink at target: ${targetPath}`);
-        } catch (unlinkErr) {
-          logError(`[Skills] Failed to remove dangling symlink: ${targetPath}`, unlinkErr);
-          continue;
-        }
-      } else if (fs.existsSync(targetPath)) {
-        continue;
-      }
-
-      try {
-        fs.symlinkSync(sourcePath, targetPath, 'dir');
-      } catch (err) {
-        try {
-          await this.copyDirectory(sourcePath, targetPath);
-        } catch (copyErr) {
-          logError(`Failed to import user skill from ${sourcePath}:`, copyErr);
-        }
-      }
-    }
-  }
-
   /**
    * Load skills from a project directory
    */
   async loadProjectSkills(projectPath: string): Promise<Skill[]> {
-    const skills: Skill[] = [];
-    this.clearSkillsBySource('project');
-
-    // Check for .skills/ or skills/ directory
-    const skillsDirs = [path.join(projectPath, '.skills'), path.join(projectPath, 'skills')];
-
-    for (const skillsDir of skillsDirs) {
-      if (fs.existsSync(skillsDir) && fs.statSync(skillsDir).isDirectory()) {
-        const loadedSkills = await this.loadSkillsFromDirectory(skillsDir, 'project');
-        skills.push(...loadedSkills);
-      }
+    const skillsDir = getProjectSkillsDir(projectPath);
+    const signature = this.computeStorageSignature(skillsDir);
+    const resolvedProjectPath = path.resolve(projectPath);
+    if (
+      this.projectSkillsLoaded &&
+      this.loadedProjectPath === resolvedProjectPath &&
+      signature === this.loadedProjectSkillsSignature
+    ) {
+      return Array.from(this.loadedSkills.values()).filter((skill) =>
+        skill.id.startsWith('project-')
+      );
     }
 
+    this.clearSkillsBySource('project');
+
+    if (!fs.existsSync(skillsDir) || !fs.statSync(skillsDir).isDirectory()) {
+      this.loadedProjectPath = resolvedProjectPath;
+      this.loadedProjectSkillsSignature = signature;
+      this.projectSkillsLoaded = true;
+      return [];
+    }
+
+    const skills = await this.loadSkillsFromDirectory(skillsDir, 'project');
+    this.loadedProjectPath = resolvedProjectPath;
+    this.loadedProjectSkillsSignature = signature;
+    this.projectSkillsLoaded = true;
     return skills;
   }
 
@@ -471,16 +405,12 @@ export class SkillsManager {
    * Load global skills from user config directory
    */
   async loadGlobalSkills(): Promise<Skill[]> {
-    const globalSkillsPath = this.getGlobalSkillsPath();
+    const globalSkillsPath = getGlobalSkillsDir();
 
     if (!fs.existsSync(globalSkillsPath)) {
       fs.mkdirSync(globalSkillsPath, { recursive: true });
     }
 
-    // Proactively clean up dangling symlinks left by previous app versions
-    this.cleanDanglingSymlinks(globalSkillsPath);
-
-    await this.importUserSkills(globalSkillsPath);
     const signature = this.computeStorageSignature(globalSkillsPath);
     if (this.globalSkillsLoaded && signature === this.loadedGlobalSkillsSignature) {
       return Array.from(this.loadedSkills.values()).filter((skill) =>
@@ -493,57 +423,6 @@ export class SkillsManager {
     this.loadedGlobalSkillsSignature = signature;
     this.globalSkillsLoaded = true;
     return skills;
-  }
-
-  async setGlobalSkillsPath(newPath: string, migrate = true): Promise<SetGlobalSkillsPathResult> {
-    const trimmed = newPath.trim();
-    if (!trimmed) {
-      throw new Error('Skills directory path cannot be empty');
-    }
-
-    const sourcePath = this.getGlobalSkillsPath();
-    const targetPath = path.resolve(trimmed);
-
-    if (fs.existsSync(targetPath) && !fs.statSync(targetPath).isDirectory()) {
-      throw new Error('Target path is not a directory');
-    }
-    if (!fs.existsSync(targetPath)) {
-      fs.mkdirSync(targetPath, { recursive: true });
-    }
-
-    let migratedCount = 0;
-    let skippedCount = 0;
-    if (migrate && sourcePath !== targetPath && fs.existsSync(sourcePath)) {
-      const entries = fs.readdirSync(sourcePath, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isDirectory()) {
-          continue;
-        }
-        // Validate entry name does not contain path traversal characters
-        if (/[/\\]|\.\./.test(entry.name)) {
-          logWarn(`[Skills] Skipping migration of entry with unsafe name: ${entry.name}`);
-          continue;
-        }
-        const sourceEntryPath = path.join(sourcePath, entry.name);
-        const targetEntryPath = path.join(targetPath, entry.name);
-        if (fs.existsSync(targetEntryPath)) {
-          skippedCount += 1;
-          continue;
-        }
-        await this.copyDirectory(sourceEntryPath, targetEntryPath);
-        migratedCount += 1;
-      }
-    }
-
-    this.setConfiguredGlobalSkillsPathFn?.(targetPath);
-    if (this.watchStorageEnabled) {
-      this.startStorageWatcher();
-    }
-    this.invalidateGlobalSkillsCache();
-    await this.loadGlobalSkills();
-    this.emitStorageEvent({ path: targetPath, reason: 'path_changed' });
-
-    return { path: targetPath, migratedCount, skippedCount };
   }
 
   /**
@@ -587,6 +466,7 @@ export class SkillsManager {
               name: metadata.name,
               description: metadata.description,
               type: 'custom',
+              source,
               enabled: true,
               createdAt: Date.now(),
             };
@@ -606,6 +486,7 @@ export class SkillsManager {
               name: config.name,
               description: config.description,
               type: config.type === 'mcp' ? 'mcp' : 'custom',
+              source,
               enabled: config.enabled !== false,
               config: config.mcp ? { mcp: config.mcp } : undefined,
               createdAt: Date.now(),
@@ -646,20 +527,10 @@ export class SkillsManager {
     if (projectPath) {
       const projectSkills = await this.loadProjectSkills(projectPath);
 
-      // Project skills can override global/builtin by name
-      for (const projectSkill of projectSkills) {
-        if (!projectSkill.enabled) continue;
-
-        const existingIndex = skills.findIndex((s) => s.name === projectSkill.name);
-        if (existingIndex >= 0) {
-          skills[existingIndex] = projectSkill;
-        } else {
-          skills.push(projectSkill);
-        }
-      }
+      skills.push(...projectSkills.filter((s) => s.enabled));
     }
 
-    return skills;
+    return this.deduplicateSkills(skills);
   }
 
   /**
@@ -711,10 +582,6 @@ export class SkillsManager {
     for (const skillId of this.runningServers.keys()) {
       await this.stopMcpServer(skillId);
     }
-  }
-
-  stopStorageMonitoring(): void {
-    this.stopStorageWatcher();
   }
 
   /**
@@ -779,12 +646,21 @@ export class SkillsManager {
   /**
    * List all skills with optional filters
    */
-  async listSkills(filter?: {
+  async listSkills(
+    filter?: {
     type?: 'builtin' | 'mcp' | 'custom';
     enabled?: boolean;
-  }): Promise<Skill[]> {
-    // Load global skills first to ensure they're in loadedSkills
+    },
+    options: { projectPath?: string } = {}
+  ): Promise<Skill[]> {
+    // Load managed skills first to ensure they're in loadedSkills
     await this.loadGlobalSkills();
+    if (options.projectPath) {
+      await this.loadProjectSkills(options.projectPath);
+    } else {
+      this.clearSkillsBySource('project');
+      this.invalidateProjectSkillsCache();
+    }
 
     let skills = this.deduplicateSkills(Array.from(this.loadedSkills.values()));
 
@@ -882,25 +758,69 @@ export class SkillsManager {
     }
   }
 
-  /**
-   * Copy skill folder to global skills directory
-   */
-  private async copySkillToGlobal(sourcePath: string, skillName: string): Promise<string> {
-    // Use app-specific skills directory to avoid conflicts with user settings
-    const globalSkillsPath = this.getGlobalSkillsPath();
+  private getInstallRoot(scope: SkillInstallScope, projectPath?: string): string {
+    if (scope === 'project') {
+      if (!projectPath?.trim()) {
+        throw new Error('Project path is required for project skill install');
+      }
+      return getProjectSkillsDir(projectPath);
+    }
+    return getGlobalSkillsDir();
+  }
 
-    // Ensure global skills directory exists
-    if (!fs.existsSync(globalSkillsPath)) {
-      fs.mkdirSync(globalSkillsPath, { recursive: true });
+  private async copySkillToRoot(
+    sourcePath: string,
+    skillName: string,
+    rootPath: string
+  ): Promise<string> {
+    if (!fs.existsSync(rootPath)) {
+      fs.mkdirSync(rootPath, { recursive: true });
     }
 
-    const targetPath = path.join(globalSkillsPath, skillName);
-
-    // Copy directory recursively (caller should handle existing files)
+    const targetPath = path.join(rootPath, skillName);
     await this.copyDirectory(sourcePath, targetPath);
 
     log(`Copied skill from ${sourcePath} to ${targetPath}`);
     return targetPath;
+  }
+
+  private copyDirectorySyncSafe(source: string, target: string): void {
+    if (!fs.existsSync(target)) {
+      fs.mkdirSync(target, { recursive: true });
+    }
+
+    const files = fs.readdirSync(source);
+    for (const file of files) {
+      const sourcePath = path.join(source, file);
+      const targetPath = path.join(target, file);
+      const lstat = fs.lstatSync(sourcePath);
+
+      if (lstat.isSymbolicLink()) {
+        let realTarget: string;
+        try {
+          realTarget = fs.realpathSync(sourcePath);
+        } catch {
+          logWarn(`[Skills] Skipping unresolvable symlink: ${sourcePath}`);
+          continue;
+        }
+        if (!isPathWithinRoot(realTarget, source)) {
+          logWarn(
+            `[Skills] Skipping symlink escaping source directory: ${sourcePath} -> ${realTarget}`
+          );
+          continue;
+        }
+        const realStat = fs.statSync(sourcePath);
+        if (realStat.isDirectory()) {
+          this.copyDirectorySyncSafe(realTarget, targetPath);
+        } else {
+          fs.copyFileSync(sourcePath, targetPath);
+        }
+      } else if (lstat.isDirectory()) {
+        this.copyDirectorySyncSafe(sourcePath, targetPath);
+      } else {
+        fs.copyFileSync(sourcePath, targetPath);
+      }
+    }
   }
 
   /**
@@ -959,7 +879,11 @@ export class SkillsManager {
   /**
    * Install a skill from a directory
    */
-  async installSkill(skillPath: string): Promise<Skill> {
+  async installSkill(
+    skillPath: string,
+    options: { scope?: SkillInstallScope; projectPath?: string } = {}
+  ): Promise<Skill> {
+    const scope: SkillInstallScope = options.scope || 'global';
     // Validate skill folder
     const validation = await this.validateSkillFolder(skillPath);
     if (!validation.valid) {
@@ -975,17 +899,12 @@ export class SkillsManager {
     // Validate skill name is safe for filesystem operations
     validateSkillName(metadata.name);
 
-    // Load global skills to check for existing
-    await this.loadGlobalSkills();
-
-    // Check if skill with same name already exists in global directory
-    // Use app-specific skills directory to avoid conflicts with user settings
-    const globalSkillsPath = this.getGlobalSkillsPath();
-    const targetPath = path.join(globalSkillsPath, metadata.name);
+    const rootPath = this.getInstallRoot(scope, options.projectPath);
+    const targetPath = path.join(rootPath, metadata.name);
 
     const normalizedSkillName = metadata.name.toLowerCase();
     for (const [skillId, skill] of this.loadedSkills.entries()) {
-      if (skill.name.toLowerCase() === normalizedSkillName) {
+      if (skill.name.toLowerCase() === normalizedSkillName && skill.id.startsWith(`${scope}-`)) {
         this.loadedSkills.delete(skillId);
         log(`Removing existing skill: ${skill.name} (${skillId})`);
       }
@@ -1005,13 +924,14 @@ export class SkillsManager {
       log(`Deleted existing skill directory: ${targetPath}`);
     }
 
-    // Copy skill to global directory
-    await this.copySkillToGlobal(skillPath, metadata.name);
+    // Copy skill to target scope directory
+    await this.copySkillToRoot(skillPath, metadata.name, rootPath);
 
-    // Reload from global directory and return canonical global skill entry.
-    this.invalidateGlobalSkillsCache();
-    const globalSkills = await this.loadGlobalSkills();
-    const installedSkill = globalSkills.find(
+    const reloadedSkills =
+      scope === 'project'
+        ? (this.invalidateProjectSkillsCache(), await this.loadProjectSkills(options.projectPath!))
+        : (this.invalidateGlobalSkillsCache(), await this.loadGlobalSkills());
+    const installedSkill = reloadedSkills.find(
       (skill) => skill.name.toLowerCase() === normalizedSkillName
     );
 
@@ -1019,7 +939,7 @@ export class SkillsManager {
       throw new Error(`Installed skill not found after reload: ${metadata.name}`);
     }
 
-    // Save canonical skill entry (stable id: global-<folderName>)
+    // Save canonical skill entry (stable id: <scope>-<folderName>)
     this.saveSkill(installedSkill);
 
     log(`Installed skill: ${installedSkill.name} (${installedSkill.id})`);
@@ -1038,13 +958,19 @@ export class SkillsManager {
         continue;
       }
 
-      // Prefer canonical global/custom entries over transient custom entries.
-      if (existing.id.startsWith('custom-') && !skill.id.startsWith('custom-')) {
+      if (this.getSkillPriority(skill) > this.getSkillPriority(existing)) {
         byName.set(key, skill);
       }
     }
 
     return Array.from(byName.values());
+  }
+
+  private getSkillPriority(skill: Skill): number {
+    if (skill.id.startsWith('project-') || skill.source === 'project') return 3;
+    if (skill.id.startsWith('global-') || skill.source === 'global') return 2;
+    if (skill.type === 'builtin' || skill.source === 'builtin') return 1;
+    return 0;
   }
 
   async validatePluginFolder(
@@ -1162,14 +1088,15 @@ export class SkillsManager {
     // Stop MCP server if running
     await this.stopMcpServer(skillId);
 
-    // Remove from filesystem (only for custom skills in global directory)
+    // Remove from filesystem for managed custom skills.
     if (skill.type === 'custom') {
       // Validate skill name before using it in path construction
       validateSkillName(skill.name);
 
-      // Use app-specific skills directory to avoid conflicts with user settings
-      const globalSkillsPath = this.getGlobalSkillsPath();
-      const skillDir = path.join(globalSkillsPath, skill.name);
+      const rootPath = skill.id.startsWith('project-')
+        ? getProjectSkillsDir(this.loadedProjectPath)
+        : getGlobalSkillsDir();
+      const skillDir = path.join(rootPath, skill.name);
 
       if (fs.existsSync(skillDir)) {
         fs.rmSync(skillDir, { recursive: true, force: true });
@@ -1180,6 +1107,7 @@ export class SkillsManager {
     // Remove from loaded skills
     this.loadedSkills.delete(skillId);
     this.invalidateGlobalSkillsCache();
+    this.invalidateProjectSkillsCache();
 
     // Delete from database
     const stmt = this.db.prepare('DELETE FROM skills WHERE id = ?');

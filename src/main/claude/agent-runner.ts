@@ -91,15 +91,7 @@ import {
   resolvePreferredWindowsShell,
   getWindowsRegistryPathEntries,
 } from '../runtime/runtime-resolver';
-import {
-  copyDirectorySync,
-  getAppClaudeDir,
-  getRuntimeSkillsDir,
-  resolveBuiltinSkillsPath,
-  resolveGlobalSkillsPath,
-  syncConfiguredSkillsToRuntimeDir,
-  syncUserSkillsToDir,
-} from '../skills/skill-paths';
+import { getGlobalSkillsDir, getProjectSkillsDir, resolveBuiltinSkillsPath } from '../skills/skill-paths';
 import {
   isPlanModeToolAllowed,
   type PlanModeToolDecision,
@@ -950,19 +942,14 @@ ${hints.join('\n')}
       onMissing: () => logWarn('[ClaudeAgentRunner] No built-in skills directory found'),
     });
     if (builtin && fs.existsSync(builtin)) paths.push(builtin);
-    const global = this.getConfiguredGlobalSkillsDir();
-    if (global && fs.existsSync(global)) paths.push(global);
+    const global = getGlobalSkillsDir();
+    if (fs.existsSync(global)) paths.push(global);
 
     // Project-level skills
     if (projectPath) {
-      const projectSkillsDirs = [
-        path.join(projectPath, '.skills'),
-        path.join(projectPath, 'skills'),
-      ];
-      for (const dir of projectSkillsDirs) {
-        if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
-          paths.push(dir);
-        }
+      const dir = getProjectSkillsDir(projectPath);
+      if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
+        paths.push(dir);
       }
     }
 
@@ -974,45 +961,6 @@ ${hints.join('\n')}
       onFound: (skillsPath) => log('[ClaudeAgentRunner] Found built-in skills at:', skillsPath),
       onMissing: () => logWarn('[ClaudeAgentRunner] No built-in skills directory found'),
     });
-  }
-
-  private getAppClaudeDir(): string {
-    return getAppClaudeDir();
-  }
-
-  private getRuntimeSkillsDir(): string {
-    return getRuntimeSkillsDir();
-  }
-
-  private getConfiguredGlobalSkillsDir(): string {
-    return resolveGlobalSkillsPath({
-      configuredPath: configStore.get('globalSkillsPath') || undefined,
-      onFallback: (_fallbackPath, preferredPath) =>
-        logWarn(
-          '[ClaudeAgentRunner] Configured skills path is unavailable, fallback to runtime path:',
-          preferredPath
-        ),
-    });
-  }
-
-  private syncUserSkillsToAppDir(appSkillsDir: string): void {
-    syncUserSkillsToDir(appSkillsDir, {
-      onWarn: (message, error) => logWarn(`[ClaudeAgentRunner] ${message}`, error),
-    });
-  }
-
-  private syncConfiguredSkillsToRuntimeDir(runtimeSkillsDir: string): void {
-    syncConfiguredSkillsToRuntimeDir(
-      runtimeSkillsDir,
-      configStore.get('globalSkillsPath') || undefined,
-      {
-        onWarn: (message, error) => logWarn(`[ClaudeAgentRunner] ${message}`, error),
-      }
-    );
-  }
-
-  private copyDirectorySync(source: string, target: string): void {
-    copyDirectorySync(source, target);
   }
 
   constructor(
@@ -1856,12 +1804,10 @@ ${hints.join('\n')}
               );
             }
 
-            const appSkillsDir = this.getRuntimeSkillsDir();
+            const appSkillsDir = getGlobalSkillsDir();
             if (!fs.existsSync(appSkillsDir)) {
               fs.mkdirSync(appSkillsDir, { recursive: true });
             }
-            this.syncUserSkillsToAppDir(appSkillsDir);
-            this.syncConfiguredSkillsToRuntimeDir(appSkillsDir);
 
             if (fs.existsSync(appSkillsDir)) {
               const wslSourcePath = pathConverter.toWSL(appSkillsDir);
@@ -2018,12 +1964,10 @@ ${hints.join('\n')}
               );
             }
 
-            const appSkillsDir = this.getRuntimeSkillsDir();
+            const appSkillsDir = getGlobalSkillsDir();
             if (!fs.existsSync(appSkillsDir)) {
               fs.mkdirSync(appSkillsDir, { recursive: true });
             }
-            this.syncUserSkillsToAppDir(appSkillsDir);
-            this.syncConfiguredSkillsToRuntimeDir(appSkillsDir);
 
             if (fs.existsSync(appSkillsDir)) {
               log(
@@ -2272,10 +2216,6 @@ ${hints.join('\n')}
       const effectiveCwd =
         useSandboxIsolation && sandboxPath ? sandboxPath : workingDir || process.cwd();
 
-      // Use app-specific Claude config directory to avoid conflicts with user settings
-      // SDK uses CLAUDE_CONFIG_DIR to locate skills
-      const userClaudeDir = this.getAppClaudeDir();
-
       // Skills directory setup: only run on the first query per runner instance.
       // Symlinks and directories are stable across queries; re-running every time
       // wastes ~10-30 syscalls per query for no benefit. Call invalidateSkillsSetup()
@@ -2284,74 +2224,20 @@ ${hints.join('\n')}
         // Set flag at start to prevent re-entrant calls from concurrent queries
         this._skillsSetupDone = true;
 
-        // Ensure app Claude config directory exists
-        if (!fs.existsSync(userClaudeDir)) {
-          fs.mkdirSync(userClaudeDir, { recursive: true });
-        }
-
-        // Ensure app Claude skills directory exists
-        const appSkillsDir = this.getRuntimeSkillsDir();
+        // Ensure global skills directory exists
+        const appSkillsDir = getGlobalSkillsDir();
         if (!fs.existsSync(appSkillsDir)) {
           fs.mkdirSync(appSkillsDir, { recursive: true });
         }
 
-        // Copy built-in skills to app Claude skills directory if they don't exist
-        const builtinSkillsPath = this.getBuiltinSkillsPath();
-        if (builtinSkillsPath && fs.existsSync(builtinSkillsPath)) {
-          // Symlinks into .asar archives don't work at the OS level (ENOTDIR),
-          // so always copy when the source is inside an asar archive.
-          // Use regex to match .asar/ but NOT .asar.unpacked/ (which is a real directory).
-          const sourceInsideAsar = /\.asar[/\\]/.test(builtinSkillsPath);
-          const builtinSkills = fs.readdirSync(builtinSkillsPath);
-          for (const skillName of builtinSkills) {
-            const builtinSkillPath = path.join(builtinSkillsPath, skillName);
-            const userSkillPath = path.join(appSkillsDir, skillName);
-
-            // Clean up broken symlinks pointing into .asar from previous versions
-            try {
-              const lstat = fs.lstatSync(userSkillPath);
-              if (lstat.isSymbolicLink()) {
-                const linkTarget = fs.readlinkSync(userSkillPath);
-                if (/\.asar[/\\]/.test(linkTarget)) {
-                  fs.unlinkSync(userSkillPath);
-                  log(`[ClaudeAgentRunner] Removed broken asar symlink: ${userSkillPath}`);
-                }
-              }
-            } catch {
-              // Path doesn't exist — fine, we'll create it below
-            }
-
-            // Only set up if it's a directory and doesn't exist in app directory
-            if (fs.statSync(builtinSkillPath).isDirectory() && !fs.existsSync(userSkillPath)) {
-              if (sourceInsideAsar) {
-                // Source is inside .asar — must copy (symlinks to asar paths fail at OS level)
-                this.copyDirectorySync(builtinSkillPath, userSkillPath);
-                log(`[ClaudeAgentRunner] Copied built-in skill from asar: ${skillName}`);
-              } else {
-                // Source is a real directory — symlink for space efficiency
-                try {
-                  fs.symlinkSync(builtinSkillPath, userSkillPath, 'dir');
-                  log(`[ClaudeAgentRunner] Linked built-in skill: ${skillName}`);
-                } catch (err) {
-                  logWarn(
-                    `[ClaudeAgentRunner] Failed to symlink ${skillName}, copying instead:`,
-                    err
-                  );
-                  this.copyDirectorySync(builtinSkillPath, userSkillPath);
-                }
-              }
-            }
-          }
-        }
-
-        this.syncUserSkillsToAppDir(appSkillsDir);
-        this.syncConfiguredSkillsToRuntimeDir(appSkillsDir);
+        // Built-in skills remain in the bundled read-only directory and are
+        // passed separately via additionalSkillPaths.
       }
 
       // Build available skills section dynamically — now handled by pi's DefaultResourceLoader
       // via additionalSkillPaths. No custom prompt building needed.
 
-      log('[ClaudeAgentRunner] App claude dir:', userClaudeDir);
+      log('[ClaudeAgentRunner] Skills dir:', getGlobalSkillsDir());
       log('[ClaudeAgentRunner] User working directory:', workingDir);
 
       logTiming('before building conversation context', runStartTime);

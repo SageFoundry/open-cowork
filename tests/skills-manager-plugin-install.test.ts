@@ -10,6 +10,7 @@ vi.mock('electron', () => ({
     getAppPath: () => testRoot,
     getVersion: () => '0.0.0-test',
     getPath: (name: string) => {
+      if (name === 'appData') return path.join(testRoot, 'AppData', 'Roaming');
       if (name === 'userData') return path.join(testRoot, 'userData');
       if (name === 'home') return path.join(testRoot, 'home');
       return testRoot;
@@ -73,6 +74,7 @@ function createPluginDirectory(
 describe('SkillsManager installPluginFromDirectory', () => {
   beforeEach(() => {
     testRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'open-cowork-plugin-test-'));
+    fs.mkdirSync(path.join(testRoot, 'AppData', 'Roaming'), { recursive: true });
     fs.mkdirSync(path.join(testRoot, 'userData'), { recursive: true });
     fs.mkdirSync(path.join(testRoot, 'home'), { recursive: true });
   });
@@ -111,7 +113,15 @@ describe('SkillsManager installPluginFromDirectory', () => {
     const result = await manager.installPluginFromDirectory(pluginRoot);
     expect(result.installedSkills).toEqual(['alpha']);
 
-    const installedSkillPath = path.join(testRoot, 'userData', 'claude', 'skills', 'alpha', 'SKILL.md');
+    const installedSkillPath = path.join(
+      testRoot,
+      'AppData',
+      'Roaming',
+      'open-cowork',
+      'skills',
+      'alpha',
+      'SKILL.md'
+    );
     expect(fs.readFileSync(installedSkillPath, 'utf8')).toContain('New description');
   });
 

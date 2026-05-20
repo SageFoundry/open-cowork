@@ -1,21 +1,10 @@
 import { app } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
-import { isPathWithinRoot } from '../../shared/path-containment';
 
 export interface ResolveBuiltinSkillsPathOptions {
   onFound?: (skillsPath: string) => void;
   onMissing?: () => void;
-}
-
-export interface ResolveGlobalSkillsPathOptions {
-  configuredPath?: string;
-  validateConfiguredPath?: boolean;
-  onFallback?: (fallbackPath: string, preferredPath: string) => void;
-}
-
-export interface SkillSyncOptions {
-  onWarn?: (message: string, error?: unknown) => void;
 }
 
 export function physicalDirExists(dirPath: string): boolean {
@@ -28,6 +17,10 @@ export function physicalDirExists(dirPath: string): boolean {
   }
 }
 
+/**
+ * Resolve the built-in skills directory (app.asar/.claude/skills/ or unpacked equivalent).
+ * Built-in skills are read-only and shipped with the application.
+ */
 export function resolveBuiltinSkillsPath(options: ResolveBuiltinSkillsPathOptions = {}): string {
   const appPath = app.getAppPath();
   const unpackedPath = appPath.replace(/\.asar$/, '.asar.unpacked');
@@ -51,54 +44,36 @@ export function resolveBuiltinSkillsPath(options: ResolveBuiltinSkillsPathOption
   return '';
 }
 
-export function getAppClaudeDir(): string {
-  return path.join(app.getPath('userData'), 'claude');
-}
-
-export function getRuntimeSkillsDir(): string {
-  return path.join(getAppClaudeDir(), 'skills');
-}
-
-export function getDefaultGlobalSkillsPath(): string {
-  return getRuntimeSkillsDir();
-}
-
-export function getUserClaudeSkillsDir(): string {
-  return path.join(app.getPath('home'), '.claude', 'skills');
-}
-
-export function resolveGlobalSkillsPath(options: ResolveGlobalSkillsPathOptions = {}): string {
-  const fallbackPath = getDefaultGlobalSkillsPath();
-  const configuredPath = (options.configuredPath || '').trim();
-  const preferredPath = configuredPath ? path.resolve(configuredPath) : fallbackPath;
-
-  if (configuredPath && options.validateConfiguredPath) {
-    const allowedBases = [app.getPath('userData'), app.getPath('home'), process.cwd()];
-    const isWithinAllowed = allowedBases.some((base) => isPathWithinRoot(preferredPath, base));
-    if (!isWithinAllowed) {
-      throw new Error(`Skills path outside allowed directories: ${preferredPath}`);
-    }
+/**
+ * Get the global skills directory path.
+ * This is the single directory where all user-installed skills are stored.
+ * Path on Windows: %APPDATA%/open-cowork/skills/
+ */
+export function getGlobalSkillsDir(): string {
+  if (process.platform === 'win32') {
+    return path.join(app.getPath('appData'), 'open-cowork', 'skills');
   }
-
-  try {
-    if (!fs.existsSync(preferredPath)) {
-      fs.mkdirSync(preferredPath, { recursive: true });
-    }
-    if (!fs.statSync(preferredPath).isDirectory()) {
-      throw new Error('Configured path is not a directory');
-    }
-    return preferredPath;
-  } catch {
-    if (preferredPath !== fallbackPath) {
-      options.onFallback?.(fallbackPath, preferredPath);
-    }
-    if (!fs.existsSync(fallbackPath)) {
-      fs.mkdirSync(fallbackPath, { recursive: true });
-    }
-    return fallbackPath;
-  }
+  return path.join(app.getPath('userData'), 'skills');
 }
 
+/**
+ * Get the project-local skills directory.
+ * Project skills are always stored in <project>/.skills.
+ */
+export function getProjectSkillsDir(projectPath: string): string {
+  return path.join(path.resolve(projectPath), '.skills');
+}
+
+/**
+ * Legacy Open Cowork global skills directory used by earlier versions.
+ */
+export function getLegacyAppSkillsDir(): string {
+  return path.join(app.getPath('userData'), 'claude', 'skills');
+}
+
+/**
+ * Recursively copy a directory.
+ */
 export function copyDirectorySync(source: string, target: string): void {
   if (!fs.existsSync(target)) {
     fs.mkdirSync(target, { recursive: true });
@@ -114,80 +89,6 @@ export function copyDirectorySync(source: string, target: string): void {
       copyDirectorySync(sourcePath, targetPath);
     } else {
       fs.copyFileSync(sourcePath, targetPath);
-    }
-  }
-}
-
-export function syncUserSkillsToDir(targetDir: string, options: SkillSyncOptions = {}): void {
-  const userSkillsDir = getUserClaudeSkillsDir();
-  if (!fs.existsSync(userSkillsDir)) {
-    return;
-  }
-
-  const entries = fs.readdirSync(userSkillsDir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const sourcePath = path.join(userSkillsDir, entry.name);
-    const targetPath = path.join(targetDir, entry.name);
-
-    if (fs.existsSync(targetPath)) {
-      try {
-        const stat = fs.lstatSync(targetPath);
-        if (!stat.isSymbolicLink()) {
-          continue;
-        }
-        fs.unlinkSync(targetPath);
-      } catch {
-        continue;
-      }
-    }
-
-    try {
-      fs.symlinkSync(sourcePath, targetPath, 'dir');
-    } catch (error) {
-      try {
-        copyDirectorySync(sourcePath, targetPath);
-      } catch (copyError) {
-        options.onWarn?.(`Failed to import user skill: ${entry.name}`, copyError ?? error);
-      }
-    }
-  }
-}
-
-export function syncConfiguredSkillsToRuntimeDir(
-  runtimeSkillsDir: string,
-  configuredPath: string | undefined,
-  options: SkillSyncOptions = {}
-): void {
-  const configuredSkillsDir = resolveGlobalSkillsPath({ configuredPath });
-  if (configuredSkillsDir === runtimeSkillsDir) {
-    return;
-  }
-  if (!fs.existsSync(configuredSkillsDir) || !fs.statSync(configuredSkillsDir).isDirectory()) {
-    return;
-  }
-
-  const entries = fs.readdirSync(configuredSkillsDir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const sourcePath = path.join(configuredSkillsDir, entry.name);
-    const targetPath = path.join(runtimeSkillsDir, entry.name);
-    try {
-      if (fs.existsSync(targetPath)) {
-        const stat = fs.lstatSync(targetPath);
-        if (stat.isSymbolicLink()) {
-          fs.unlinkSync(targetPath);
-        } else {
-          fs.rmSync(targetPath, { recursive: true, force: true });
-        }
-      }
-      fs.symlinkSync(sourcePath, targetPath, 'dir');
-    } catch (error) {
-      try {
-        copyDirectorySync(sourcePath, targetPath);
-      } catch (copyError) {
-        options.onWarn?.(`Failed to sync configured skill: ${entry.name}`, copyError ?? error);
-      }
     }
   }
 }

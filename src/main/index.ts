@@ -806,17 +806,12 @@ app
 
     // Initialize skills manager first — it's needed by SessionManager for skill path resolution.
     skillsManager = new SkillsManager(db, {
-      getConfiguredGlobalSkillsPath: () => configStore.get('globalSkillsPath') || '',
-      setConfiguredGlobalSkillsPath: (nextPath: string) => {
-        configStore.update({ globalSkillsPath: nextPath });
+      getLegacyConfiguredGlobalSkillsPath: () => configStore.get('globalSkillsPath') || '',
+      clearLegacyConfiguredGlobalSkillsPath: () => {
+        if (configStore.get('globalSkillsPath')) {
+          configStore.update({ globalSkillsPath: '' });
+        }
       },
-      watchStorage: true,
-    });
-    skillsManager.onStorageChanged((event) => {
-      sendToRenderer({
-        type: 'skills.storageChanged',
-        payload: event,
-      });
     });
 
     backgroundTaskService = new BackgroundTaskService(db, sendToRenderer);
@@ -1018,7 +1013,6 @@ async function cleanupSandboxResources(): Promise<void> {
   isCleaningUp = true;
 
   stopNavServer();
-  skillsManager?.stopStorageMonitoring();
   scheduledTaskManager?.stop();
   if (backgroundTaskService) {
     try {
@@ -1438,7 +1432,6 @@ registerSkillsHandlers({
   getSkillsManager: () => skillsManager,
   getPluginRuntimeService: () => pluginRuntimeService,
   getSessionManager: () => sessionManager,
-  sendToRenderer,
 });
 
 // Window control IPC handlers

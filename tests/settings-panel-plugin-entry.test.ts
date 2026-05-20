@@ -9,6 +9,7 @@ const settingsPanelContent = [
   readFileSync(settingsPanelPath, 'utf8'),
   ...readdirSync(settingsDir).map((f) => readFileSync(path.join(settingsDir, f), 'utf8')),
 ].join('\n');
+const settingsSkillsContent = readFileSync(path.join(settingsDir, 'SettingsSkills.tsx'), 'utf8');
 
 describe('SettingsPanel skills plugin browse entry', () => {
   it('unit: renders browse plugins action', () => {
@@ -23,16 +24,17 @@ describe('SettingsPanel skills plugin browse entry', () => {
     expect(settingsPanelContent).toContain("t('skills.pluginInstall')");
   });
 
-  it('functional: includes skills storage controls', () => {
-    expect(settingsPanelContent).toContain("t('skills.storagePathTitle')");
-    expect(settingsPanelContent).toContain("t('skills.selectStoragePath')");
-    expect(settingsPanelContent).toContain("t('skills.openStoragePath')");
-    expect(settingsPanelContent).toContain("t('skills.refreshSkills')");
-    expect(settingsPanelContent).toContain('window.electronAPI.skills.getStoragePath()');
-    expect(settingsPanelContent).toContain('window.electronAPI.skills.setStoragePath(folderPath, true)');
+  it('functional: includes fixed global and project skill install controls', () => {
+    expect(settingsPanelContent).toContain("t('skills.installTargetsTitle')");
+    expect(settingsPanelContent).toContain("t('skills.installGlobalSkill')");
+    expect(settingsPanelContent).toContain("t('skills.installProjectSkill')");
+    expect(settingsPanelContent).toContain("t('skills.openGlobalSkillsDir')");
+    expect(settingsPanelContent).toContain("t('skills.noCurrentProjectPath')");
+    expect(settingsPanelContent).toContain("t('skills.projectPathRequired')");
+    expect(settingsPanelContent).toContain('window.electronAPI.skills.getAll(');
+    expect(settingsPanelContent).toContain("projectPath: scope === 'project' ? currentProjectPath : undefined");
     expect(settingsPanelContent).toContain('window.electronAPI.skills.openStoragePath()');
-    expect(settingsPanelContent).toContain('Promise.allSettled([');
-    expect(settingsPanelContent).toContain("throw new Error(errors.join(' | '));");
+    expect(settingsPanelContent).not.toContain('window.electronAPI.skills.setStoragePath');
     expect(settingsPanelContent).toContain("`${tRef.current('skills.failedToLoad')}: ${err.message}`");
     expect(settingsPanelContent).toContain('await loadSkills();');
   });
@@ -43,6 +45,13 @@ describe('SettingsPanel skills plugin browse entry', () => {
     expect(settingsPanelContent).toContain('window.electronAPI.plugins.install(installTarget)');
     expect(settingsPanelContent).toContain('window.electronAPI.plugins.setComponentEnabled');
     expect(settingsPanelContent).toContain("t('skills.pluginManageUninstall')");
+  });
+
+  it('functional: uses in-app confirms for skill/plugin destructive actions', () => {
+    expect(settingsSkillsContent).toContain('function ConfirmOverlay');
+    expect(settingsSkillsContent).toContain("t('skills.deleteSkillTitle')");
+    expect(settingsSkillsContent).toContain("t('skills.pluginUninstallTitle')");
+    expect(settingsSkillsContent).not.toContain('confirm(');
   });
 
   it('functional: handles marketplace catalog items with unknown component counts', () => {

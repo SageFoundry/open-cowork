@@ -1,44 +1,62 @@
 import { ipcMain, shell } from 'electron';
-import { configStore } from '../config/config-store';
-import type { PluginComponentKind, ServerEvent } from '../../renderer/types';
+import type { PluginComponentKind } from '../../renderer/types';
 import type { PluginRuntimeService } from '../skills/plugin-runtime-service';
 import type { SkillsManager } from '../skills/skills-manager';
 import type { SessionManager } from '../session/session-manager';
 import { logError } from '../utils/logger';
 
+interface SkillInstallRequest {
+  skillPath: string;
+  scope?: 'global' | 'project';
+  projectPath?: string;
+}
+
+interface SkillsListRequest {
+  projectPath?: string;
+}
+
 export interface RegisterSkillsHandlersDeps {
   getSkillsManager: () => SkillsManager | null;
   getPluginRuntimeService: () => PluginRuntimeService | null;
   getSessionManager: () => SessionManager | null;
-  sendToRenderer: (event: ServerEvent) => void;
 }
 
 export function registerSkillsHandlers({
   getSkillsManager,
   getPluginRuntimeService,
   getSessionManager,
-  sendToRenderer,
 }: RegisterSkillsHandlersDeps): void {
-  ipcMain.handle('skills.getAll', async () => {
+  ipcMain.handle('skills.getAll', async (_event, request?: SkillsListRequest) => {
     try {
       const skillsManager = getSkillsManager();
       if (!skillsManager) {
         throw new Error('Skills manager is still starting');
       }
-      return await skillsManager.listSkills();
+      return await skillsManager.listSkills(undefined, { projectPath: request?.projectPath });
     } catch (error) {
       logError('[Skills] Error getting skills:', error);
       throw error;
     }
   });
 
-  ipcMain.handle('skills.install', async (_event, skillPath: string) => {
+  ipcMain.handle('skills.install', async (_event, request: string | SkillInstallRequest) => {
     try {
       const skillsManager = getSkillsManager();
       if (!skillsManager) {
         throw new Error('SkillsManager not initialized');
       }
-      const skill = await skillsManager.installSkill(skillPath);
+      const payload =
+        typeof request === 'string'
+          ? { skillPath: request, scope: 'global' as const }
+          : {
+              skillPath: request.skillPath,
+              scope: request.scope || 'global',
+              projectPath: request.projectPath,
+            };
+      const skill = await skillsManager.installSkill(payload.skillPath, {
+        scope: payload.scope,
+        projectPath: payload.projectPath,
+      });
       getSessionManager()?.invalidateSkillsSetup();
       return { success: true, skill };
     } catch (error) {
@@ -101,22 +119,6 @@ export function registerSkillsHandlers({
       logError('[Skills] Error getting storage path:', error);
       return null;
     }
-  });
-
-  ipcMain.handle('skills.setStoragePath', async (_event, targetPath: string, migrate = true) => {
-    const skillsManager = getSkillsManager();
-    if (!skillsManager) {
-      throw new Error('SkillsManager not initialized');
-    }
-    const result = await skillsManager.setGlobalSkillsPath(targetPath, migrate !== false);
-    sendToRenderer({
-      type: 'config.status',
-      payload: {
-        isConfigured: configStore.isConfigured(),
-        config: configStore.getAll(),
-      },
-    });
-    return { success: true, ...result };
   });
 
   ipcMain.handle('skills.openStoragePath', async () => {

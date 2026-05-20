@@ -257,16 +257,6 @@ export function useIPC() {
             store.setSandboxSyncStatus(event.payload);
             break;
 
-          case 'skills.storageChanged':
-            console.log(
-              '[useIPC] skills.storageChanged received:',
-              event.payload.path,
-              event.payload.reason
-            );
-            store.setSkillsStorageChangeEvent(event.payload);
-            store.setSkillsStorageChangedAt(Date.now());
-            break;
-
           case 'workdir.changed':
             console.log('[useIPC] workdir.changed received:', event.payload.path);
             store.setWorkingDir(event.payload.path || null);

@@ -185,6 +185,12 @@ export function ChatView() {
     textarea.style.overflowY = textarea.scrollHeight > CHAT_INPUT_MAX_HEIGHT_PX ? 'auto' : 'hidden';
   }, []);
 
+  const focusChatInput = useCallback(() => {
+    const textarea = textareaRef.current;
+    if (!textarea || textarea.disabled) return;
+    textarea.focus({ preventScroll: true });
+  }, []);
+
   const hasActiveTurn = Boolean(activeTurn);
   const pendingCount = pendingTurns.length;
   const isSessionRunning = activeSession?.status === 'running';
@@ -560,8 +566,36 @@ export function ChatView() {
   }, []);
 
   useEffect(() => {
-    textareaRef.current?.focus();
-  }, [activeSessionId]);
+    focusChatInput();
+    const raf = requestAnimationFrame(focusChatInput);
+    const timers = [window.setTimeout(focusChatInput, 50), window.setTimeout(focusChatInput, 150)];
+
+    return () => {
+      cancelAnimationFrame(raf);
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, [activeSessionId, focusChatInput]);
+
+  useEffect(() => {
+    const handleWindowFocus = () => {
+      const activeElement = document.activeElement;
+      if (
+        activeElement &&
+        activeElement !== document.body &&
+        activeElement !== document.documentElement
+      ) {
+        return;
+      }
+      window.setTimeout(focusChatInput, 0);
+    };
+
+    window.addEventListener('focus', handleWindowFocus);
+    document.addEventListener('visibilitychange', handleWindowFocus);
+    return () => {
+      window.removeEventListener('focus', handleWindowFocus);
+      document.removeEventListener('visibilitychange', handleWindowFocus);
+    };
+  }, [focusChatInput]);
 
   // Handle paste event for images
   const handlePaste = async (e: React.ClipboardEvent) => {

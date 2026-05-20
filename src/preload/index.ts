@@ -228,9 +228,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Skills methods
   skills: {
-    getAll: (): Promise<Skill[]> => ipcRenderer.invoke('skills.getAll'),
-    install: (skillPath: string): Promise<{ success: boolean; skill: Skill }> =>
-      ipcRenderer.invoke('skills.install', skillPath),
+    getAll: (request?: { projectPath?: string }): Promise<Skill[]> =>
+      ipcRenderer.invoke('skills.getAll', request),
+    install: (request: {
+      skillPath: string;
+      scope: 'global' | 'project';
+      projectPath?: string;
+    }): Promise<{ success: boolean; skill: Skill }> => ipcRenderer.invoke('skills.install', request),
     delete: (skillId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('skills.delete', skillId),
     setEnabled: (skillId: string, enabled: boolean): Promise<{ success: boolean }> =>
@@ -238,16 +242,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     validate: (skillPath: string): Promise<{ valid: boolean; errors: string[] }> =>
       ipcRenderer.invoke('skills.validate', skillPath),
     getStoragePath: (): Promise<string> => ipcRenderer.invoke('skills.getStoragePath'),
-    setStoragePath: (
-      targetPath: string,
-      migrate = true
-    ): Promise<{
-      success: boolean;
-      path: string;
-      migratedCount: number;
-      skippedCount: number;
-      error?: string;
-    }> => ipcRenderer.invoke('skills.setStoragePath', targetPath, migrate),
     openStoragePath: (): Promise<{ success: boolean; path: string; error?: string }> =>
       ipcRenderer.invoke('skills.openStoragePath'),
   },
@@ -552,22 +546,16 @@ declare global {
         getPresets: () => Promise<McpPresetsMap>;
       };
       skills: {
-        getAll: () => Promise<Skill[]>;
-        install: (skillPath: string) => Promise<{ success: boolean; skill: Skill }>;
+        getAll: (request?: { projectPath?: string }) => Promise<Skill[]>;
+        install: (request: {
+          skillPath: string;
+          scope: 'global' | 'project';
+          projectPath?: string;
+        }) => Promise<{ success: boolean; skill: Skill }>;
         delete: (skillId: string) => Promise<{ success: boolean }>;
         setEnabled: (skillId: string, enabled: boolean) => Promise<{ success: boolean }>;
         validate: (skillPath: string) => Promise<{ valid: boolean; errors: string[] }>;
         getStoragePath: () => Promise<string>;
-        setStoragePath: (
-          targetPath: string,
-          migrate?: boolean
-        ) => Promise<{
-          success: boolean;
-          path: string;
-          migratedCount: number;
-          skippedCount: number;
-          error?: string;
-        }>;
         openStoragePath: () => Promise<{ success: boolean; path: string; error?: string }>;
       };
       plugins: {
