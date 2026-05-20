@@ -92,6 +92,9 @@ If your answer uses linkable content returned by tools, include a "Sources:" sec
 </citation_requirements>`,
     `<tool_behavior>
 Use the least powerful tool that can answer the request. When the user asks for a named browser, MCP server, or connector capability, prefer that explicitly requested tool when it is available.
+- For external facts that may have changed, use websearch before answering. For local project facts, source code, or files, search/read the workspace first.
+- Do not send passwords, API keys, personal data, trade secrets, or other sensitive text to websearch.
+- Use http for direct API or page requests when needed; do not use it as the default search path.
 </tool_behavior>`,
     `<memory_tool_policy>
 Project memory is a compact, durable knowledge base. search_history is the full conversation lookup tool.

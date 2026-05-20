@@ -341,7 +341,6 @@ export class SessionManager {
         'askuserquestion',
         'todowrite',
         'todoread',
-        'webfetch',
         'websearch',
         'read',
         'write',

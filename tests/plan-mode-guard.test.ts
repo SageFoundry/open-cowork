@@ -1,9 +1,6 @@
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
-import {
-  getPlanModeScratchDir,
-  isPlanModeToolAllowed,
-} from '../src/main/claude/plan-mode-guard';
+import { getPlanModeScratchDir, isPlanModeToolAllowed } from '../src/main/claude/plan-mode-guard';
 
 const cwd = path.resolve('E:/workspace/open-cowork');
 const sessionId = 'session-123';
@@ -22,11 +19,14 @@ function check(toolName: string, params: unknown, extra?: { mcpReadOnlyHint?: bo
 describe('plan mode guard', () => {
   it('allows read-only research shell commands', () => {
     expect(check('bash', { command: 'rg foo src' }).allowed).toBe(true);
-    expect(check('bash', { command: 'git diff -- src/main/claude/agent-runner.ts' }).allowed).toBe(true);
+    expect(check('bash', { command: 'git diff -- src/main/claude/agent-runner.ts' }).allowed).toBe(
+      true
+    );
     expect(check('bash', { command: 'npm run typecheck' }).allowed).toBe(true);
     expect(
-      check('pwsh', { command: '$lines = Get-Content src/main/claude/agent-runner.ts; $lines[0..10]' })
-        .allowed
+      check('pwsh', {
+        command: '$lines = Get-Content src/main/claude/agent-runner.ts; $lines[0..10]',
+      }).allowed
     ).toBe(true);
   });
 
@@ -41,18 +41,26 @@ describe('plan mode guard', () => {
   it('allows scratch writes and scratch script execution', () => {
     const scratch = getPlanModeScratchDir(cwd, sessionId);
     const script = path.join(scratch, 'search.ps1');
-    expect(check('Write', { path: script, content: 'mentions src/a.ts but is scratch content' }).allowed).toBe(
+    expect(
+      check('Write', { path: script, content: 'mentions src/a.ts but is scratch content' }).allowed
+    ).toBe(true);
+    expect(check('pwsh', { command: `Set-Content "${script}" "Get-ChildItem"` }).allowed).toBe(
       true
     );
-    expect(check('pwsh', { command: `Set-Content "${script}" "Get-ChildItem"` }).allowed).toBe(true);
     expect(check('pwsh', { command: `pwsh -File "${script}"` }).allowed).toBe(true);
-    expect(check('bash', { command: `echo script > tmp/plan-mode/${sessionId}/search.ps1` }).allowed).toBe(true);
+    expect(
+      check('bash', { command: `echo script > tmp/plan-mode/${sessionId}/search.ps1` }).allowed
+    ).toBe(true);
   });
 
   it('allows only read-only HTTP methods', () => {
     expect(check('http', { method: 'GET', url: 'https://example.com' }).allowed).toBe(true);
     expect(check('http', { method: 'HEAD', url: 'https://example.com' }).allowed).toBe(true);
     expect(check('http', { method: 'POST', url: 'https://example.com' }).allowed).toBe(false);
+  });
+
+  it('allows websearch as read-only external research', () => {
+    expect(check('websearch', { query: 'latest docs' }).allowed).toBe(true);
   });
 
   it('allows only trusted read-only MCP tools', () => {

@@ -309,7 +309,11 @@ export function useIPC() {
                 message: i18n.t('api.configRequiredActiveSet'),
                 messageKey: 'api.configRequiredActiveSet',
                 action:
-                  event.payload.action === 'open_api_settings' ? 'open_api_settings' : undefined,
+                  event.payload.action === 'open_api_settings'
+                    ? 'open_api_settings'
+                    : event.payload.action === 'open_tools_settings'
+                      ? 'open_tools_settings'
+                      : undefined,
               });
             } else {
               store.setGlobalNotice({
@@ -474,16 +478,7 @@ export function useIPC() {
           updatedAt: Date.now(),
           cwd: cwd || '',
           mountedPaths: [],
-          allowedTools: [
-            'webfetch',
-            'websearch',
-            'read',
-            'write',
-            'edit',
-            'list_directory',
-            'glob',
-            'grep',
-          ],
+          allowedTools: ['websearch', 'read', 'write', 'edit', 'list_directory', 'glob', 'grep'],
           memoryEnabled: false,
         };
 
@@ -895,19 +890,16 @@ export function useIPC() {
     []
   );
 
-  const stopBackgroundTask = useCallback(
-    async (taskId: string): Promise<BackgroundTask | null> => {
-      if (!isElectron) {
-        return null;
-      }
-      const task = await window.electronAPI.tasks.stop(taskId);
-      if (task) {
-        useAppStore.getState().upsertBackgroundTask(task);
-      }
-      return task;
-    },
-    []
-  );
+  const stopBackgroundTask = useCallback(async (taskId: string): Promise<BackgroundTask | null> => {
+    if (!isElectron) {
+      return null;
+    }
+    const task = await window.electronAPI.tasks.stop(taskId);
+    if (task) {
+      useAppStore.getState().upsertBackgroundTask(task);
+    }
+    return task;
+  }, []);
 
   const getBackgroundTaskLogTail = useCallback(
     async (taskId: string, maxChars = 8000): Promise<string> => {

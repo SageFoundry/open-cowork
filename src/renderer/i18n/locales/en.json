@@ -56,6 +56,8 @@
     "sandboxDesc": "Isolated execution environment",
     "connectors": "MCP Connectors",
     "connectorsDesc": "Browser & tool integrations",
+    "tools": "Tools",
+    "toolsDesc": "Configure built-in tool capabilities",
     "skills": "Skills",
     "skillsDesc": "Manage custom skills",
     "schedule": "Schedules",
@@ -81,6 +83,23 @@
     "chinese": "Chinese",
     "selectLanguage": "Select Language",
     "currentLanguage": "Current language"
+  },
+  "tools": {
+    "openSettingsAction": "Open Tools settings",
+    "anySearch": {
+      "title": "Web Search",
+      "description": "Open Cowork can search anonymously by default. Add a free AnySearch API key to raise search limits for frequent current-info, documentation, and news lookup.",
+      "anonymous": "Anonymous",
+      "configured": "Key configured",
+      "apiKey": "AnySearch API Key",
+      "apiKeyHint": "Saved only in local encrypted config. Leave empty to keep using anonymous quota, or set ANYSEARCH_API_KEY as a temporary environment override.",
+      "getFreeKey": "Get free key",
+      "docs": "Docs",
+      "clearKey": "Clear key",
+      "saved": "AnySearch key saved",
+      "saveFailed": "Failed to save AnySearch key. Please try again.",
+      "loadFailed": "Failed to load AnySearch settings."
+    }
   },
   "api": {
     "firstRunTitle": "Set Up API",
@@ -955,8 +974,7 @@
       "write": "Write to files on your system",
       "edit": "Edit existing files on your system",
       "bash": "Execute shell commands",
-      "webFetch": "Fetch data from the web",
-      "webSearch": "Search the web",
+      "websearch": "Search the web",
       "read_file": "Read files in the workspace",
       "write_file": "Write files in the workspace",
       "edit_file": "Edit files in the workspace",

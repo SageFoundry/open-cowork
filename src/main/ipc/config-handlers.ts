@@ -100,7 +100,11 @@ export function registerConfigHandlers({
   });
 
   ipcMain.handle('config.save', async (_event, newConfig: Partial<AppConfig>) => {
-    log('[Config] Saving config:', { ...newConfig, apiKey: newConfig.apiKey ? '***' : '' });
+    log('[Config] Saving config:', {
+      ...newConfig,
+      apiKey: newConfig.apiKey ? '***' : '',
+      anySearchApiKey: newConfig.anySearchApiKey ? '***' : '',
+    });
     const previousConfig = configStore.getAll();
     configStore.update(newConfig);
     const updatedConfig = await syncConfigAfterMutation(previousConfig);

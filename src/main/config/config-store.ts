@@ -118,6 +118,9 @@ export interface AppConfig {
   // Optional: Global skills storage directory
   globalSkillsPath?: string;
 
+  // Optional: AnySearch key for the built-in websearch tool
+  anySearchApiKey?: string;
+
   // Developer logs
   enableDevLogs: boolean;
 
@@ -157,6 +160,7 @@ const DIRECT_READ_KEYS = new Set<keyof AppConfig>([
   'claudeCodePath',
   'defaultWorkdir',
   'globalSkillsPath',
+  'anySearchApiKey',
   'enableDevLogs',
   'theme',
   'memoryStrategy',
@@ -246,6 +250,7 @@ const defaultConfig: AppConfig = {
   claudeCodePath: '',
   defaultWorkdir: '',
   globalSkillsPath: '',
+  anySearchApiKey: '',
   enableDevLogs: false,
   theme: 'light',
   memoryStrategy: 'auto',
@@ -443,7 +448,12 @@ function normalizeCustomProtocol(
 }
 
 function defaultProtocolForProvider(provider: ProviderType): CustomProtocolType {
-  if (provider === 'openai' || provider === 'lingerai' || provider === 'deepseek' || provider === 'ollama') {
+  if (
+    provider === 'openai' ||
+    provider === 'lingerai' ||
+    provider === 'deepseek' ||
+    provider === 'ollama'
+  ) {
     return 'openai';
   }
   if (provider === 'gemini') {
@@ -562,7 +572,9 @@ export class ConfigStore {
       result.maxTokens = profile.maxTokens;
     }
     if (Array.isArray(profile?.models)) {
-      const cleaned = profile.models.filter((m) => typeof m === 'string' && m.trim()).map((m) => m.trim());
+      const cleaned = profile.models
+        .filter((m) => typeof m === 'string' && m.trim())
+        .map((m) => m.trim());
       if (cleaned.length > 0) {
         result.models = [...new Set(cleaned)];
       }
@@ -941,6 +953,10 @@ export class ConfigStore {
         typeof raw.globalSkillsPath === 'string'
           ? raw.globalSkillsPath
           : defaultConfig.globalSkillsPath,
+      anySearchApiKey:
+        typeof raw.anySearchApiKey === 'string'
+          ? raw.anySearchApiKey.trim()
+          : defaultConfig.anySearchApiKey,
       enableDevLogs: toBoolean(raw.enableDevLogs, defaultConfig.enableDevLogs),
       theme: isAppTheme(raw.theme) ? raw.theme : defaultConfig.theme,
       memoryStrategy: isMemoryStrategy(raw.memoryStrategy)
@@ -1380,6 +1396,10 @@ export class ConfigStore {
         updates.globalSkillsPath !== undefined
           ? updates.globalSkillsPath
           : current.globalSkillsPath,
+      anySearchApiKey:
+        updates.anySearchApiKey !== undefined
+          ? updates.anySearchApiKey.trim()
+          : current.anySearchApiKey,
       enableDevLogs:
         updates.enableDevLogs !== undefined ? updates.enableDevLogs : current.enableDevLogs,
       theme: updates.theme !== undefined ? updates.theme : current.theme,
@@ -1391,8 +1411,7 @@ export class ConfigStore {
           : current.maxContextTokens,
       sandboxEnabled:
         updates.sandboxEnabled !== undefined ? updates.sandboxEnabled : current.sandboxEnabled,
-      autoMemory:
-        updates.autoMemory !== undefined ? updates.autoMemory : current.autoMemory,
+      autoMemory: updates.autoMemory !== undefined ? updates.autoMemory : current.autoMemory,
       isConfigured:
         updates.isConfigured !== undefined ? updates.isConfigured : current.isConfigured,
     });

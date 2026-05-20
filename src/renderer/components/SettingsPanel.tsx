@@ -10,6 +10,7 @@ import {
   AlertCircle,
   Globe,
   ChevronRight,
+  Wrench,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useWindowSize } from '../hooks/useWindowSize';
@@ -22,6 +23,7 @@ import { SettingsSkills } from './settings/SettingsSkills';
 import { SettingsSchedule } from './settings/SettingsSchedule';
 import { SettingsGeneral } from './settings/SettingsGeneral';
 import { SettingsLogs } from './settings/SettingsLogs';
+import { SettingsTools } from './settings/SettingsTools';
 
 interface SettingsPanelProps {
   onClose: () => void;
@@ -29,6 +31,7 @@ interface SettingsPanelProps {
     | 'api'
     | 'sandbox'
     | 'connectors'
+    | 'tools'
     | 'skills'
     | 'schedule'
     | 'remote'
@@ -40,6 +43,7 @@ type TabId =
   | 'api'
   | 'sandbox'
   | 'connectors'
+  | 'tools'
   | 'skills'
   | 'schedule'
   | 'remote'
@@ -50,6 +54,7 @@ const VALID_TABS = new Set<TabId>([
   'api',
   'sandbox',
   'connectors',
+  'tools',
   'skills',
   'schedule',
   'remote',
@@ -115,6 +120,12 @@ export function SettingsPanel({ onClose, initialTab = 'api' }: SettingsPanelProp
       label: t('settings.connectors'),
       icon: Plug,
       description: t('settings.connectorsDesc'),
+    },
+    {
+      id: 'tools' as TabId,
+      label: t('settings.tools'),
+      icon: Wrench,
+      description: t('settings.toolsDesc'),
     },
     {
       id: 'skills' as TabId,
@@ -249,6 +260,9 @@ export function SettingsPanel({ onClose, initialTab = 'api' }: SettingsPanelProp
                 {viewedTabs.has('connectors') && (
                   <SettingsConnectors isActive={activeTab === 'connectors'} />
                 )}
+              </div>
+              <div className={activeTab === 'tools' ? '' : 'hidden'}>
+                {viewedTabs.has('tools') && <SettingsTools />}
               </div>
               <div className={activeTab === 'skills' ? '' : 'hidden'}>
                 {viewedTabs.has('skills') && <SettingsSkills isActive={activeTab === 'skills'} />}

@@ -19,7 +19,7 @@ import { applySessionUpdate } from '../utils/session-update';
 import { getProjectIdForCwd } from '../utils/projects';
 
 export type GlobalNoticeType = 'info' | 'warning' | 'error' | 'success';
-export type GlobalNoticeAction = 'open_api_settings';
+export type GlobalNoticeAction = 'open_api_settings' | 'open_tools_settings';
 
 export interface GlobalNotice {
   id: string;
@@ -171,10 +171,7 @@ interface AppState {
   clearExecutionClock: (sessionId: string) => void;
   setMessages: (sessionId: string, messages: Message[]) => void;
   prependMessages: (sessionId: string, messages: Message[]) => void;
-  setMessagePagination: (
-    sessionId: string,
-    updates: Partial<SessionMessagePagination>
-  ) => void;
+  setMessagePagination: (sessionId: string, updates: Partial<SessionMessagePagination>) => void;
   setPartialMessage: (sessionId: string, partial: string) => void;
   clearPartialMessage: (sessionId: string) => void;
   setPartialThinking: (sessionId: string, delta: string) => void;
@@ -236,7 +233,10 @@ interface AppState {
   // Context window actions
   setSessionContextWindow: (sessionId: string, contextWindow: number) => void;
   setSessionTokenBudget: (sessionId: string, tokenBudget: TokenBudgetSnapshot | null) => void;
-  setSessionCompactionState: (sessionId: string, compactionState: SessionCompactionState | null) => void;
+  setSessionCompactionState: (
+    sessionId: string,
+    compactionState: SessionCompactionState | null
+  ) => void;
   setSessionCompaction: (sessionId: string, info: SessionCompactionInfo | null) => void;
   setSessionPlanMode: (sessionId: string, planMode: boolean) => void;
 
@@ -250,7 +250,6 @@ const defaultSettings: Settings = {
     'askuserquestion',
     'todowrite',
     'todoread',
-    'webfetch',
     'websearch',
     'http',
     'read',
@@ -730,9 +729,7 @@ export const useAppStore = create<AppState>((set) => ({
   setSessionPlanMode: (sessionId, planMode) =>
     set((state) => {
       // Also update the session object itself so it persists
-      const sessions = state.sessions.map((s) =>
-        s.id === sessionId ? { ...s, planMode } : s
-      );
+      const sessions = state.sessions.map((s) => (s.id === sessionId ? { ...s, planMode } : s));
       return {
         sessions,
         sessionStates: patchSession(state.sessionStates, sessionId, { planMode }),

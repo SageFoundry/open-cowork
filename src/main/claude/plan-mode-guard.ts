@@ -22,6 +22,7 @@ export const PLAN_MODE_ALLOWED_ACTIONS = [
   'Read and search project files.',
   'Run read-only inspection commands and tests/typechecks for research.',
   'Write temporary research scripts or scratch notes only under the plan-mode scratch directory.',
+  'Use websearch for external research.',
   'Use HTTP GET/HEAD for research.',
 ] as const;
 
@@ -81,6 +82,10 @@ export function isPlanModeToolAllowed(input: PlanModeToolGuardInput): PlanModeTo
     return method === 'GET' || method === 'HEAD'
       ? { allowed: true }
       : denied('Plan mode only allows HTTP GET and HEAD requests.');
+  }
+
+  if (toolName === 'websearch') {
+    return { allowed: true };
   }
 
   if (toolName === 'execute_background_command') {

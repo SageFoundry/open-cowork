@@ -47,10 +47,6 @@ function getToolLabel(name: string, input: unknown): string {
   if (nameLower === 'glob') return inp.pattern ? `Glob ${String(inp.pattern)}` : 'Glob';
   if (nameLower === 'grep') return inp.pattern ? `Grep "${String(inp.pattern)}"` : 'Grep';
   if (nameLower === 'websearch') return inp.query ? `Search "${String(inp.query)}"` : 'Web search';
-  if (nameLower === 'webfetch') {
-    const url = String(inp.url || '');
-    return url ? `Fetch ${url.length > 50 ? url.substring(0, 47) + '...' : url}` : 'Fetch URL';
-  }
   return name;
 }
 

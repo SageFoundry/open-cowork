@@ -56,6 +56,8 @@
     "sandboxDesc": "隔离执行环境",
     "connectors": "MCP 连接器",
     "connectorsDesc": "浏览器和工具集成",
+    "tools": "工具",
+    "toolsDesc": "配置内置工具能力",
     "skills": "技能",
     "skillsDesc": "管理自定义技能",
     "schedule": "定时任务",
@@ -81,6 +83,23 @@
     "chinese": "中文",
     "selectLanguage": "选择语言",
     "currentLanguage": "当前语言"
+  },
+  "tools": {
+    "openSettingsAction": "打开工具设置",
+    "anySearch": {
+      "title": "Web Search",
+      "description": "Open Cowork 默认可匿名搜索。配置免费的 AnySearch API Key 后，可获得更高的搜索限流，适合频繁检索最新信息、文档和新闻。",
+      "anonymous": "匿名模式",
+      "configured": "已配置 Key",
+      "apiKey": "AnySearch API Key",
+      "apiKeyHint": "仅保存在本地加密配置中。留空时继续使用匿名额度，也可以用 ANYSEARCH_API_KEY 环境变量临时覆盖。",
+      "getFreeKey": "申请免费 Key",
+      "docs": "查看文档",
+      "clearKey": "清除 Key",
+      "saved": "AnySearch Key 已保存",
+      "saveFailed": "保存 AnySearch Key 失败，请稍后重试",
+      "loadFailed": "读取 AnySearch 配置失败"
+    }
   },
   "api": {
     "firstRunTitle": "配置 API",
@@ -959,8 +978,7 @@
       "write": "写入系统文件",
       "edit": "编辑系统上的现有文件",
       "bash": "执行 shell 命令",
-      "webFetch": "从网络获取数据",
-      "webSearch": "搜索网络",
+      "websearch": "搜索网络",
       "read_file": "读取工作区中的文件",
       "write_file": "写入工作区中的文件",
       "edit_file": "编辑工作区中的文件",
