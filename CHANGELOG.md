@@ -5,6 +5,31 @@ All notable changes to the Open Cowork AI agent desktop app will be documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.2] - 2026-05-20
+
+### Added
+
+- **内置 AnySearch 网页搜索**：集成 AnySearch API，提供联网搜索 + 网页内容提取能力
+  - 支持 23 个垂直领域搜索、批量搜索、多语言/区域过滤
+  - 搜索结果显示在 Settings → Tools 面板中，支持配置 API Key
+  - 新增模块：`src/main/search/anysearch-client.ts`、`anysearch-tool.ts`
+- **工具结果上下文限制**：当工具返回结果过大时自动截断，避免上下文预算被撑爆
+  - 新增 `src/main/context/tool-result-utils.ts`，集中管理工具结果的占位控制
+
+### Fixed
+
+- **修复图标嵌入问题（Windows）**：`winCodeSign` 在 Windows 上因符号链接解压失败，导致打包时图标无法嵌入。改用 `after-pack` 钩子直接调用 `rcedit.exe` 嵌入 icon.ico 和版本资源
+- **修复 skill 存储管理**：统一技能安装/删除/刷新逻辑，重写 `skills-manager.ts`，简化文件操作流程；UI 端 `SettingsSkills.tsx` 同步更新
+
+### Changed
+
+- 更新项目预览截图 `resources/preview.png`
+
+### Release
+
+- Source tag: `v3.5.2` commit [`03e97d1`](https://github.com/SageFoundry/open-cowork/commit/03e97d1)
+- **注意**：本版 Windows 安装包由开发者手动上传至 GitHub Release（文件过大未纳入 CI），其他构件已自动上传
+
 ## [3.5.1] - 2026-05-15
 
 ### Changed
