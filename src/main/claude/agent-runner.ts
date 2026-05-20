@@ -57,7 +57,12 @@ import type { BackgroundTaskService } from '../background/background-task-servic
 import { configStore } from '../config/config-store';
 import { normalizeOpenAICompatibleBaseUrl } from '../config/auth-utils';
 import { resolveMessageEndPayload, toUserFacingErrorText } from './agent-runner-message-end';
-import { normalizeProjectPath, ProjectMemoryService, type KnowledgeEntry, type KnowledgeType } from '../memory/project-memory';
+import {
+  normalizeProjectPath,
+  ProjectMemoryService,
+  type KnowledgeEntry,
+  type KnowledgeType,
+} from '../memory/project-memory';
 import {
   applyMemoryActions,
   buildKnowledgeSourceCandidates,
@@ -76,6 +81,7 @@ import {
 } from './pi-session-runtime';
 import { ThinkTagStreamParser } from './think-tag-parser';
 import {
+  limitToolExecutionResultForModel,
   normalizeMcpToolResultForModel,
   normalizeToolExecutionResultForUi,
 } from './tool-result-utils';
@@ -91,11 +97,12 @@ import {
   resolvePreferredWindowsShell,
   getWindowsRegistryPathEntries,
 } from '../runtime/runtime-resolver';
-import { getGlobalSkillsDir, getProjectSkillsDir, resolveBuiltinSkillsPath } from '../skills/skill-paths';
 import {
-  isPlanModeToolAllowed,
-  type PlanModeToolDecision,
-} from './plan-mode-guard';
+  getGlobalSkillsDir,
+  getProjectSkillsDir,
+  resolveBuiltinSkillsPath,
+} from '../skills/skill-paths';
+import { isPlanModeToolAllowed, type PlanModeToolDecision } from './plan-mode-guard';
 import {
   buildOpenCoworkAppendPrompt,
   buildPlanModeRuntimePrompt,
@@ -104,10 +111,10 @@ import {
 } from './prompt-contract';
 import { buildAnySearchTool } from '../search/anysearch-tool';
 
-const DEFAULT_HISTORY_CHARS_PER_TOKEN = 2;  // Conservative estimate: 2 chars ≈ 1 token (handles CJK-heavy content)
-const DEFAULT_COLD_START_HISTORY_BUDGET_RATIO = 0.15;  // Use 15% of context window for cold start history
+const DEFAULT_HISTORY_CHARS_PER_TOKEN = 2; // Conservative estimate: 2 chars ≈ 1 token (handles CJK-heavy content)
+const DEFAULT_COLD_START_HISTORY_BUDGET_RATIO = 0.15; // Use 15% of context window for cold start history
 const SMALL_CONTEXT_HISTORY_BUDGET_RATIO = 0.08;
-const MAX_COLD_START_HISTORY_TURNS = 32;  // Fewer turns to keep preamble lean
+const MAX_COLD_START_HISTORY_TURNS = 32; // Fewer turns to keep preamble lean
 
 interface StableHistoryEntry {
   role: 'user' | 'assistant';
@@ -183,12 +190,19 @@ function convertToPiAgentMessages(messages: Message[]): import('@mariozechner/pi
   const result: import('@mariozechner/pi-ai').Message[] = [];
   for (const msg of messages) {
     if (msg.role === 'user') {
-      const content: (import('@mariozechner/pi-ai').TextContent | import('@mariozechner/pi-ai').ImageContent)[] = [];
+      const content: (
+        | import('@mariozechner/pi-ai').TextContent
+        | import('@mariozechner/pi-ai').ImageContent
+      )[] = [];
       for (const c of msg.content) {
         if (c.type === 'text') {
           content.push({ type: 'text' as const, text: c.text });
         } else if (c.type === 'image' && c.source.type === 'base64') {
-          content.push({ type: 'image' as const, data: c.source.data, mimeType: c.source.media_type });
+          content.push({
+            type: 'image' as const,
+            data: c.source.data,
+            mimeType: c.source.media_type,
+          });
         }
       }
       result.push({
@@ -202,7 +216,11 @@ function convertToPiAgentMessages(messages: Message[]): import('@mariozechner/pi
         if (c.type === 'text') {
           content.push({ type: 'text' as const, text: c.text });
         } else if (c.type === 'thinking') {
-          content.push({ type: 'thinking' as const, thinking: c.thinking, ...(c.thinkingSignature ? { thinkingSignature: c.thinkingSignature } : {}) });
+          content.push({
+            type: 'thinking' as const,
+            thinking: c.thinking,
+            ...(c.thinkingSignature ? { thinkingSignature: c.thinkingSignature } : {}),
+          });
         } else if (c.type === 'tool_use') {
           content.push({ type: 'toolCall' as const, id: c.id, name: c.name, arguments: c.input });
         }
@@ -213,7 +231,14 @@ function convertToPiAgentMessages(messages: Message[]): import('@mariozechner/pi
         api: '' as import('@mariozechner/pi-ai').Api,
         provider: '' as import('@mariozechner/pi-ai').Provider,
         model: '',
-        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
         stopReason: 'stop',
         timestamp: msg.timestamp ?? Date.now(),
       });
@@ -365,7 +390,9 @@ function restoreWindowsUserNodeModulesPaths(delimiter: string, merged: string[])
   }
   merged.length = writeIdx;
 
-  log(`[ClaudeAgentRunner] Restored user npm/npx paths (${nodePathSegments.length} segments) before bundled node bin`);
+  log(
+    `[ClaudeAgentRunner] Restored user npm/npx paths (${nodePathSegments.length} segments) before bundled node bin`
+  );
 }
 
 /**
@@ -1162,6 +1189,30 @@ ${hints.join('\n')}
     });
   }
 
+  private wrapToolsWithResultLimit(tools: ToolDefinition[]): ToolDefinition[] {
+    return tools.map((tool) => {
+      const originalExecute = tool.execute;
+      if (!originalExecute) {
+        return tool;
+      }
+
+      return {
+        ...tool,
+        execute: async (
+          toolCallId: string,
+          params: unknown,
+          signal: AbortSignal | undefined,
+          onUpdate: ((update: unknown) => void) | undefined,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ctx: any
+        ) => {
+          const result = await originalExecute(toolCallId, params, signal, onUpdate, ctx);
+          return limitToolExecutionResultForModel(result);
+        },
+      } as ToolDefinition;
+    });
+  }
+
   private buildBackgroundTaskTool(
     sessionId: string,
     effectiveCwd: string
@@ -1200,8 +1251,7 @@ ${hints.join('\n')}
           ),
           waitTimeoutMs: Type.Optional(
             Type.Number({
-              description:
-                'Optional timeout in milliseconds for waitForPort. Defaults to 10000.',
+              description: 'Optional timeout in milliseconds for waitForPort. Defaults to 10000.',
             })
           ),
         }),
@@ -1246,7 +1296,9 @@ ${hints.join('\n')}
             `PID: ${latestTask.pid ?? 'unknown'}`,
             `Working directory: ${latestTask.cwd}`,
             `Log: ${latestTask.logPath}`,
-            latestTask.detectedUrl ? `Detected URL: ${latestTask.detectedUrl}` : 'Detected URL: pending',
+            latestTask.detectedUrl
+              ? `Detected URL: ${latestTask.detectedUrl}`
+              : 'Detected URL: pending',
             readinessLine,
             'Use the sidebar Background Tasks panel to inspect logs or stop it later.',
           ];
@@ -1307,7 +1359,7 @@ ${hints.join('\n')}
           };
         },
       } as ToolDefinition;
-      });
+    });
   }
 
   private createWindowsBashOperations(sessionId: string): BashOperations {
@@ -1578,7 +1630,10 @@ ${hints.join('\n')}
           if (ClaudeAgentRunner.hasBackgroundShellSyntax(rawCommand)) {
             const split = ClaudeAgentRunner.splitBackgroundCommand(rawCommand);
             if (split && backgroundTaskService) {
-              logCtx('[BackgroundGuard] Starting background task directly for:', split.backgroundCommand.substring(0, 80));
+              logCtx(
+                '[BackgroundGuard] Starting background task directly for:',
+                split.backgroundCommand.substring(0, 80)
+              );
               try {
                 const task = await backgroundTaskService.startTask({
                   command: split.backgroundCommand,
@@ -1593,7 +1648,9 @@ ${hints.join('\n')}
                   `PID: ${latestTask.pid ?? 'unknown'}`,
                   `Working directory: ${latestTask.cwd}`,
                   `Log: ${latestTask.logPath}`,
-                  latestTask.detectedUrl ? `Detected URL: ${latestTask.detectedUrl}` : 'Detected URL: pending',
+                  latestTask.detectedUrl
+                    ? `Detected URL: ${latestTask.detectedUrl}`
+                    : 'Detected URL: pending',
                   'Use the sidebar Background Tasks panel to inspect logs or stop it later.',
                 ];
 
@@ -1615,14 +1672,18 @@ ${hints.join('\n')}
                   ctx
                 );
 
-                const backgroundText = backgroundResult.content.map((item) => item.text || '').filter(Boolean).join('\n');
-                const followupText =
-                  Array.isArray((followupResult as { content?: Array<{ text?: string }> }).content)
-                    ? ((followupResult as { content: Array<{ text?: string }> }).content
-                        .map((item) => item.text || '')
-                        .filter(Boolean)
-                        .join('\n'))
-                    : '';
+                const backgroundText = backgroundResult.content
+                  .map((item) => item.text || '')
+                  .filter(Boolean)
+                  .join('\n');
+                const followupText = Array.isArray(
+                  (followupResult as { content?: Array<{ text?: string }> }).content
+                )
+                  ? (followupResult as { content: Array<{ text?: string }> }).content
+                      .map((item) => item.text || '')
+                      .filter(Boolean)
+                      .join('\n')
+                  : '';
 
                 return {
                   content: [
@@ -1643,8 +1704,7 @@ ${hints.join('\n')}
               content: [
                 {
                   type: 'text' as const,
-                  text:
-                    'This command contains background shell syntax (for example &, nohup, disown, pm2, or Start-Process). Do not run it through the normal synchronous bash tool. Use execute_background_command instead, and if the workflow depends on readiness, pass waitForPort so the command runs in the background while the workflow waits only for the service to become ready.',
+                  text: 'This command contains background shell syntax (for example &, nohup, disown, pm2, or Start-Process). Do not run it through the normal synchronous bash tool. Use execute_background_command instead, and if the workflow depends on readiness, pass waitForPort so the command runs in the background while the workflow waits only for the service to become ready.',
                 },
               ],
               details: undefined as unknown,
@@ -2576,8 +2636,7 @@ ${hints.join('\n')}
             }),
             maxResults: Type.Optional(
               Type.Number({
-                description:
-                  'Maximum number of results to return. Defaults to 20.',
+                description: 'Maximum number of results to return. Defaults to 20.',
               })
             ),
           }),
@@ -2597,11 +2656,7 @@ ${hints.join('\n')}
               };
             }
 
-            const results = searchSessionMessages(
-              session.id,
-              keywords,
-              params.maxResults ?? 20
-            );
+            const results = searchSessionMessages(session.id, keywords, params.maxResults ?? 20);
 
             if (results.length === 0) {
               return {
@@ -2643,7 +2698,13 @@ ${hints.join('\n')}
         const autoMemory = configStore.get('autoMemory');
         const memoryProjectPath = workingDir || null;
         const normalizedMemoryProjectPath = normalizeProjectPath(memoryProjectPath);
-        const validKnowledgeTypes: KnowledgeType[] = ['fact', 'preference', 'decision', 'reference', 'project'];
+        const validKnowledgeTypes: KnowledgeType[] = [
+          'fact',
+          'preference',
+          'decision',
+          'reference',
+          'project',
+        ];
         const formatKnowledgeEntry = (entry: KnowledgeEntry, includeContent: boolean): string => {
           const tags = entry.tags.length > 0 ? entry.tags.join(', ') : 'none';
           const parts = [
@@ -2656,9 +2717,8 @@ ${hints.join('\n')}
           if (includeContent) {
             parts.push(`Content:\n${entry.content}`);
           } else {
-            const summary = entry.content.length > 300
-              ? `${entry.content.slice(0, 300)}...`
-              : entry.content;
+            const summary =
+              entry.content.length > 300 ? `${entry.content.slice(0, 300)}...` : entry.content;
             parts.push(`Preview: ${summary}`);
           }
           return parts.join('\n');
@@ -2705,28 +2765,45 @@ ${hints.join('\n')}
             ),
             reason: Type.Optional(
               Type.String({
-                description: 'Brief reason this is durable cross-session memory rather than searchable history.',
+                description:
+                  'Brief reason this is durable cross-session memory rather than searchable history.',
               })
             ),
           }),
           execute: async (
             _toolCallId: string,
-            params: { trigger: string; type: string; title: string; content: string; importance?: number; tags?: string; reason?: string }
+            params: {
+              trigger: string;
+              type: string;
+              title: string;
+              content: string;
+              importance?: number;
+              tags?: string;
+              reason?: string;
+            }
           ) => {
             const tags = params.tags
-              ? params.tags.split(',').map((t: string) => t.trim()).filter(Boolean)
+              ? params.tags
+                  .split(',')
+                  .map((t: string) => t.trim())
+                  .filter(Boolean)
               : [];
-            const action = buildCandidateEvaluationAction({
-              trigger: params.trigger === 'explicit_user_request'
-                ? 'explicit_user_request'
-                : 'autonomous_high_value',
-              type: params.type,
-              title: params.title,
-              content: params.content,
-              importance: params.importance ?? 3,
-              tags,
-              reason: params.reason,
-            }, memoryProjectPath ? projectMemory.listKnowledge(memoryProjectPath) : [], Boolean(autoMemory));
+            const action = buildCandidateEvaluationAction(
+              {
+                trigger:
+                  params.trigger === 'explicit_user_request'
+                    ? 'explicit_user_request'
+                    : 'autonomous_high_value',
+                type: params.type,
+                title: params.title,
+                content: params.content,
+                importance: params.importance ?? 3,
+                tags,
+                reason: params.reason,
+              },
+              memoryProjectPath ? projectMemory.listKnowledge(memoryProjectPath) : [],
+              Boolean(autoMemory)
+            );
             const applied = applyMemoryActions(projectMemory, [action], {
               sessionId: session.id,
               projectPath: memoryProjectPath,
@@ -2736,7 +2813,12 @@ ${hints.join('\n')}
 
             if (applied.created === 0 && applied.updated === 0) {
               return {
-                content: [{ type: 'text' as const, text: `Knowledge not saved: ${applied.reasons[0] || action.reason || 'candidate was ignored as duplicate or low-value memory.'}` }],
+                content: [
+                  {
+                    type: 'text' as const,
+                    text: `Knowledge not saved: ${applied.reasons[0] || action.reason || 'candidate was ignored as duplicate or low-value memory.'}`,
+                  },
+                ],
                 details: undefined as unknown,
               };
             }
@@ -2752,7 +2834,12 @@ ${hints.join('\n')}
               },
             });
             return {
-              content: [{ type: 'text' as const, text: `Knowledge ${verb}: "${entry.title}" (id: ${entry.id}, type: ${entry.type}, importance: ${entry.importance})` }],
+              content: [
+                {
+                  type: 'text' as const,
+                  text: `Knowledge ${verb}: "${entry.title}" (id: ${entry.id}, type: ${entry.type}, importance: ${entry.importance})`,
+                },
+              ],
               details: undefined as unknown,
             };
           },
@@ -2774,26 +2861,37 @@ ${hints.join('\n')}
               })
             ),
           }),
-          execute: async (
-            _toolCallId: string,
-            params: { query: string; maxResults?: number }
-          ) => {
+          execute: async (_toolCallId: string, params: { query: string; maxResults?: number }) => {
             const limit = normalizeKnowledgeLimit(params.maxResults, 8);
-            const entries = projectMemory.searchKnowledge(params.query, memoryProjectPath).slice(0, limit);
+            const entries = projectMemory
+              .searchKnowledge(params.query, memoryProjectPath)
+              .slice(0, limit);
             for (const entry of entries) {
               projectMemory.markAccessed(entry.id);
             }
 
             if (entries.length === 0) {
               return {
-                content: [{ type: 'text' as const, text: `No matching knowledge entries found for query: ${params.query}` }],
+                content: [
+                  {
+                    type: 'text' as const,
+                    text: `No matching knowledge entries found for query: ${params.query}`,
+                  },
+                ],
                 details: undefined as unknown,
               };
             }
 
-            const formatted = entries.map((entry) => formatKnowledgeEntry(entry, true)).join('\n\n---\n\n');
+            const formatted = entries
+              .map((entry) => formatKnowledgeEntry(entry, true))
+              .join('\n\n---\n\n');
             return {
-              content: [{ type: 'text' as const, text: `Found ${entries.length} knowledge entries:\n\n${formatted}` }],
+              content: [
+                {
+                  type: 'text' as const,
+                  text: `Found ${entries.length} knowledge entries:\n\n${formatted}`,
+                },
+              ],
               details: undefined as unknown,
             };
           },
@@ -2808,7 +2906,8 @@ ${hints.join('\n')}
           parameters: Type.Object({
             type: Type.Optional(
               Type.String({
-                description: 'Optional type filter: fact, preference, decision, reference, or project',
+                description:
+                  'Optional type filter: fact, preference, decision, reference, or project',
               })
             ),
             maxResults: Type.Optional(
@@ -2817,26 +2916,38 @@ ${hints.join('\n')}
               })
             ),
           }),
-          execute: async (
-            _toolCallId: string,
-            params: { type?: string; maxResults?: number }
-          ) => {
-            const type = params.type && validKnowledgeTypes.includes(params.type as KnowledgeType)
-              ? (params.type as KnowledgeType)
-              : undefined;
+          execute: async (_toolCallId: string, params: { type?: string; maxResults?: number }) => {
+            const type =
+              params.type && validKnowledgeTypes.includes(params.type as KnowledgeType)
+                ? (params.type as KnowledgeType)
+                : undefined;
             const limit = normalizeKnowledgeLimit(params.maxResults, 12);
             const entries = projectMemory.listKnowledge(memoryProjectPath, type).slice(0, limit);
 
             if (entries.length === 0) {
               return {
-                content: [{ type: 'text' as const, text: type ? `No knowledge entries found for type: ${type}` : 'No knowledge entries found.' }],
+                content: [
+                  {
+                    type: 'text' as const,
+                    text: type
+                      ? `No knowledge entries found for type: ${type}`
+                      : 'No knowledge entries found.',
+                  },
+                ],
                 details: undefined as unknown,
               };
             }
 
-            const formatted = entries.map((entry) => formatKnowledgeEntry(entry, false)).join('\n\n---\n\n');
+            const formatted = entries
+              .map((entry) => formatKnowledgeEntry(entry, false))
+              .join('\n\n---\n\n');
             return {
-              content: [{ type: 'text' as const, text: `Listed ${entries.length} knowledge entries:\n\n${formatted}` }],
+              content: [
+                {
+                  type: 'text' as const,
+                  text: `Listed ${entries.length} knowledge entries:\n\n${formatted}`,
+                },
+              ],
               details: undefined as unknown,
             };
           },
@@ -2853,14 +2964,17 @@ ${hints.join('\n')}
               description: 'The ID of the knowledge entry to read',
             }),
           }),
-          execute: async (
-            _toolCallId: string,
-            params: { id: string }
-          ) => {
+          execute: async (_toolCallId: string, params: { id: string }) => {
             const entry = projectMemory.getKnowledge(params.id);
-            if (!entry || !normalizedMemoryProjectPath || entry.projectPath !== normalizedMemoryProjectPath) {
+            if (
+              !entry ||
+              !normalizedMemoryProjectPath ||
+              entry.projectPath !== normalizedMemoryProjectPath
+            ) {
               return {
-                content: [{ type: 'text' as const, text: `Knowledge entry not found: ${params.id}` }],
+                content: [
+                  { type: 'text' as const, text: `Knowledge entry not found: ${params.id}` },
+                ],
                 details: undefined as unknown,
               };
             }
@@ -2885,12 +2999,14 @@ ${hints.join('\n')}
             }),
             mode: Type.Optional(
               Type.String({
-                description: 'Evidence mode: snippets for short saved source snippets, or window for a small nearby conversation window. Default: snippets',
+                description:
+                  'Evidence mode: snippets for short saved source snippets, or window for a small nearby conversation window. Default: snippets',
               })
             ),
             maxChars: Type.Optional(
               Type.Number({
-                description: 'Maximum characters to return. Defaults: 3000 for snippets, 6000 for window. Hard capped by the app.',
+                description:
+                  'Maximum characters to return. Defaults: 3000 for snippets, 6000 for window. Hard capped by the app.',
               })
             ),
           }),
@@ -2899,9 +3015,15 @@ ${hints.join('\n')}
             params: { id: string; mode?: string; maxChars?: number }
           ) => {
             const entry = projectMemory.getKnowledge(params.id);
-            if (!entry || !normalizedMemoryProjectPath || entry.projectPath !== normalizedMemoryProjectPath) {
+            if (
+              !entry ||
+              !normalizedMemoryProjectPath ||
+              entry.projectPath !== normalizedMemoryProjectPath
+            ) {
               return {
-                content: [{ type: 'text' as const, text: `Knowledge entry not found: ${params.id}` }],
+                content: [
+                  { type: 'text' as const, text: `Knowledge entry not found: ${params.id}` },
+                ],
                 details: undefined as unknown,
               };
             }
@@ -2913,26 +3035,35 @@ ${hints.join('\n')}
             });
             if (evidence.sources.length === 0) {
               return {
-                content: [{ type: 'text' as const, text: `No source evidence is recorded for knowledge entry: ${entry.id}` }],
+                content: [
+                  {
+                    type: 'text' as const,
+                    text: `No source evidence is recorded for knowledge entry: ${entry.id}`,
+                  },
+                ],
                 details: undefined as unknown,
               };
             }
 
             const formatted = evidence.sources
-              .map((source) => [
-                `Session: ${source.sessionId}`,
-                `Message: ${source.messageId}`,
-                `Role: ${source.role}`,
-                `Turn: ${source.turnIndex}`,
-                `Time: ${new Date(source.timestamp).toISOString()}`,
-                `Snippet:\n${source.snippet}`,
-              ].join('\n'))
+              .map((source) =>
+                [
+                  `Session: ${source.sessionId}`,
+                  `Message: ${source.messageId}`,
+                  `Role: ${source.role}`,
+                  `Turn: ${source.turnIndex}`,
+                  `Time: ${new Date(source.timestamp).toISOString()}`,
+                  `Snippet:\n${source.snippet}`,
+                ].join('\n')
+              )
               .join('\n\n---\n\n');
             return {
-              content: [{
-                type: 'text' as const,
-                text: `Evidence for "${entry.title}" (${mode}; ${evidence.returnedChars}/${evidence.maxChars} chars${evidence.truncated ? ', truncated' : ''}):\n\n${formatted}`,
-              }],
+              content: [
+                {
+                  type: 'text' as const,
+                  text: `Evidence for "${entry.title}" (${mode}; ${evidence.returnedChars}/${evidence.maxChars} chars${evidence.truncated ? ', truncated' : ''}):\n\n${formatted}`,
+                },
+              ],
               details: undefined as unknown,
             };
           },
@@ -2949,14 +3080,17 @@ ${hints.join('\n')}
               description: 'The ID of the knowledge entry to delete',
             }),
           }),
-          execute: async (
-            _toolCallId: string,
-            params: { id: string }
-          ) => {
+          execute: async (_toolCallId: string, params: { id: string }) => {
             const entry = projectMemory.getKnowledge(params.id);
-            if (!entry || !normalizedMemoryProjectPath || entry.projectPath !== normalizedMemoryProjectPath) {
+            if (
+              !entry ||
+              !normalizedMemoryProjectPath ||
+              entry.projectPath !== normalizedMemoryProjectPath
+            ) {
               return {
-                content: [{ type: 'text' as const, text: `Knowledge entry not found: ${params.id}` }],
+                content: [
+                  { type: 'text' as const, text: `Knowledge entry not found: ${params.id}` },
+                ],
                 details: undefined as unknown,
               };
             }
@@ -3024,8 +3158,7 @@ ${hints.join('\n')}
             }),
             timeout: Type.Optional(
               Type.Number({
-                description:
-                  'Optional timeout in seconds. Defaults to 120 seconds.',
+                description: 'Optional timeout in seconds. Defaults to 120 seconds.',
               })
             ),
           }),
@@ -3066,8 +3199,7 @@ ${hints.join('\n')}
             'Make an HTTP request (GET, POST, PUT, PATCH, DELETE, HEAD). Use this instead of curl/wget for API calls — it avoids shell encoding issues and works with non-ASCII payloads. Returns status, headers, and body.',
           parameters: Type.Object({
             method: Type.String({
-              description:
-                'HTTP method: GET, POST, PUT, PATCH, DELETE, or HEAD.',
+              description: 'HTTP method: GET, POST, PUT, PATCH, DELETE, or HEAD.',
             }),
             url: Type.String({
               description: 'Full URL including protocol (https://...)',
@@ -3086,8 +3218,7 @@ ${hints.join('\n')}
             ),
             timeout: Type.Optional(
               Type.Number({
-                description:
-                  'Optional timeout in seconds. Defaults to 30.',
+                description: 'Optional timeout in seconds. Defaults to 30.',
               })
             ),
           }),
@@ -3119,7 +3250,7 @@ ${hints.join('\n')}
               throw new Error('Only http/https URLs are supported');
             }
 
-            const timeoutMs = Math.max(1, (params.timeout ?? 30)) * 1000;
+            const timeoutMs = Math.max(1, params.timeout ?? 30) * 1000;
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -3206,7 +3337,11 @@ ${hints.join('\n')}
       const shellOverrideTools = guardedShellTools.filter(
         (tool) => tool.name === 'bash' || tool.name === 'pwsh' || tool.name === 'http'
       );
-      const customTools = [...guardedBaseCustomTools, ...shellOverrideTools];
+      const limitedShellTools = this.wrapToolsWithResultLimit(guardedShellTools);
+      const customTools = this.wrapToolsWithResultLimit([
+        ...guardedBaseCustomTools,
+        ...shellOverrideTools,
+      ]);
 
       // Diagnostic: log tools being passed to SDK (helps debug Ollama tool use)
       logCtx(`[ClaudeAgentRunner] Session reuse check: cached=${!!cachedSession}`);
@@ -3227,7 +3362,7 @@ ${hints.join('\n')}
       );
 
       const toolFingerprintInput = {
-        builtIn: guardedShellTools.map((tool) => describeToolForFingerprint(tool)),
+        builtIn: limitedShellTools.map((tool) => describeToolForFingerprint(tool)),
         custom: customTools.map((tool) => describeToolForFingerprint(tool)),
       };
       const cacheDiagnostics: CacheDiagnosticsPayload = {
@@ -3376,7 +3511,7 @@ ${hints.join('\n')}
           thinkingLevel,
           authStorage,
           modelRegistry,
-          tools: guardedShellTools as unknown as ReturnType<typeof createCodingTools>,
+          tools: limitedShellTools as unknown as ReturnType<typeof createCodingTools>,
           customTools,
           sessionManager: PiSessionManager.inMemory(),
           settingsManager: PiSettingsManager.inMemory({
@@ -3485,9 +3620,11 @@ ${hints.join('\n')}
               ? ((await originalOnPayload.call(agent, payload, modelArg)) ?? payload)
               : payload;
             if (!enableThinking) {
-              return (usesAnthropicMessagesProtocol
-                ? disableThinkingForAnthropicPayload(nextPayload)
-                : disableThinkingForOpenAIPayload(nextPayload)) as Record<string, unknown>;
+              return (
+                usesAnthropicMessagesProtocol
+                  ? disableThinkingForAnthropicPayload(nextPayload)
+                  : disableThinkingForOpenAIPayload(nextPayload)
+              ) as Record<string, unknown>;
             }
             let patchedPayload: unknown = nextPayload;
             if (usesAnthropicMessagesProtocol) {
@@ -3593,7 +3730,11 @@ ${hints.join('\n')}
           if (event.type === 'message_update') {
             const updateType = event.assistantMessageEvent.type;
             recordStreamEvent(updateType);
-            if (updateType !== 'text_delta' && updateType !== 'thinking_delta' && updateType !== 'toolcall_delta') {
+            if (
+              updateType !== 'text_delta' &&
+              updateType !== 'thinking_delta' &&
+              updateType !== 'toolcall_delta'
+            ) {
               log(`[ClaudeAgentRunner] Event: ${event.type} → ${updateType}`);
             }
           } else if (event.type === 'message_start') {
@@ -4157,5 +4298,4 @@ ${hints.join('\n')}
   private sendPartial(sessionId: string, delta: string): void {
     this.sendToRenderer({ type: 'stream.partial', payload: { sessionId, delta } });
   }
-
 }

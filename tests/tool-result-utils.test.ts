@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  limitToolExecutionResultForModel,
+  limitToolResultTextForContext,
   normalizeMcpToolResultForModel,
   normalizeToolExecutionResultForUi,
 } from '../src/main/claude/tool-result-utils';
@@ -88,5 +90,57 @@ describe('tool result utils', () => {
 
     expect(normalized.content).toContain('[image data URL omitted');
     expect(normalized.content).not.toContain(dataUrl);
+  });
+
+  it('limits oversized tool text before saving it for ui history', () => {
+    const hugeOutput = `HEAD-${'A'.repeat(30_000)}-TAIL`;
+
+    const normalized = normalizeToolExecutionResultForUi({
+      content: [{ type: 'text', text: hugeOutput }],
+    });
+
+    expect(normalized.content.length).toBeLessThanOrEqual(20_000);
+    expect(normalized.content).toContain('HEAD-');
+    expect(normalized.content).toContain('-TAIL');
+    expect(normalized.content).toContain('[Tool output truncated: omitted');
+  });
+
+  it('limits MCP text before returning it to the model', () => {
+    const hugeOutput = `BEGIN\n${Array.from({ length: 900 }, (_, index) => `line-${index}`).join('\n')}\nEND`;
+
+    const normalized = normalizeMcpToolResultForModel({
+      content: [{ type: 'text', text: hugeOutput }],
+    });
+
+    expect(normalized.text).toContain('BEGIN');
+    expect(normalized.text).toContain('END');
+    expect(normalized.text).toContain('[Tool output truncated: omitted');
+    expect(normalized.text.split(/\r?\n/).length).toBeLessThanOrEqual(604);
+  });
+
+  it('limits structured tool execution results while preserving non-text payloads', () => {
+    const base64Image = 'D'.repeat(1024);
+    const result = limitToolExecutionResultForModel({
+      content: [
+        { type: 'text', text: `HEAD-${'B'.repeat(30_000)}-TAIL` },
+        { type: 'image', data: base64Image, mimeType: 'image/png' },
+      ],
+      details: {
+        openCoworkImages: [{ data: base64Image, mimeType: 'image/png' }],
+      },
+    });
+
+    const textPart = result.content[0];
+    expect(textPart.type).toBe('text');
+    expect(textPart.text.length).toBeLessThanOrEqual(20_000);
+    expect(textPart.text).toContain('[Tool output truncated: omitted');
+    expect(result.content[1]).toEqual({ type: 'image', data: base64Image, mimeType: 'image/png' });
+    expect(result.details.openCoworkImages[0].data).toBe(base64Image);
+  });
+
+  it('scrubs unsafe binary control characters from tool context text', () => {
+    const limited = limitToolResultTextForContext('MZ\u0000\u0001ok\n');
+
+    expect(limited).toBe('MZ��ok\n');
   });
 });

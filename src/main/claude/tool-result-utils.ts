@@ -15,6 +15,10 @@ type NormalizedToolExecutionResult = {
   images: ToolResultImage[];
 };
 
+const MAX_TOOL_RESULT_TEXT_CHARS = 20_000;
+const MAX_TOOL_RESULT_TEXT_LINES = 600;
+const TOOL_RESULT_HEAD_RATIO = 0.7;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -72,6 +76,82 @@ function safeStringifyToolResult(value: unknown): string {
     const details = error instanceof Error ? error.message : String(error);
     return `[Unserializable tool result: ${details}]`;
   }
+}
+
+function scrubUnsafeControlChars(text: string): string {
+  return text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001A\u001C-\u001F\u007F]/g, '\uFFFD');
+}
+
+function buildTruncationMarker(omittedChars: number, omittedLines: number): string {
+  const details = [
+    omittedChars > 0 ? `${omittedChars} chars` : null,
+    omittedLines > 0 ? `${omittedLines} lines` : null,
+  ].filter(Boolean);
+  const omitted = details.length > 0 ? details.join(', ') : 'content';
+  return `[Tool output truncated: omitted ${omitted}. Use a narrower command or redirect large output to a file, then inspect a small slice.]`;
+}
+
+function truncateByLines(text: string): string {
+  const lines = text.split(/\r?\n/);
+  if (lines.length <= MAX_TOOL_RESULT_TEXT_LINES) {
+    return text;
+  }
+
+  const headLineCount = Math.floor(MAX_TOOL_RESULT_TEXT_LINES * TOOL_RESULT_HEAD_RATIO);
+  const tailLineCount = MAX_TOOL_RESULT_TEXT_LINES - headLineCount;
+  const omittedLines = lines.length - headLineCount - tailLineCount;
+  const omittedChars = lines.slice(headLineCount, lines.length - tailLineCount).join('\n').length;
+
+  return [
+    ...lines.slice(0, headLineCount),
+    '',
+    buildTruncationMarker(omittedChars, omittedLines),
+    '',
+    ...lines.slice(lines.length - tailLineCount),
+  ].join('\n');
+}
+
+function truncateByChars(text: string): string {
+  if (text.length <= MAX_TOOL_RESULT_TEXT_CHARS) {
+    return text;
+  }
+
+  const marker = buildTruncationMarker(text.length - MAX_TOOL_RESULT_TEXT_CHARS, 0);
+  const separator = `\n\n${marker}\n\n`;
+  const availableChars = Math.max(0, MAX_TOOL_RESULT_TEXT_CHARS - separator.length);
+  const headChars = Math.floor(availableChars * TOOL_RESULT_HEAD_RATIO);
+  const tailChars = availableChars - headChars;
+  const exactMarker = buildTruncationMarker(text.length - headChars - tailChars, 0);
+  const exactSeparator = `\n\n${exactMarker}\n\n`;
+  return `${text.slice(0, headChars)}${exactSeparator}${tailChars > 0 ? text.slice(-tailChars) : ''}`;
+}
+
+export function limitToolResultTextForContext(text: string): string {
+  const scrubbed = scrubUnsafeControlChars(text);
+  return truncateByChars(truncateByLines(scrubbed));
+}
+
+export function limitToolExecutionResultForModel<T>(result: T): T {
+  if (typeof result === 'string') {
+    return limitToolResultTextForContext(result) as T;
+  }
+
+  if (!isRecord(result) || !Array.isArray(result.content)) {
+    return result;
+  }
+
+  return {
+    ...result,
+    content: result.content.map((part) => {
+      if (isRecord(part) && part.type === 'text' && typeof part.text === 'string') {
+        return {
+          ...part,
+          text: limitToolResultTextForContext(part.text),
+        };
+      }
+      return part;
+    }),
+  } as T;
 }
 
 function summarizeStructuredToolPart(part: unknown): string | null {
@@ -157,13 +237,15 @@ export function normalizeMcpToolResultForModel(result: unknown): NormalizedToolT
   if (resultObj?.content) {
     const { textParts, images } = extractTextAndImagesFromContent(resultObj.content);
     return {
-      text: finalizeText(textParts, images.length),
+      text: limitToolResultTextForContext(finalizeText(textParts, images.length)),
       images,
     };
   }
 
   return {
-    text: typeof result === 'string' ? result : safeStringifyToolResult(result),
+    text: limitToolResultTextForContext(
+      typeof result === 'string' ? result : safeStringifyToolResult(result)
+    ),
     images: [],
   };
 }
@@ -176,13 +258,15 @@ export function normalizeToolExecutionResultForUi(result: unknown): NormalizedTo
     const { textParts, images: inlineImages } = extractTextAndImagesFromContent(resultObj.content);
     const images = dedupeImages([...inlineImages, ...detailImages]);
     return {
-      content: finalizeText(textParts, images.length),
+      content: limitToolResultTextForContext(finalizeText(textParts, images.length)),
       images,
     };
   }
 
   return {
-    content: typeof result === 'string' ? result : safeStringifyToolResult(result),
+    content: limitToolResultTextForContext(
+      typeof result === 'string' ? result : safeStringifyToolResult(result)
+    ),
     images: dedupeImages(detailImages),
   };
 }

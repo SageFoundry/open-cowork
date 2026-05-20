@@ -48,9 +48,9 @@ describe('ClaudeAgentRunner pi-coding-agent integration', () => {
 
   it('summarizes noisy SDK message updates instead of logging every text delta', () => {
     expect(agentRunnerContent).toContain('const streamEventCounts = new Map<string, number>();');
-    expect(agentRunnerContent).toContain(
-      "if (updateType !== 'text_delta' && updateType !== 'thinking_delta' && updateType !== 'toolcall_delta') {"
-    );
+    expect(agentRunnerContent).toContain("updateType !== 'text_delta'");
+    expect(agentRunnerContent).toContain("updateType !== 'thinking_delta'");
+    expect(agentRunnerContent).toContain("updateType !== 'toolcall_delta'");
     expect(agentRunnerContent).toContain("'[ClaudeAgentRunner] Event: message_end'");
     expect(agentRunnerContent).toContain('messageUpdateCounts: getStreamEventSummary()');
     expect(agentRunnerContent).toContain("if (process.env.COWORK_LOG_SDK_MESSAGES_FULL === '1') {");
@@ -98,8 +98,9 @@ describe('ClaudeAgentRunner pi-coding-agent integration', () => {
 
   it('routes MCP image results through structured helpers instead of stringifying base64 into text', () => {
     expect(agentRunnerContent).toContain(
-      "import {\n  normalizeMcpToolResultForModel,\n  normalizeToolExecutionResultForUi,\n} from './tool-result-utils'"
+      "import {\n  limitToolExecutionResultForModel,\n  normalizeMcpToolResultForModel,\n  normalizeToolExecutionResultForUi,\n} from './tool-result-utils'"
     );
+    expect(agentRunnerContent).toContain('return limitToolExecutionResultForModel(result);');
     expect(agentRunnerContent).toContain(
       'const normalizedResult = normalizeMcpToolResultForModel(result);'
     );
@@ -126,7 +127,9 @@ describe('ClaudeAgentRunner pi-coding-agent integration', () => {
     expect(agentRunnerContent).toContain('waitForPort');
     expect(agentRunnerContent).toContain('waitTimeoutMs');
     expect(agentRunnerContent).toContain('timed out waiting for port');
-    expect(agentRunnerContent).toContain('port ${typedParams.waitForPort} is accepting connections');
+    expect(agentRunnerContent).toContain(
+      'port ${typedParams.waitForPort} is accepting connections'
+    );
   });
 
   it('blocks background shell syntax in the normal bash tool', () => {
