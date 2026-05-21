@@ -33,6 +33,7 @@ import type {
   PairedUser,
   PairingRequest,
   RemoteSessionMapping,
+  ToolCompressionStats,
 } from '../shared/ipc-types';
 import type { EnvironmentDoctorReport } from '../main/runtime/environment-doctor';
 
@@ -158,16 +159,37 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   memory: {
-    list: (cwd?: string | null): Promise<Array<{ id: string; type: string; title: string; importance: number; tags: string[]; createdAt: number; updatedAt: number }>> =>
-      ipcRenderer.invoke('memory.list', cwd),
+    list: (
+      cwd?: string | null
+    ): Promise<
+      Array<{
+        id: string;
+        type: string;
+        title: string;
+        importance: number;
+        tags: string[];
+        createdAt: number;
+        updatedAt: number;
+      }>
+    > => ipcRenderer.invoke('memory.list', cwd),
     get: (id: string, cwd?: string | null): Promise<any> =>
       ipcRenderer.invoke('memory.get', id, cwd),
-    evidence: (id: string, cwd?: string | null, options?: { mode?: 'snippets' | 'window'; maxChars?: number }): Promise<any> =>
-      ipcRenderer.invoke('memory.evidence', id, cwd, options),
+    evidence: (
+      id: string,
+      cwd?: string | null,
+      options?: { mode?: 'snippets' | 'window'; maxChars?: number }
+    ): Promise<any> => ipcRenderer.invoke('memory.evidence', id, cwd, options),
     delete: (id: string, cwd?: string | null): Promise<void> =>
       ipcRenderer.invoke('memory.delete', id, cwd),
-    save: (entry: { type: string; title: string; content: string; importance?: number; tags?: string[]; sessionId?: string; projectPath?: string | null }): Promise<{ id: string }> =>
-      ipcRenderer.invoke('memory.save', entry),
+    save: (entry: {
+      type: string;
+      title: string;
+      content: string;
+      importance?: number;
+      tags?: string[];
+      sessionId?: string;
+      projectPath?: string | null;
+    }): Promise<{ id: string }> => ipcRenderer.invoke('memory.save', entry),
     extract: (sessionId: string): Promise<{ entries: number }> =>
       ipcRenderer.invoke('memory.extract', sessionId),
   },
@@ -234,7 +256,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       skillPath: string;
       scope: 'global' | 'project';
       projectPath?: string;
-    }): Promise<{ success: boolean; skill: Skill }> => ipcRenderer.invoke('skills.install', request),
+    }): Promise<{ success: boolean; skill: Skill }> =>
+      ipcRenderer.invoke('skills.install', request),
     delete: (skillId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('skills.delete', skillId),
     setEnabled: (skillId: string, enabled: boolean): Promise<{ success: boolean }> =>
@@ -362,6 +385,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }> => ipcRenderer.invoke('diagnostics.environmentDoctor'),
   },
 
+  toolCompression: {
+    getStats: (): Promise<ToolCompressionStats> => ipcRenderer.invoke('toolCompression.getStats'),
+    getSessionStats: (sessionId: string): Promise<ToolCompressionStats> =>
+      ipcRenderer.invoke('toolCompression.getSessionStats', sessionId),
+    resetStats: (): Promise<ToolCompressionStats> =>
+      ipcRenderer.invoke('toolCompression.resetStats'),
+  },
+
   // Remote control methods
   remote: {
     getConfig: (): Promise<RemoteConfig> => ipcRenderer.invoke('remote.getConfig'),
@@ -433,7 +464,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     list: (): Promise<BackgroundTask[]> => ipcRenderer.invoke('tasks.list'),
     start: (payload: BackgroundTaskStartInput): Promise<BackgroundTask> =>
       ipcRenderer.invoke('tasks.start', payload),
-    stop: (taskId: string): Promise<BackgroundTask | null> => ipcRenderer.invoke('tasks.stop', taskId),
+    stop: (taskId: string): Promise<BackgroundTask | null> =>
+      ipcRenderer.invoke('tasks.stop', taskId),
     getLogTail: (taskId: string, maxChars = 8000): Promise<string> =>
       ipcRenderer.invoke('tasks.getLogTail', taskId, maxChars),
     openLog: (taskId: string): Promise<boolean> => ipcRenderer.invoke('tasks.openLog', taskId),
@@ -464,8 +496,21 @@ declare global {
         ) => Promise<Array<{ path: string; modifiedAt: number; size: number }>>;
       };
       memory: {
-        list: (cwd?: string | null) => Promise<Array<{ id: string; type: string; title: string; importance: number; tags: string[]; createdAt: number; updatedAt: number }>>;
-        get: (id: string, cwd?: string | null) => Promise<{
+        list: (cwd?: string | null) => Promise<
+          Array<{
+            id: string;
+            type: string;
+            title: string;
+            importance: number;
+            tags: string[];
+            createdAt: number;
+            updatedAt: number;
+          }>
+        >;
+        get: (
+          id: string,
+          cwd?: string | null
+        ) => Promise<{
           id: string;
           type: string;
           title: string;
@@ -477,10 +522,14 @@ declare global {
           createdAt: number;
           updatedAt: number;
         } | null>;
-        evidence: (id: string, cwd?: string | null, options?: {
-          mode?: 'snippets' | 'window';
-          maxChars?: number;
-        }) => Promise<{
+        evidence: (
+          id: string,
+          cwd?: string | null,
+          options?: {
+            mode?: 'snippets' | 'window';
+            maxChars?: number;
+          }
+        ) => Promise<{
           sources: Array<{
             id: string;
             knowledgeId: string;
@@ -652,6 +701,11 @@ declare global {
           report?: EnvironmentDoctorReport;
           error?: string;
         }>;
+      };
+      toolCompression: {
+        getStats: () => Promise<ToolCompressionStats>;
+        getSessionStats: (sessionId: string) => Promise<ToolCompressionStats>;
+        resetStats: () => Promise<ToolCompressionStats>;
       };
       remote: {
         getConfig: () => Promise<RemoteConfig>;

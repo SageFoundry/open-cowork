@@ -25,4 +25,12 @@ describe('ContextPanel memory module integration', () => {
     expect(source).toContain('handleExtractMemory');
     expect(source).toContain('extractMemory');
   });
+
+  it('shows session-level tool compression stats below memory', () => {
+    const source = fs.readFileSync(contextPanelPath, 'utf8');
+    expect(source).toContain('getSessionStats(activeSessionId)');
+    expect(source).toContain('sessionCompressionStats');
+    expect(source).toContain('compressionStatsOpen');
+    expect(source).toContain('context.compressionStats');
+  });
 });

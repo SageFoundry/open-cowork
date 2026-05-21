@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import type { Skill, PluginCatalogItemV2, InstalledPlugin, PluginComponentKind } from '../../types';
 import { useAppStore } from '../../store';
-import { SettingsContentSection } from './shared';
+import { ConfirmOverlay, SettingsContentSection } from './shared';
 import type { LocalizedBanner } from './shared';
 
 const isElectron = typeof window !== 'undefined' && window.electronAPI !== undefined;
@@ -46,7 +46,9 @@ export function SettingsSkills({ isActive }: { isActive: boolean }) {
     id: string;
     name: string;
   } | null>(null);
-  const [pendingUninstallPlugin, setPendingUninstallPlugin] = useState<InstalledPlugin | null>(null);
+  const [pendingUninstallPlugin, setPendingUninstallPlugin] = useState<InstalledPlugin | null>(
+    null
+  );
   const pluginToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const componentOrder: PluginComponentKind[] = ['skills', 'commands', 'agents', 'hooks', 'mcp'];
 
@@ -98,32 +100,35 @@ export function SettingsSkills({ isActive }: { isActive: boolean }) {
     }, 5000);
   }
 
-  const loadSkills = useCallback(async (silent = false) => {
-    try {
-      const skillsResult = await Promise.resolve(
-        window.electronAPI.skills.getAll(
-          currentProjectPath ? { projectPath: currentProjectPath } : undefined
-        )
-      );
-      if (skillsResult) {
-        setSkills(skillsResult || []);
-      }
+  const loadSkills = useCallback(
+    async (silent = false) => {
+      try {
+        const skillsResult = await Promise.resolve(
+          window.electronAPI.skills.getAll(
+            currentProjectPath ? { projectPath: currentProjectPath } : undefined
+          )
+        );
+        if (skillsResult) {
+          setSkills(skillsResult || []);
+        }
 
-      if (!silent) {
-        setError(null);
+        if (!silent) {
+          setError(null);
+        }
+      } catch (err) {
+        console.error('Failed to load skills:', err);
+        if (!silent) {
+          setError({
+            text:
+              err instanceof Error && err.message
+                ? `${tRef.current('skills.failedToLoad')}: ${err.message}`
+                : tRef.current('skills.failedToLoad'),
+          });
+        }
       }
-    } catch (err) {
-      console.error('Failed to load skills:', err);
-      if (!silent) {
-        setError({
-          text:
-            err instanceof Error && err.message
-              ? `${tRef.current('skills.failedToLoad')}: ${err.message}`
-              : tRef.current('skills.failedToLoad'),
-        });
-      }
-    }
-  }, [currentProjectPath]);
+    },
+    [currentProjectPath]
+  );
 
   useEffect(() => {
     if (!isElectron || !isActive) {
@@ -696,52 +701,6 @@ export function SettingsSkills({ isActive }: { isActive: boolean }) {
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function ConfirmOverlay({
-  title,
-  message,
-  confirmLabel,
-  onCancel,
-  onConfirm,
-  isLoading,
-}: {
-  title: string;
-  message: string;
-  confirmLabel: string;
-  onCancel: () => void;
-  onConfirm: () => void;
-  isLoading: boolean;
-}) {
-  const { t } = useTranslation();
-
-  return (
-    <div className="fixed inset-0 z-[90] bg-black/45 flex items-center justify-center p-4">
-      <div className="w-full max-w-md rounded-lg border border-border bg-surface shadow-elevated p-5">
-        <h3 className="text-base font-semibold text-text-primary">{title}</h3>
-        <p className="mt-2 text-sm leading-6 text-text-secondary">{message}</p>
-        <div className="mt-5 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={isLoading}
-            className="px-4 py-2 rounded-lg border border-border text-text-secondary hover:bg-surface-hover disabled:opacity-50"
-          >
-            {t('common.cancel')}
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={isLoading}
-            className="px-4 py-2 rounded-lg bg-error text-white hover:bg-error/90 disabled:opacity-50 inline-flex items-center gap-2"
-          >
-            {isLoading && <Loader2 className="w-4 h-4 animate-spin" />}
-            {confirmLabel}
-          </button>
-        </div>
-      </div>
     </div>
   );
 }

@@ -622,6 +622,7 @@ export type ProviderType =
   | 'ollama';
 export type CustomProtocolType = 'anthropic' | 'openai' | 'gemini';
 export type AppTheme = 'dark' | 'light' | 'system';
+export type ToolOutputCompressionLevel = 'off' | 'conservative' | 'aggressive';
 export type ProviderProfileKey =
   | 'openrouter'
   | 'anthropic'
@@ -684,6 +685,7 @@ export interface AppConfig {
   sandboxEnabled?: boolean;
   enableThinking?: boolean;
   autoMemory?: boolean;
+  toolOutputCompressionLevel?: ToolOutputCompressionLevel;
   language?: 'zh' | 'en';
   isConfigured: boolean;
 }

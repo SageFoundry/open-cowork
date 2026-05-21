@@ -1,6 +1,8 @@
 // Shared types, constants, and components used across settings tab files.
 
 import type { TFunction } from 'i18next';
+import { Loader2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import type { ScheduleWeekday } from '../../types';
 
 // ==================== Shared Types ====================
@@ -94,5 +96,51 @@ export function SettingsContentSection({
       </div>
       <div className="space-y-3">{children}</div>
     </section>
+  );
+}
+
+export function ConfirmOverlay({
+  title,
+  message,
+  confirmLabel,
+  onCancel,
+  onConfirm,
+  isLoading,
+}: {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+  isLoading: boolean;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <div className="fixed inset-0 z-[90] bg-black/45 flex items-center justify-center p-4">
+      <div className="w-full max-w-md rounded-lg border border-border bg-surface shadow-elevated p-5">
+        <h3 className="text-base font-semibold text-text-primary">{title}</h3>
+        <p className="mt-2 text-sm leading-6 text-text-secondary">{message}</p>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={isLoading}
+            className="px-4 py-2 rounded-lg border border-border text-text-secondary hover:bg-surface-hover disabled:opacity-50"
+          >
+            {t('common.cancel')}
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={isLoading}
+            className="px-4 py-2 rounded-lg bg-error text-white hover:bg-error/90 disabled:opacity-50 inline-flex items-center gap-2"
+          >
+            {isLoading && <Loader2 className="w-4 h-4 animate-spin" />}
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

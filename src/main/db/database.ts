@@ -574,6 +574,38 @@ function initializeSchema(database: Database.Database): void {
     ON background_tasks(updated_at DESC)
   `);
 
+    database.exec(`
+    CREATE TABLE IF NOT EXISTS tool_output_compression_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp INTEGER NOT NULL,
+      session_id TEXT,
+      project_path TEXT,
+      tool_name TEXT NOT NULL,
+      command_family TEXT NOT NULL,
+      category TEXT NOT NULL,
+      level TEXT NOT NULL,
+      strategy TEXT NOT NULL,
+      compressed INTEGER NOT NULL,
+      skip_reason TEXT,
+      raw_chars INTEGER NOT NULL,
+      compressed_chars INTEGER NOT NULL,
+      input_tokens_est INTEGER NOT NULL,
+      output_tokens_est INTEGER NOT NULL,
+      saved_tokens_est INTEGER NOT NULL,
+      savings_pct REAL NOT NULL
+    )
+  `);
+
+    database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_tool_output_compression_timestamp
+    ON tool_output_compression_events(timestamp)
+  `);
+
+    database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_tool_output_compression_session_timestamp
+    ON tool_output_compression_events(session_id, timestamp)
+  `);
+
     log('[Database] Schema initialized');
   } catch (error) {
     logError('[Database] Schema initialization failed:', error);
@@ -871,7 +903,11 @@ export function initDatabase(): DatabaseInstance {
         return getLatestMessagesBySessionStmt.all(sessionId, limit) as MessageRow[];
       },
 
-      getBeforeTimestamp: (sessionId: string, beforeTimestamp: number, limit: number): MessageRow[] => {
+      getBeforeTimestamp: (
+        sessionId: string,
+        beforeTimestamp: number,
+        limit: number
+      ): MessageRow[] => {
         return getMessagesBeforeTimestampStmt.all(
           sessionId,
           beforeTimestamp,

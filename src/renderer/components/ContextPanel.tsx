@@ -29,8 +29,10 @@ import {
   Bot,
   Search,
   SlidersHorizontal,
+  BarChart3,
 } from 'lucide-react';
 import type { TraceStep, MCPServerInfo, BackgroundTask } from '../types';
+import type { ToolCompressionBreakdownItem, ToolCompressionStats } from '../../shared/ipc-types';
 
 interface MemoryListItem {
   id: string;
@@ -83,6 +85,35 @@ const MEMORY_TYPE_KEYS: Record<string, string> = {
   project: 'context.memoryTypes.project',
 };
 
+function CompressionBreakdownList({
+  title,
+  items,
+  formatTokens,
+  emptyLabel,
+}: {
+  title: string;
+  items: ToolCompressionBreakdownItem[];
+  formatTokens: (value: number) => string;
+  emptyLabel: string;
+}) {
+  return (
+    <div className="rounded-lg border border-border-muted bg-surface/70 p-3">
+      <div className="text-xs font-medium text-text-secondary mb-2">{title}</div>
+      <div className="space-y-1.5">
+        {items.map((item) => (
+          <div key={item.name} className="flex items-center justify-between gap-2 text-xs">
+            <span className="text-text-secondary truncate">{item.name}</span>
+            <span className="text-text-primary shrink-0">
+              {formatTokens(item.savedTokens)} · {item.savingsPct.toFixed(1)}%
+            </span>
+          </div>
+        ))}
+        {items.length === 0 && <div className="text-xs text-text-muted">{emptyLabel}</div>}
+      </div>
+    </div>
+  );
+}
+
 export function ContextPanel() {
   const { t } = useTranslation();
   const activeSessionId = useAppStore((s) => s.activeSessionId);
@@ -96,7 +127,13 @@ export function ContextPanel() {
   const toggleContextPanel = useAppStore((s) => s.toggleContextPanel);
   const workingDir = useAppStore((s) => s.workingDir);
   const setGlobalNotice = useAppStore((s) => s.setGlobalNotice);
-  const { getMCPServers, changeWorkingDir, compactSession, getBackgroundTaskLogTail, stopBackgroundTask } = useIPC();
+  const {
+    getMCPServers,
+    changeWorkingDir,
+    compactSession,
+    getBackgroundTaskLogTail,
+    stopBackgroundTask,
+  } = useIPC();
   const [memoryOpen, setMemoryOpen] = useState(true);
   const [backgroundTasksOpen, setBackgroundTasksOpen] = useState(true);
   const [expandedConnector, setExpandedConnector] = useState<string | null>(null);
@@ -120,6 +157,9 @@ export function ContextPanel() {
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractResult, setExtractResult] = useState<string | null>(null);
   const [autoMemory, setAutoMemory] = useState(false);
+  const [sessionCompressionStats, setSessionCompressionStats] =
+    useState<ToolCompressionStats | null>(null);
+  const [compressionStatsOpen, setCompressionStatsOpen] = useState(false);
   const ss = activeSessionId ? sessionStates[activeSessionId] : undefined;
   const steps = ss?.traceSteps ?? EMPTY_STEPS;
   const tokenBudget = ss?.tokenBudget ?? null;
@@ -163,9 +203,7 @@ export function ContextPanel() {
       return;
     }
 
-    const confirmed = window.confirm(
-      t('context.compactConfirm')
-    );
+    const confirmed = window.confirm(t('context.compactConfirm'));
 
     if (!confirmed) {
       return;
@@ -207,15 +245,21 @@ export function ContextPanel() {
       if (memoryImportanceFilter === 'high' && item.importance < 4) return false;
       if (memoryImportanceFilter === 'normal' && item.importance >= 4) return false;
       if (!query) return true;
-      return [
-        item.title,
-        item.type,
-        formatMemoryType(item.type),
-        ...item.tags,
-      ].some((value) => value.toLowerCase().includes(query));
+      return [item.title, item.type, formatMemoryType(item.type), ...item.tags].some((value) =>
+        value.toLowerCase().includes(query)
+      );
     });
-  }, [formatMemoryType, memoryImportanceFilter, memorySearchQuery, memoryTypeFilter, sortedMemoryList]);
-  const memoryManagerPageCount = Math.max(1, Math.ceil(filteredMemoryList.length / MANAGER_MEMORY_PAGE_SIZE));
+  }, [
+    formatMemoryType,
+    memoryImportanceFilter,
+    memorySearchQuery,
+    memoryTypeFilter,
+    sortedMemoryList,
+  ]);
+  const memoryManagerPageCount = Math.max(
+    1,
+    Math.ceil(filteredMemoryList.length / MANAGER_MEMORY_PAGE_SIZE)
+  );
   const pagedMemoryList = useMemo(() => {
     const safePage = Math.min(memoryManagerPage, memoryManagerPageCount);
     const start = (safePage - 1) * MANAGER_MEMORY_PAGE_SIZE;
@@ -241,6 +285,10 @@ export function ContextPanel() {
   const toolCallCount = steps.filter((s) => s.type === 'tool_call').length;
   const modelName = activeSession?.model || appConfig?.model || '—';
   const activeContextWindow = activeSessionId ? sessionStates[activeSessionId]?.contextWindow : 0;
+  const maxSessionCompressionDailySaved = useMemo(
+    () => Math.max(1, ...(sessionCompressionStats?.daily.map((item) => item.savedTokens) ?? [0])),
+    [sessionCompressionStats]
+  );
 
   // Token usage aggregation
   const tokenUsage = useMemo(() => {
@@ -270,6 +318,12 @@ export function ContextPanel() {
       state: tokenBudget.warningState,
     };
   }, [tokenBudget]);
+
+  const formatCompressionTokens = useCallback((value: number) => {
+    if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+    if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+    return String(Math.round(value));
+  }, []);
 
   const isActiveBackgroundTask = useCallback(
     (task: BackgroundTask) =>
@@ -330,7 +384,9 @@ export function ContextPanel() {
     };
     load();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [activeSessionId, contextPanelCollapsed, currentWorkingDir, memoryChangedAt, steps.length, t]);
 
   // Load autoMemory state from config
@@ -343,9 +399,13 @@ export function ContextPanel() {
         if (!cancelled) {
           setAutoMemory(Boolean(config.autoMemory));
         }
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleToggleAutoMemory = async () => {
@@ -392,7 +452,11 @@ export function ContextPanel() {
       const list = await window.electronAPI.memory.list(currentWorkingDir);
       setMemoryLoadError(null);
       setMemoryList(list);
-      setExtractResult(result.entries > 0 ? t('context.extractedCount', { count: result.entries }) : t('context.extractedNone'));
+      setExtractResult(
+        result.entries > 0
+          ? t('context.extractedCount', { count: result.entries })
+          : t('context.extractedNone')
+      );
     } catch (error) {
       console.error('Failed to extract memory:', error);
       setExtractResult(t('context.extractFailed'));
@@ -496,10 +560,14 @@ export function ContextPanel() {
     if (!memoryDetail || !window.electronAPI?.memory) return;
     setIsLoadingEvidence(true);
     try {
-      const evidence = await window.electronAPI.memory.evidence(memoryDetail.id, currentWorkingDir, {
-        mode: 'window',
-        maxChars: 6000,
-      });
+      const evidence = await window.electronAPI.memory.evidence(
+        memoryDetail.id,
+        currentWorkingDir,
+        {
+          mode: 'window',
+          maxChars: 6000,
+        }
+      );
       setMemoryEvidence(evidence);
     } catch (error) {
       console.error('Failed to load memory evidence window:', error);
@@ -513,10 +581,14 @@ export function ContextPanel() {
     if (!memoryManagerDetail || !window.electronAPI?.memory) return;
     setIsLoadingEvidence(true);
     try {
-      const evidence = await window.electronAPI.memory.evidence(memoryManagerDetail.id, currentWorkingDir, {
-        mode: 'window',
-        maxChars: 6000,
-      });
+      const evidence = await window.electronAPI.memory.evidence(
+        memoryManagerDetail.id,
+        currentWorkingDir,
+        {
+          mode: 'window',
+          maxChars: 6000,
+        }
+      );
       setMemoryManagerEvidence(evidence);
     } catch (error) {
       console.error('Failed to load managed memory evidence window:', error);
@@ -542,6 +614,33 @@ export function ContextPanel() {
     const interval = setInterval(loadMCPServers, 30000);
     return () => clearInterval(interval);
   }, [contextPanelCollapsed, getMCPServers]);
+
+  useEffect(() => {
+    if (contextPanelCollapsed || !activeSessionId || !window.electronAPI?.toolCompression) {
+      setSessionCompressionStats(null);
+      return;
+    }
+
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const stats = await window.electronAPI.toolCompression.getSessionStats(activeSessionId);
+        if (!cancelled) {
+          setSessionCompressionStats(stats);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Failed to load session compression stats:', error);
+          setSessionCompressionStats(null);
+        }
+      }
+    };
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSessionId, contextPanelCollapsed, steps.length]);
 
   const handleTaskToggle = useCallback(
     async (taskId: string) => {
@@ -873,22 +972,26 @@ export function ContextPanel() {
             <div className="flex items-center gap-2">
               <button
                 onClick={handleToggleAutoMemory}
-                      className={`flex flex-1 items-center justify-between gap-2 px-2.5 py-1.5 rounded-md border text-xs transition-colors ${
-                        autoMemory
-                          ? 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400'
-                          : 'border-border-muted bg-surface/70 text-text-secondary hover:bg-surface-hover'
-                      }`}
-                    >
-                      <span className="inline-flex items-center gap-1.5 min-w-0">
-                        <Bot className={`w-3.5 h-3.5 ${autoMemory ? 'text-amber-600 dark:text-amber-400' : 'text-text-muted'}`} />
-                        <span className="truncate">{t('context.autoMemory')}</span>
-                      </span>
-                      <span className={`relative w-7 h-3.5 rounded-full shrink-0 transition-colors ${autoMemory ? 'bg-amber-500' : 'bg-border-muted'}`}>
-                        <span
-                          className={`absolute top-0.5 left-0.5 w-2.5 h-2.5 rounded-full bg-white shadow-sm transition-transform ${autoMemory ? 'translate-x-3.5' : ''}`}
-                        />
-                      </span>
-                    </button>
+                className={`flex flex-1 items-center justify-between gap-2 px-2.5 py-1.5 rounded-md border text-xs transition-colors ${
+                  autoMemory
+                    ? 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                    : 'border-border-muted bg-surface/70 text-text-secondary hover:bg-surface-hover'
+                }`}
+              >
+                <span className="inline-flex items-center gap-1.5 min-w-0">
+                  <Bot
+                    className={`w-3.5 h-3.5 ${autoMemory ? 'text-amber-600 dark:text-amber-400' : 'text-text-muted'}`}
+                  />
+                  <span className="truncate">{t('context.autoMemory')}</span>
+                </span>
+                <span
+                  className={`relative w-7 h-3.5 rounded-full shrink-0 transition-colors ${autoMemory ? 'bg-amber-500' : 'bg-border-muted'}`}
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 w-2.5 h-2.5 rounded-full bg-white shadow-sm transition-transform ${autoMemory ? 'translate-x-3.5' : ''}`}
+                  />
+                </span>
+              </button>
 
               <button
                 onClick={handleExtractMemory}
@@ -940,51 +1043,240 @@ export function ContextPanel() {
                   </button>
                 </div>
                 <div className="max-h-64 overflow-y-auto space-y-1">
-                {panelMemoryList.map((item) => {
-                  const TypeIcon = item.type === 'preference' ? Star : item.type === 'decision' ? Brain : BookOpen;
-                  return (
-                    <div
-                      key={item.id}
-                      className="flex items-start gap-2 px-2 py-1.5 rounded-md hover:bg-surface-hover cursor-pointer transition-colors group"
-                      onClick={() => handleViewMemoryDetail(item.id)}
-                    >
-                      <TypeIcon className="w-3.5 h-3.5 text-text-muted shrink-0 mt-0.5" />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs text-text-primary truncate">{item.title}</span>
-                          <span className={`text-[10px] px-1 py-0.5 rounded shrink-0 ${
-                            item.importance >= 4 ? 'bg-yellow-500/10 text-yellow-600' : 'bg-surface-hover text-text-muted'
-                          }`}>
-                            {formatMemoryType(item.type)}
-                          </span>
-                        </div>
-                        <div className="text-[10px] text-text-muted mt-0.5">
-                          {new Date(item.createdAt).toLocaleDateString()}
-                        </div>
-                      </div>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleDeleteMemory(item.id); }}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 hover:bg-red-500/10 rounded"
+                  {panelMemoryList.map((item) => {
+                    const TypeIcon =
+                      item.type === 'preference'
+                        ? Star
+                        : item.type === 'decision'
+                          ? Brain
+                          : BookOpen;
+                    return (
+                      <div
+                        key={item.id}
+                        className="flex items-start gap-2 px-2 py-1.5 rounded-md hover:bg-surface-hover cursor-pointer transition-colors group"
+                        onClick={() => handleViewMemoryDetail(item.id)}
                       >
-                        <Trash2 className="w-3 h-3 text-text-muted hover:text-red-500" />
-                      </button>
-                    </div>
-                  );
-                })}
-                {memoryList.length > PANEL_MEMORY_LIMIT && (
-                  <button
-                    onClick={() => setMemoryManagerOpen(true)}
-                    className="w-full px-2 py-1.5 text-[11px] rounded-md text-text-secondary hover:bg-surface-hover transition-colors"
-                  >
-                    {t('context.viewMoreMemory')}
-                  </button>
-                )}
+                        <TypeIcon className="w-3.5 h-3.5 text-text-muted shrink-0 mt-0.5" />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs text-text-primary truncate">{item.title}</span>
+                            <span
+                              className={`text-[10px] px-1 py-0.5 rounded shrink-0 ${
+                                item.importance >= 4
+                                  ? 'bg-yellow-500/10 text-yellow-600'
+                                  : 'bg-surface-hover text-text-muted'
+                              }`}
+                            >
+                              {formatMemoryType(item.type)}
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-text-muted mt-0.5">
+                            {new Date(item.createdAt).toLocaleDateString()}
+                          </div>
+                        </div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteMemory(item.id);
+                          }}
+                          className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 hover:bg-red-500/10 rounded"
+                        >
+                          <Trash2 className="w-3 h-3 text-text-muted hover:text-red-500" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                  {memoryList.length > PANEL_MEMORY_LIMIT && (
+                    <button
+                      onClick={() => setMemoryManagerOpen(true)}
+                      className="w-full px-2 py-1.5 text-[11px] rounded-md text-text-secondary hover:bg-surface-hover transition-colors"
+                    >
+                      {t('context.viewMoreMemory')}
+                    </button>
+                  )}
                 </div>
               </div>
             )}
           </div>
         )}
       </div>
+
+      {activeSessionId && (
+        <div className="border-b border-border-muted px-4 py-3 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="flex items-center gap-1.5 text-xs font-medium text-text-muted uppercase tracking-wider">
+              <BarChart3 className="w-3.5 h-3.5 text-text-muted opacity-70" />
+              <span>{t('context.compressionStats')}</span>
+            </span>
+            <button
+              onClick={() => setCompressionStatsOpen(true)}
+              disabled={!sessionCompressionStats || sessionCompressionStats.totalCommands === 0}
+              className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md text-text-secondary hover:bg-surface-hover transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
+            >
+              <SlidersHorizontal className="w-3 h-3" />
+              <span>{t('context.manageCompressionStats')}</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-3 gap-1.5">
+            <div className="rounded-md border border-border-muted bg-surface/70 px-2 py-1.5">
+              <div className="text-[10px] text-text-muted">
+                {t('context.compressionSavedTotal')}
+              </div>
+              <div className="mt-0.5 text-xs font-semibold text-text-primary">
+                {formatCompressionTokens(sessionCompressionStats?.totalSavedTokens ?? 0)}
+              </div>
+            </div>
+            <div className="rounded-md border border-border-muted bg-surface/70 px-2 py-1.5">
+              <div className="text-[10px] text-text-muted">
+                {t('context.compressionAvgSavings')}
+              </div>
+              <div className="mt-0.5 text-xs font-semibold text-text-primary">
+                {(sessionCompressionStats?.avgSavingsPct ?? 0).toFixed(1)}%
+              </div>
+            </div>
+            <div className="rounded-md border border-border-muted bg-surface/70 px-2 py-1.5">
+              <div className="text-[10px] text-text-muted">{t('context.compressionCommands')}</div>
+              <div className="mt-0.5 text-xs font-semibold text-text-primary">
+                {sessionCompressionStats?.compressedCommands ?? 0}/
+                {sessionCompressionStats?.totalCommands ?? 0}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {compressionStatsOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => setCompressionStatsOpen(false)}
+        >
+          <div
+            className="bg-surface rounded-xl shadow-xl w-[min(860px,calc(100vw-32px))] h-[min(680px,calc(100vh-48px))] overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-border-muted flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-text-primary">
+                  {t('context.compressionStatsDetail')}
+                </h3>
+                <p className="text-xs text-text-muted mt-1">{t('context.compressionStatsHint')}</p>
+              </div>
+              <button
+                onClick={() => setCompressionStatsOpen(false)}
+                className="p-1.5 hover:bg-surface-hover rounded-md transition-colors"
+              >
+                <ChevronDown className="w-4 h-4 text-text-muted" />
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto space-y-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="rounded-lg border border-border-muted bg-surface/70 p-3">
+                  <div className="text-xs text-text-muted">
+                    {t('context.compressionSavedTotal')}
+                  </div>
+                  <div className="mt-1 text-lg font-semibold text-text-primary">
+                    {formatCompressionTokens(sessionCompressionStats?.totalSavedTokens ?? 0)}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-border-muted bg-surface/70 p-3">
+                  <div className="text-xs text-text-muted">
+                    {t('context.compressionAvgSavings')}
+                  </div>
+                  <div className="mt-1 text-lg font-semibold text-text-primary">
+                    {(sessionCompressionStats?.avgSavingsPct ?? 0).toFixed(1)}%
+                  </div>
+                </div>
+                <div className="rounded-lg border border-border-muted bg-surface/70 p-3">
+                  <div className="text-xs text-text-muted">{t('context.compressionCommands')}</div>
+                  <div className="mt-1 text-lg font-semibold text-text-primary">
+                    {sessionCompressionStats?.compressedCommands ?? 0}/
+                    {sessionCompressionStats?.totalCommands ?? 0}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-border-muted bg-surface/70 p-3">
+                  <div className="text-xs text-text-muted">
+                    {t('context.compressionInputOutput')}
+                  </div>
+                  <div className="mt-1 text-sm font-semibold text-text-primary">
+                    {formatCompressionTokens(sessionCompressionStats?.totalInputTokens ?? 0)} /{' '}
+                    {formatCompressionTokens(sessionCompressionStats?.totalOutputTokens ?? 0)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-border-muted bg-surface/70 p-3">
+                <div className="flex items-center justify-between text-xs text-text-muted mb-2">
+                  <span>{t('context.compressionDailyTrend')}</span>
+                  <span>
+                    {t('context.compressionSaved30d', {
+                      tokens: formatCompressionTokens(sessionCompressionStats?.savedTokens30d ?? 0),
+                    })}
+                  </span>
+                </div>
+                <div className="flex h-20 items-end gap-1">
+                  {(sessionCompressionStats?.daily ?? []).map((point) => (
+                    <div
+                      key={point.date}
+                      title={`${point.date}: ${formatCompressionTokens(point.savedTokens)} tokens`}
+                      className="flex-1 rounded-t bg-accent/70 min-h-[2px]"
+                      style={{
+                        height: `${Math.max(
+                          2,
+                          (point.savedTokens / maxSessionCompressionDailySaved) * 100
+                        )}%`,
+                      }}
+                    />
+                  ))}
+                  {!sessionCompressionStats?.daily?.length && (
+                    <div className="text-xs text-text-muted">{t('context.compressionNoStats')}</div>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid md:grid-cols-2 gap-3">
+                <CompressionBreakdownList
+                  title={t('context.compressionTopCategories')}
+                  items={sessionCompressionStats?.topCategories ?? []}
+                  formatTokens={formatCompressionTokens}
+                  emptyLabel={t('context.compressionNoStats')}
+                />
+                <CompressionBreakdownList
+                  title={t('context.compressionTopCommands')}
+                  items={sessionCompressionStats?.topCommandFamilies ?? []}
+                  formatTokens={formatCompressionTokens}
+                  emptyLabel={t('context.compressionNoStats')}
+                />
+                <CompressionBreakdownList
+                  title={t('context.compressionLowSavings')}
+                  items={sessionCompressionStats?.lowSavings ?? []}
+                  formatTokens={formatCompressionTokens}
+                  emptyLabel={t('context.compressionNoStats')}
+                />
+                <div className="rounded-lg border border-border-muted bg-surface/70 p-3">
+                  <div className="text-xs font-medium text-text-secondary mb-2">
+                    {t('context.compressionSkipReasons')}
+                  </div>
+                  <div className="space-y-1.5">
+                    {(sessionCompressionStats?.skipReasons ?? []).map((item) => (
+                      <div key={item.reason} className="flex items-center justify-between text-xs">
+                        <span className="text-text-secondary truncate">{item.reason}</span>
+                        <span className="text-text-primary">{item.count}</span>
+                      </div>
+                    ))}
+                    {(sessionCompressionStats?.skipReasons.length ?? 0) === 0 && (
+                      <div className="text-xs text-text-muted">
+                        {t('context.compressionNoStats')}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {memoryManagerOpen && (
         <div
@@ -997,7 +1289,9 @@ export function ContextPanel() {
           >
             <div className="px-5 py-4 border-b border-border-muted flex items-center justify-between gap-3">
               <div>
-                <h3 className="text-sm font-semibold text-text-primary">{t('context.manageMemory')}</h3>
+                <h3 className="text-sm font-semibold text-text-primary">
+                  {t('context.manageMemory')}
+                </h3>
                 <p className="text-xs text-text-muted mt-1">{t('context.memoryManagerHint')}</p>
               </div>
               <button
@@ -1054,7 +1348,12 @@ export function ContextPanel() {
                     </div>
                   ) : (
                     pagedMemoryList.map((item) => {
-                      const TypeIcon = item.type === 'preference' ? Star : item.type === 'decision' ? Brain : BookOpen;
+                      const TypeIcon =
+                        item.type === 'preference'
+                          ? Star
+                          : item.type === 'decision'
+                            ? Brain
+                            : BookOpen;
                       const selected = memoryManagerDetail?.id === item.id;
                       return (
                         <button
@@ -1067,15 +1366,22 @@ export function ContextPanel() {
                           <TypeIcon className="w-3.5 h-3.5 text-text-muted shrink-0 mt-0.5" />
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-1.5">
-                              <span className="text-xs text-text-primary truncate">{item.title}</span>
-                              <span className={`text-[10px] px-1 py-0.5 rounded shrink-0 ${
-                                item.importance >= 4 ? 'bg-yellow-500/10 text-yellow-600' : 'bg-surface-hover text-text-muted'
-                              }`}>
+                              <span className="text-xs text-text-primary truncate">
+                                {item.title}
+                              </span>
+                              <span
+                                className={`text-[10px] px-1 py-0.5 rounded shrink-0 ${
+                                  item.importance >= 4
+                                    ? 'bg-yellow-500/10 text-yellow-600'
+                                    : 'bg-surface-hover text-text-muted'
+                                }`}
+                              >
                                 {formatMemoryType(item.type)}
                               </span>
                             </div>
                             <div className="text-[10px] text-text-muted mt-0.5">
-                              {t('context.importance')}: {item.importance} · {new Date(item.updatedAt).toLocaleDateString()}
+                              {t('context.importance')}: {item.importance} ·{' '}
+                              {new Date(item.updatedAt).toLocaleDateString()}
                             </div>
                           </div>
                         </button>
@@ -1100,7 +1406,9 @@ export function ContextPanel() {
                       })}
                     </span>
                     <button
-                      onClick={() => setMemoryManagerPage((page) => Math.min(memoryManagerPageCount, page + 1))}
+                      onClick={() =>
+                        setMemoryManagerPage((page) => Math.min(memoryManagerPageCount, page + 1))
+                      }
                       disabled={memoryManagerPage >= memoryManagerPageCount}
                       className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-text-secondary hover:bg-surface-hover disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
                     >
@@ -1120,9 +1428,13 @@ export function ContextPanel() {
                   <div className="max-w-2xl">
                     <div className="flex items-start justify-between gap-3 mb-3">
                       <div className="min-w-0">
-                        <h3 className="text-sm font-semibold text-text-primary break-words">{memoryManagerDetail.title}</h3>
+                        <h3 className="text-sm font-semibold text-text-primary break-words">
+                          {memoryManagerDetail.title}
+                        </h3>
                         <div className="text-[11px] text-text-muted mt-1">
-                          {formatMemoryType(memoryManagerDetail.type)} · {t('context.importance')}: {memoryManagerDetail.importance} · {new Date(memoryManagerDetail.updatedAt).toLocaleString()}
+                          {formatMemoryType(memoryManagerDetail.type)} · {t('context.importance')}:{' '}
+                          {memoryManagerDetail.importance} ·{' '}
+                          {new Date(memoryManagerDetail.updatedAt).toLocaleString()}
                         </div>
                       </div>
                       <button
@@ -1139,7 +1451,10 @@ export function ContextPanel() {
                     {memoryManagerDetail.tags.length > 0 && (
                       <div className="flex flex-wrap gap-1 mt-3">
                         {memoryManagerDetail.tags.map((tag) => (
-                          <span key={tag} className="text-[10px] px-1.5 py-0.5 bg-surface-hover text-text-muted rounded">
+                          <span
+                            key={tag}
+                            className="text-[10px] px-1.5 py-0.5 bg-surface-hover text-text-muted rounded"
+                          >
                             #{tag}
                           </span>
                         ))}
@@ -1153,10 +1468,16 @@ export function ContextPanel() {
                         </div>
                         <button
                           onClick={handleLoadManagedMemoryWindow}
-                          disabled={isLoadingEvidence || !memoryManagerEvidence || memoryManagerEvidence.sources.length === 0}
+                          disabled={
+                            isLoadingEvidence ||
+                            !memoryManagerEvidence ||
+                            memoryManagerEvidence.sources.length === 0
+                          }
                           className="text-[11px] px-2 py-1 rounded bg-surface-hover hover:bg-border-muted text-text-secondary disabled:opacity-50 transition-colors"
                         >
-                          {isLoadingEvidence ? t('context.loading') : t('context.nearbyConversation')}
+                          {isLoadingEvidence
+                            ? t('context.loading')
+                            : t('context.nearbyConversation')}
                         </button>
                       </div>
                       {isLoadingEvidence && !memoryManagerEvidence ? (
@@ -1169,13 +1490,19 @@ export function ContextPanel() {
                       ) : (
                         <div className="space-y-2">
                           <div className="text-[10px] text-text-muted">
-                            {memoryManagerEvidence.returnedChars}/{memoryManagerEvidence.maxChars} chars
+                            {memoryManagerEvidence.returnedChars}/{memoryManagerEvidence.maxChars}{' '}
+                            chars
                             {memoryManagerEvidence.truncated ? ' · truncated' : ''}
                           </div>
                           {memoryManagerEvidence.sources.map((source) => (
-                            <div key={source.id} className="rounded-md border border-border-muted bg-surface-hover/50 p-2">
+                            <div
+                              key={source.id}
+                              className="rounded-md border border-border-muted bg-surface-hover/50 p-2"
+                            >
                               <div className="flex items-center justify-between gap-2 text-[10px] text-text-muted mb-1">
-                                <span>{source.role} · turn #{source.turnIndex}</span>
+                                <span>
+                                  {source.role} · turn #{source.turnIndex}
+                                </span>
                                 <span>{new Date(source.timestamp).toLocaleString()}</span>
                               </div>
                               <div className="text-[11px] leading-5 text-text-secondary whitespace-pre-wrap break-words">
@@ -1198,7 +1525,10 @@ export function ContextPanel() {
       {memoryDetail && !memoryManagerOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-          onClick={() => { setMemoryDetail(null); setMemoryEvidence(null); }}
+          onClick={() => {
+            setMemoryDetail(null);
+            setMemoryEvidence(null);
+          }}
         >
           <div
             className="bg-surface rounded-xl shadow-xl max-w-lg w-full mx-4 max-h-[80vh] overflow-y-auto p-5"
@@ -1208,11 +1538,15 @@ export function ContextPanel() {
               <div>
                 <h3 className="text-sm font-semibold text-text-primary">{memoryDetail.title}</h3>
                 <span className="text-[11px] text-text-muted">
-                  {formatMemoryType(memoryDetail.type)} · {t('context.importance')}: {memoryDetail.importance} · {new Date(memoryDetail.createdAt).toLocaleString()}
+                  {formatMemoryType(memoryDetail.type)} · {t('context.importance')}:{' '}
+                  {memoryDetail.importance} · {new Date(memoryDetail.createdAt).toLocaleString()}
                 </span>
               </div>
               <button
-                onClick={() => { setMemoryDetail(null); setMemoryEvidence(null); }}
+                onClick={() => {
+                  setMemoryDetail(null);
+                  setMemoryEvidence(null);
+                }}
                 className="p-1 hover:bg-surface-hover rounded"
               >
                 <ChevronDown className="w-4 h-4 text-text-muted" />
@@ -1229,7 +1563,9 @@ export function ContextPanel() {
                 </div>
                 <button
                   onClick={handleLoadMemoryWindow}
-                  disabled={isLoadingEvidence || !memoryEvidence || memoryEvidence.sources.length === 0}
+                  disabled={
+                    isLoadingEvidence || !memoryEvidence || memoryEvidence.sources.length === 0
+                  }
                   className="text-[11px] px-2 py-1 rounded bg-surface-hover hover:bg-border-muted text-text-secondary disabled:opacity-50 transition-colors"
                 >
                   {isLoadingEvidence ? t('context.loading') : t('context.nearbyConversation')}
@@ -1241,9 +1577,7 @@ export function ContextPanel() {
                   <span>{t('context.loadingEvidence')}</span>
                 </div>
               ) : !memoryEvidence || memoryEvidence.sources.length === 0 ? (
-                <div className="text-xs text-text-muted">
-                  {t('context.noEvidence')}
-                </div>
+                <div className="text-xs text-text-muted">{t('context.noEvidence')}</div>
               ) : (
                 <div className="space-y-2">
                   <div className="text-[10px] text-text-muted">
@@ -1251,9 +1585,14 @@ export function ContextPanel() {
                     {memoryEvidence.truncated ? ' · truncated' : ''}
                   </div>
                   {memoryEvidence.sources.map((source) => (
-                    <div key={source.id} className="rounded-md border border-border-muted bg-surface-hover/50 p-2">
+                    <div
+                      key={source.id}
+                      className="rounded-md border border-border-muted bg-surface-hover/50 p-2"
+                    >
                       <div className="flex items-center justify-between gap-2 text-[10px] text-text-muted mb-1">
-                        <span>{source.role} · turn #{source.turnIndex}</span>
+                        <span>
+                          {source.role} · turn #{source.turnIndex}
+                        </span>
                         <span>{new Date(source.timestamp).toLocaleString()}</span>
                       </div>
                       <div className="text-[11px] leading-5 text-text-secondary whitespace-pre-wrap break-words">
@@ -1267,7 +1606,10 @@ export function ContextPanel() {
             {memoryDetail.tags.length > 0 && (
               <div className="flex flex-wrap gap-1 mt-3">
                 {memoryDetail.tags.map((tag) => (
-                  <span key={tag} className="text-[10px] px-1.5 py-0.5 bg-surface-hover text-text-muted rounded">
+                  <span
+                    key={tag}
+                    className="text-[10px] px-1.5 py-0.5 bg-surface-hover text-text-muted rounded"
+                  >
                     #{tag}
                   </span>
                 ))}

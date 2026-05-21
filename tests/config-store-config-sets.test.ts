@@ -69,6 +69,18 @@ describe('ConfigStore config sets', () => {
     expect(config.provider).toBe('openai');
     expect(config.apiKey).toBe('sk-legacy-openai');
     expect(config.enableThinking).toBe(true);
+    expect(config.toolOutputCompressionLevel).toBe('off');
+  });
+
+  it('persists tool output compression level outside config sets', () => {
+    const store = new ConfigStore();
+
+    expect(store.getAll().toolOutputCompressionLevel).toBe('off');
+
+    store.update({ toolOutputCompressionLevel: 'aggressive' });
+
+    expect(store.getAll().toolOutputCompressionLevel).toBe('aggressive');
+    expect(store.getAll().configSets[0].enableThinking).toBe(false);
   });
 
   it('creates/switches sets without polluting other sets', () => {

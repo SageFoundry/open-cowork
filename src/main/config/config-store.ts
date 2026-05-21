@@ -46,6 +46,7 @@ export type ProviderType =
 export type CustomProtocolType = 'anthropic' | 'openai' | 'gemini';
 export type AppTheme = 'dark' | 'light' | 'system';
 export type MemoryStrategy = 'auto' | 'manual' | 'rolling';
+export type ToolOutputCompressionLevel = 'off' | 'conservative' | 'aggressive';
 export type ProviderProfileKey =
   | 'openrouter'
   | 'anthropic'
@@ -140,6 +141,9 @@ export interface AppConfig {
   // Auto memory: when enabled, the agent may proactively save knowledge
   autoMemory: boolean;
 
+  // Tool output compression before results enter model context
+  toolOutputCompressionLevel: ToolOutputCompressionLevel;
+
   // UI language preference (controls thinking language)
   language: 'zh' | 'en';
 
@@ -168,6 +172,7 @@ const DIRECT_READ_KEYS = new Set<keyof AppConfig>([
   'sandboxEnabled',
   'enableThinking',
   'autoMemory',
+  'toolOutputCompressionLevel',
   'language',
   'isConfigured',
 ]);
@@ -258,6 +263,7 @@ const defaultConfig: AppConfig = {
   sandboxEnabled: false,
   enableThinking: false,
   autoMemory: false,
+  toolOutputCompressionLevel: 'off',
   language: 'zh',
   isConfigured: false,
 };
@@ -328,6 +334,11 @@ const PROFILE_KEYS: ProviderProfileKey[] = [
 ];
 const VALID_THEMES: AppTheme[] = ['dark', 'light', 'system'];
 const VALID_MEMORY_STRATEGIES: MemoryStrategy[] = ['auto', 'manual', 'rolling'];
+const VALID_TOOL_OUTPUT_COMPRESSION_LEVELS: ToolOutputCompressionLevel[] = [
+  'off',
+  'conservative',
+  'aggressive',
+];
 
 function isProviderType(value: unknown): value is ProviderType {
   return (
@@ -356,6 +367,13 @@ function isAppTheme(value: unknown): value is AppTheme {
 
 function isMemoryStrategy(value: unknown): value is MemoryStrategy {
   return typeof value === 'string' && VALID_MEMORY_STRATEGIES.includes(value as MemoryStrategy);
+}
+
+function isToolOutputCompressionLevel(value: unknown): value is ToolOutputCompressionLevel {
+  return (
+    typeof value === 'string' &&
+    VALID_TOOL_OUTPUT_COMPRESSION_LEVELS.includes(value as ToolOutputCompressionLevel)
+  );
 }
 
 function profileKeyFromProvider(
@@ -969,6 +987,9 @@ export class ConfigStore {
       sandboxEnabled: toBoolean(raw.sandboxEnabled, defaultConfig.sandboxEnabled),
       enableThinking: projected.enableThinking,
       autoMemory: toBoolean(raw.autoMemory, defaultConfig.autoMemory),
+      toolOutputCompressionLevel: isToolOutputCompressionLevel(raw.toolOutputCompressionLevel)
+        ? raw.toolOutputCompressionLevel
+        : defaultConfig.toolOutputCompressionLevel,
       language:
         raw.language === 'zh' || raw.language === 'en' ? raw.language : defaultConfig.language,
       isConfigured: toBoolean(raw.isConfigured, defaultConfig.isConfigured),
@@ -1412,6 +1433,10 @@ export class ConfigStore {
       sandboxEnabled:
         updates.sandboxEnabled !== undefined ? updates.sandboxEnabled : current.sandboxEnabled,
       autoMemory: updates.autoMemory !== undefined ? updates.autoMemory : current.autoMemory,
+      toolOutputCompressionLevel:
+        updates.toolOutputCompressionLevel !== undefined
+          ? updates.toolOutputCompressionLevel
+          : current.toolOutputCompressionLevel,
       isConfigured:
         updates.isConfigured !== undefined ? updates.isConfigured : current.isConfigured,
     });

@@ -157,3 +157,39 @@ export interface RemoteSessionMapping {
   createdAt: number;
   lastActiveAt: number;
 }
+
+// ---------------------------------------------------------------------------
+// Tool Output Compression
+// ---------------------------------------------------------------------------
+
+export type ToolOutputCompressionLevel = 'off' | 'conservative' | 'aggressive';
+
+export interface ToolCompressionSeriesPoint {
+  date: string;
+  savedTokens: number;
+  commands: number;
+}
+
+export interface ToolCompressionBreakdownItem {
+  name: string;
+  commands: number;
+  savedTokens: number;
+  savingsPct: number;
+}
+
+export interface ToolCompressionStats {
+  totalCommands: number;
+  compressedCommands: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalSavedTokens: number;
+  avgSavingsPct: number;
+  savedTokens24h: number;
+  savedTokens7d: number;
+  savedTokens30d: number;
+  daily: ToolCompressionSeriesPoint[];
+  topCategories: ToolCompressionBreakdownItem[];
+  topCommandFamilies: ToolCompressionBreakdownItem[];
+  lowSavings: ToolCompressionBreakdownItem[];
+  skipReasons: Array<{ reason: string; count: number }>;
+}

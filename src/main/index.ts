@@ -56,6 +56,7 @@ import { registerRemoteHandlers } from './ipc/remote-handlers';
 import { registerScheduleHandlers } from './ipc/schedule-handlers';
 import { registerTasksHandlers } from './ipc/tasks-handlers';
 import { registerMemoryHandlers } from './ipc/memory-handlers';
+import { registerToolCompressionHandlers } from './ipc/tool-compression-handlers';
 import { BackgroundTaskService } from './background/background-task-service';
 
 // Current working directory used for new sessions and relative path resolution.
@@ -1484,6 +1485,7 @@ registerMemoryHandlers({
   getSessionCwd: (sessionId: string) =>
     sessionManager?.listSessions().find((session) => session.id === sessionId)?.cwd ?? null,
 });
+registerToolCompressionHandlers();
 async function handleClientEvent(event: ClientEvent): Promise<unknown> {
   // Check if configured before starting sessions
   if (event.type === 'session.start' && !configStore.hasUsableCredentialsForActiveSet()) {

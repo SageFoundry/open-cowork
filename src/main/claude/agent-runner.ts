@@ -93,6 +93,9 @@ import {
 } from './thinking-compat';
 import { fetchOllamaModelInfo } from '../config/ollama-api';
 import { executeWindowsBash } from '../tools/windows-bash-executor';
+import { compressToolExecutionResultForModel } from '../tools/tool-output-compression';
+import { recordToolOutputCompressionEvent } from '../tools/tool-output-compression-stats';
+import { getDatabase } from '../db/database';
 import {
   resolvePreferredWindowsShell,
   getWindowsRegistryPathEntries,
@@ -1189,7 +1192,11 @@ ${hints.join('\n')}
     });
   }
 
-  private wrapToolsWithResultLimit(tools: ToolDefinition[]): ToolDefinition[] {
+  private wrapToolsWithResultLimit(
+    tools: ToolDefinition[],
+    sessionId: string,
+    effectiveCwd: string
+  ): ToolDefinition[] {
     return tools.map((tool) => {
       const originalExecute = tool.execute;
       if (!originalExecute) {
@@ -1207,7 +1214,30 @@ ${hints.join('\n')}
           ctx: any
         ) => {
           const result = await originalExecute(toolCallId, params, signal, onUpdate, ctx);
-          return limitToolExecutionResultForModel(result);
+          const level = configStore.get('toolOutputCompressionLevel') ?? 'off';
+          if (level === 'off') {
+            return limitToolExecutionResultForModel(result);
+          }
+
+          const compressed = compressToolExecutionResultForModel(result, {
+            toolName: tool.name || 'tool',
+            params,
+            level,
+          });
+
+          if (compressed.event) {
+            try {
+              recordToolOutputCompressionEvent(getDatabase(), {
+                sessionId,
+                projectPath: effectiveCwd,
+                event: compressed.event,
+              });
+            } catch (error) {
+              logCtxWarn('[ToolCompression] Failed to record compression stats:', error);
+            }
+          }
+
+          return limitToolExecutionResultForModel(compressed.result);
         },
       } as ToolDefinition;
     });
@@ -3337,11 +3367,16 @@ ${hints.join('\n')}
       const shellOverrideTools = guardedShellTools.filter(
         (tool) => tool.name === 'bash' || tool.name === 'pwsh' || tool.name === 'http'
       );
-      const limitedShellTools = this.wrapToolsWithResultLimit(guardedShellTools);
-      const customTools = this.wrapToolsWithResultLimit([
-        ...guardedBaseCustomTools,
-        ...shellOverrideTools,
-      ]);
+      const limitedShellTools = this.wrapToolsWithResultLimit(
+        guardedShellTools,
+        session.id,
+        effectiveCwd
+      );
+      const customTools = this.wrapToolsWithResultLimit(
+        [...guardedBaseCustomTools, ...shellOverrideTools],
+        session.id,
+        effectiveCwd
+      );
 
       // Diagnostic: log tools being passed to SDK (helps debug Ollama tool use)
       logCtx(`[ClaudeAgentRunner] Session reuse check: cached=${!!cachedSession}`);
