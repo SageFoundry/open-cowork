@@ -492,3 +492,102 @@ function formatScore(value: number): string {
     ? value.toFixed(3).replace(/0+$/, '').replace(/\.$/, '')
     : String(value);
 }
+
+// ─── AnySearch MCP Extract ──────────────────────────────────────────
+
+const ANYSEARCH_MCP_ENDPOINT = 'https://api.anysearch.com/v1/mcp';
+
+export interface AnySearchExtractInput {
+  url: string;
+}
+
+/**
+ * Extract a web page via AnySearch's MCP extract tool.
+ * Returns the page content formatted as Markdown, up to 50,000 characters.
+ */
+export async function extractAnySearchAsText(
+  input: AnySearchExtractInput,
+  options: AnySearchOptions = {}
+): Promise<string> {
+  const { url } = input;
+  if (!url || !/^https?:\/\//i.test(url)) {
+    throw new AnySearchClientError(
+      'A valid URL starting with http:// or https:// is required.',
+      'invalid_request'
+    );
+  }
+
+  const apiKey = options.apiKey ?? process.env.ANYSEARCH_API_KEY ?? '';
+  const trimmedApiKey = apiKey.trim();
+  const now = options.now ?? Date.now;
+  // Use the shared rate limiter bucket (same pool as search)
+  checkRateLimit(Boolean(trimmedApiKey), now());
+
+  const payload = {
+    jsonrpc: '2.0' as const,
+    id: 1,
+    method: 'tools/call' as const,
+    params: {
+      name: 'extract' as const,
+      arguments: { url },
+    },
+  };
+
+  let response: Response;
+  try {
+    response = await (options.fetchFn ?? fetch)(options.endpoint ?? ANYSEARCH_MCP_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'open-cowork',
+        ...(trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : {}),
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (error) {
+    if (error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')) {
+      throw new AnySearchClientError(
+        'AnySearch extract request timed out. Check the network and retry.',
+        'network_error'
+      );
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    throw new AnySearchClientError(
+      `AnySearch extract network request failed: ${message}`,
+      'network_error'
+    );
+  }
+
+  const body = await readJsonBody(response);
+  if (!response.ok) {
+    throw mapAnySearchError(response, body);
+  }
+
+  // Parse JSON-RPC response
+  const rpcResult = body as {
+    result?: { content?: Array<{ type: string; text: string }> };
+    error?: { message: string };
+  };
+  if (rpcResult.error) {
+    throw new AnySearchClientError(
+      `AnySearch extract failed: ${rpcResult.error.message}`,
+      'request_failed'
+    );
+  }
+
+  const contentItems = rpcResult.result?.content ?? [];
+  const textParts = contentItems
+    .filter((item) => item.type === 'text')
+    .map((item) => item.text);
+
+  if (textParts.length === 0) {
+    return `[No extractable content returned for: ${url}]`;
+  }
+
+  const extracted = textParts.join('\n\n');
+  const OUTPUT_EXTRACT_LIMIT = 50_000;
+  return extracted.length > OUTPUT_EXTRACT_LIMIT
+    ? `${extracted.slice(0, OUTPUT_EXTRACT_LIMIT)}\n\n[Truncated ${extracted.length - OUTPUT_EXTRACT_LIMIT} chars]`
+    : extracted;
+}

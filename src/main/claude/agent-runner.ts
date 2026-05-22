@@ -112,7 +112,7 @@ import {
   buildWorkspaceInfoPrompt,
   VIRTUAL_WORKSPACE_PATH,
 } from './prompt-contract';
-import { buildAnySearchTool } from '../search/anysearch-tool';
+import { buildAnySearchTool, buildAnySearchExtractTool } from '../search/anysearch-tool';
 
 const DEFAULT_HISTORY_CHARS_PER_TOKEN = 2; // Conservative estimate: 2 chars ≈ 1 token (handles CJK-heavy content)
 const DEFAULT_COLD_START_HISTORY_BUDGET_RATIO = 0.15; // Use 15% of context window for cold start history
@@ -2638,7 +2638,8 @@ ${hints.join('\n')}
       const mcpCustomTools = this.mcpManager ? buildMcpCustomTools(this.mcpManager) : [];
       const backgroundTaskTools = this.buildBackgroundTaskTool(session.id, effectiveCwd);
       const anySearchTool = buildAnySearchTool();
-      const baseCustomTools = [anySearchTool, ...backgroundTaskTools, ...mcpCustomTools];
+      const anySearchExtractTool = buildAnySearchExtractTool();
+      const baseCustomTools = [anySearchTool, anySearchExtractTool, ...backgroundTaskTools, ...mcpCustomTools];
       log('[ClaudeAgentRunner] Registered AnySearch websearch custom tool');
       if (mcpCustomTools.length > 0) {
         log(

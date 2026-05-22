@@ -84,7 +84,7 @@ export function isPlanModeToolAllowed(input: PlanModeToolGuardInput): PlanModeTo
       : denied('Plan mode only allows HTTP GET and HEAD requests.');
   }
 
-  if (toolName === 'websearch') {
+  if (toolName === 'websearch' || toolName === 'webextract') {
     return { allowed: true };
   }
 

@@ -1,7 +1,7 @@
 import { Type } from '@sinclair/typebox';
 import type { ToolDefinition } from '@mariozechner/pi-coding-agent';
 import { configStore } from '../config/config-store';
-import { searchAnySearchAsText, type AnySearchInput } from './anysearch-client';
+import { searchAnySearchAsText, extractAnySearchAsText, type AnySearchInput } from './anysearch-client';
 
 export interface AnySearchToolOptions {
   getApiKey?: () => string | undefined;
@@ -54,6 +54,30 @@ export function buildAnySearchTool(options: AnySearchToolOptions = {}): ToolDefi
       const configuredApiKey = options.getApiKey?.() ?? configStore.get('anySearchApiKey') ?? '';
       const apiKey = configuredApiKey.trim() || undefined;
       const text = await searchAnySearchAsText(params, { apiKey });
+      return {
+        content: [{ type: 'text' as const, text }],
+        details: undefined as unknown,
+      };
+    },
+  };
+}
+
+export function buildAnySearchExtractTool(): ToolDefinition {
+  return {
+    name: 'webextract',
+    label: 'Web Extract',
+    description:
+      'Extract the full content of a web page as Markdown text. Use this when you need the complete content of a specific URL (documentation, articles, specifications, etc.). Returns up to 50,000 characters. HTTP/HTTPS URLs only.',
+    parameters: Type.Object({
+      url: Type.String({
+        description:
+          'The full URL of the web page to extract (must start with http:// or https://).',
+      }),
+    }),
+    execute: async (_toolCallId: string, params: { url: string }) => {
+      const configuredApiKey = configStore.get('anySearchApiKey') ?? '';
+      const apiKey = configuredApiKey.trim() || undefined;
+      const text = await extractAnySearchAsText({ url: params.url }, { apiKey });
       return {
         content: [{ type: 'text' as const, text }],
         details: undefined as unknown,
