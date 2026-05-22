@@ -5,6 +5,17 @@ All notable changes to the Open Cowork AI agent desktop app will be documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.3] - 2026-05-22
+
+### Added
+
+- **`webextract` 工具**：基于 AnySearch MCP extract API 提取任意网页内容为 Markdown 文本
+  - 支持 URL 参数，自动限制 50,000 字符输出
+  - 复用 AnySearch 客户端认证、速率限制、错误处理
+  - 在 Plan 模式下也可用
+
+### Fixed
+
 ## [3.5.2] - 2026-05-20
 
 ### Added
