@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type {
   CompactionType,
   CompactionTrigger,
+  ContentBlock,
   Message,
   SessionCompactionInfo,
   ToolResultContent,
@@ -39,6 +40,9 @@ export interface CompactionBoundaryRecordInput {
   estimatedTokensAfter: number;
   compactType: CompactionType;
 }
+
+const MAX_COMPACTED_CONTEXT_PREVIEW_CHARS = 6000;
+const MAX_MESSAGE_PREVIEW_CHARS = 1000;
 
 export interface SerializedCompactionBoundary {
   summary_text: string;
@@ -125,6 +129,45 @@ function truncateCompactedText(text: string, maxChars: number, fallback: string)
   const head = normalized.slice(0, headChars).trimEnd();
   const tail = normalized.slice(-tailChars).trimStart();
   return `${head}\n...[middle compacted]...\n${tail}`;
+}
+
+function clipPreview(text: string, maxChars: number): string {
+  const normalized = text.trim();
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxChars - 24)).trimEnd()}\n...[preview truncated]`;
+}
+
+function previewContentBlock(block: ContentBlock): string {
+  if (block.type === 'text') {
+    return clipPreview(block.text, MAX_MESSAGE_PREVIEW_CHARS);
+  }
+  if (block.type === 'thinking') {
+    return '[thinking omitted from preview]';
+  }
+  if (block.type === 'tool_use') {
+    const toolUse = block as ToolUseContent;
+    return `[tool_use: ${toolUse.name}]\n${clipPreview(JSON.stringify(toolUse.input ?? {}), 600)}`;
+  }
+  if (block.type === 'tool_result') {
+    const toolResult = block as ToolResultContent;
+    return `[tool_result]\n${clipPreview(toolResult.content, MAX_MESSAGE_PREVIEW_CHARS)}`;
+  }
+  if (block.type === 'image') {
+    return '[image omitted from preview]';
+  }
+  return `[${block.type}]`;
+}
+
+export function buildCompactedContextPreview(messages: Message[]): string {
+  const preview = messages
+    .map((message, index) => {
+      const body = message.content.map(previewContentBlock).filter(Boolean).join('\n\n');
+      return `#${index + 1} ${message.role}\n${body || '(empty)'}`;
+    })
+    .join('\n\n---\n\n');
+  return clipPreview(preview, MAX_COMPACTED_CONTEXT_PREVIEW_CHARS);
 }
 
 export function microCompactMessages(
@@ -267,6 +310,7 @@ export function buildCompactionInfo(input: {
   preservedTailCount: number;
   compactedMessageCount: number;
   summaryText?: string;
+  compactedContextPreview?: string;
 }): SessionCompactionInfo {
   return {
     sessionId: input.sessionId,
@@ -282,5 +326,6 @@ export function buildCompactionInfo(input: {
     compactedMessageCount: input.compactedMessageCount,
     createdAt: Date.now(),
     summaryPreview: input.summaryText?.slice(0, 200),
+    compactedContextPreview: input.compactedContextPreview,
   };
 }

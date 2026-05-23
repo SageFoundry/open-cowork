@@ -732,6 +732,9 @@
     "contextSkipped": "跳过次数",
     "contextRecentEvents": "近期事件",
     "contextEventDetail": "压缩前 {{before}} · 压缩后 {{after}} · 保留尾部 {{tail}} 条",
+    "viewCompactedContext": "查看压缩后上下文",
+    "hideCompactedContext": "收起压缩后上下文",
+    "noCompactedContextPreview": "暂无压缩后上下文预览",
     "contextNoStats": "暂无上下文压缩事件",
     "memoryTypes": {
       "decision": "决策",

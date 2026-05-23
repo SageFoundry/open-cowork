@@ -74,6 +74,7 @@ import {
 } from '../context/context-budget';
 import {
   appendTranscriptMessagesSince,
+  buildCompactedContextPreview,
   buildCompactionInfo,
   createBoundarySummaryMessage,
   getPreservedTailCount,
@@ -1339,6 +1340,7 @@ export class SessionManager {
         preservedTailCount,
         compactedMessageCount: olderMessages.length,
         summaryText,
+        compactedContextPreview: buildCompactedContextPreview(compactedRuntimeMessages),
       });
 
       if (this.agentRunner.clearSdkSession) {
@@ -1485,6 +1487,7 @@ export class SessionManager {
               estimatedTokensAfter: microResult.estimatedTokensAfter,
               preservedTailCount: thresholds.preservedTailCount,
               compactedMessageCount: microResult.compactedMessageCount,
+              compactedContextPreview: buildCompactedContextPreview(messagesForContext),
             });
             this.emitCompaction(session.id, microInfo);
             this.emitCompactionTrace(

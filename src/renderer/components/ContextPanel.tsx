@@ -165,6 +165,7 @@ export function ContextPanel() {
     useState<ToolCompressionStats | null>(null);
   const [compressionStatsOpen, setCompressionStatsOpen] = useState(false);
   const [contextStatsOpen, setContextStatsOpen] = useState(false);
+  const [expandedContextPreviewKey, setExpandedContextPreviewKey] = useState<string | null>(null);
   const [compactConfirmOpen, setCompactConfirmOpen] = useState(false);
   const ss = activeSessionId ? sessionStates[activeSessionId] : undefined;
   const steps = ss?.traceSteps ?? EMPTY_STEPS;
@@ -1493,8 +1494,12 @@ export function ContextPanel() {
                   {t('context.contextRecentEvents')}
                 </div>
                 <div className="divide-y divide-border-muted">
-                  {compactionHistory.map((item) => (
-                    <div key={`${item.createdAt}-${item.compactionType}`} className="px-3 py-2">
+                  {compactionHistory.map((item) => {
+                    const eventKey = `${item.createdAt}-${item.compactionType}`;
+                    const hasPreview = Boolean(item.compactedContextPreview || item.summaryPreview);
+                    const isPreviewOpen = expandedContextPreviewKey === eventKey;
+                    return (
+                    <div key={eventKey} className="px-3 py-2">
                       <div className="flex items-center justify-between gap-3 text-xs">
                         <span className="text-text-primary truncate">
                           {formatLatestCompaction(item)}
@@ -1512,8 +1517,32 @@ export function ContextPanel() {
                           tail: item.preservedTailCount,
                         })}
                       </div>
+                      {hasPreview && (
+                        <div className="mt-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedContextPreviewKey(isPreviewOpen ? null : eventKey)
+                            }
+                            className="inline-flex items-center gap-1 text-[11px] text-text-secondary hover:text-text-primary transition-colors"
+                          >
+                            <SlidersHorizontal className="h-3 w-3" />
+                            {isPreviewOpen
+                              ? t('context.hideCompactedContext')
+                              : t('context.viewCompactedContext')}
+                          </button>
+                          {isPreviewOpen && (
+                            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-border-muted bg-surface-elevated/60 p-3 text-[11px] leading-5 text-text-secondary">
+                              {item.compactedContextPreview ||
+                                item.summaryPreview ||
+                                t('context.noCompactedContextPreview')}
+                            </pre>
+                          )}
+                        </div>
+                      )}
                     </div>
-                  ))}
+                    );
+                  })}
                   {compactionHistory.length === 0 && (
                     <div className="px-3 py-4 text-xs text-text-muted">
                       {t('context.contextNoStats')}

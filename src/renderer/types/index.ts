@@ -155,6 +155,7 @@ export interface SessionCompactionInfo {
   compactedMessageCount: number;
   createdAt: number;
   summaryPreview?: string;
+  compactedContextPreview?: string;
 }
 
 export interface SessionCompactionState {

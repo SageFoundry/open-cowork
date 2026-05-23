@@ -43,6 +43,8 @@ describe('ContextPanel memory module integration', () => {
     expect(source).toContain('context.contextManageSummary');
     expect(source).not.toContain("<span>{t('context.contextManagementStats')}</span>");
     expect(source).toContain('context.contextStatsDetail');
+    expect(source).toContain('expandedContextPreviewKey');
+    expect(source).toContain('context.viewCompactedContext');
   });
 
   it('uses an in-app compact confirmation dialog instead of native confirm', () => {

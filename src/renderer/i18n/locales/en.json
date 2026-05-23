@@ -728,6 +728,9 @@
     "contextSkipped": "Skipped",
     "contextRecentEvents": "Recent events",
     "contextEventDetail": "Before {{before}} · after {{after}} · tail {{tail}} messages",
+    "viewCompactedContext": "View compacted context",
+    "hideCompactedContext": "Hide compacted context",
+    "noCompactedContextPreview": "No compacted context preview available",
     "contextNoStats": "No context compaction events yet",
     "memoryTypes": {
       "decision": "Decision",

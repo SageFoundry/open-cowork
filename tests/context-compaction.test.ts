@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { microCompactMessages } from '../src/main/context/context-compaction';
+import {
+  buildCompactedContextPreview,
+  microCompactMessages,
+} from '../src/main/context/context-compaction';
 import type { Message } from '../src/renderer/types';
 
 function toolUseMessage(id: string, name: string, input: Record<string, unknown>): Message {
@@ -58,5 +61,22 @@ describe('context micro compaction', () => {
     expect(compacted.content).toContain('...[middle compacted]...');
     expect(compacted.content).toContain('important tail');
     expect(result.compactedMessageCount).toBe(1);
+  });
+
+  it('builds a preview of the compacted runtime context', () => {
+    const preview = buildCompactedContextPreview([
+      {
+        id: 'summary',
+        sessionId: 'session-1',
+        role: 'assistant',
+        timestamp: Date.now(),
+        content: [{ type: 'text', text: '<conversation_continuation_summary>keep this</conversation_continuation_summary>' }],
+      },
+      toolResultMessage('tail-1', 'short preserved tool result'),
+    ]);
+
+    expect(preview).toContain('#1 assistant');
+    expect(preview).toContain('keep this');
+    expect(preview).toContain('short preserved tool result');
   });
 });
