@@ -145,6 +145,9 @@ export interface SessionCompactionInfo {
   sessionId: string;
   compactionType: CompactionType;
   trigger: CompactionTrigger;
+  status?: 'created' | 'skipped' | 'fallback';
+  skipReason?: 'no_older_messages' | 'failure_circuit_breaker' | 'nested_compaction';
+  failureCount?: number;
   boundaryCreated: boolean;
   estimatedTokensBefore: number;
   estimatedTokensAfter: number;

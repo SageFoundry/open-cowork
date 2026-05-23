@@ -167,6 +167,7 @@ function makeDb(): DatabaseInstance {
     compactionSnapshots: {} as DatabaseInstance['compactionSnapshots'],
     scheduledTasks: {} as DatabaseInstance['scheduledTasks'],
     backgroundTasks: {} as DatabaseInstance['backgroundTasks'],
+    toolOutputSnapshots: {} as DatabaseInstance['toolOutputSnapshots'],
     prepare: raw.prepare as unknown as DatabaseInstance['prepare'],
     exec: raw.exec,
     pragma: raw.pragma,

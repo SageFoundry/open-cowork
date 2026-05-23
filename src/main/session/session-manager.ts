@@ -91,14 +91,40 @@ interface AgentRunner {
 
 const WORKSPACE_MOUNT_VIRTUAL_PATH = '/mnt/workspace';
 const TITLE_GENERATION_TIMEOUT_MS = 20000;
-const COMPACTION_SUMMARY_SYSTEM_PROMPT = `Summarize earlier conversation history for a coding agent that must continue the same task with limited context.
-Keep only durable, high-value information:
-- the user's goal, constraints, and preferences
-- decisions that were made and why
-- files, commands, errors, and outputs that still matter
-- unfinished work and next important steps
-Do not preserve verbose tool output unless it changes the outcome.
-Respond in concise markdown with short sections and no code fences unless essential.`;
+const COMPACTION_SUMMARY_SYSTEM_PROMPT = `CRITICAL: Respond with TEXT ONLY. Do not call tools, do not browse files, do not ask the user questions, and do not include code fences unless a tiny snippet is essential.
+
+Create a structured continuation summary for a coding agent that must resume the same session after context compaction.
+Preserve durable information structure over verbosity. Keep exact file paths, commands, code identifiers, API names, error messages, and user preferences when they still affect the next step.
+
+Use exactly these markdown sections, in this order:
+## Primary Request and Intent
+## Key Technical Concepts
+## Files and Code Sections
+## Errors and Fixes
+## Problem Solving
+## User Messages
+## Pending Tasks
+## Current Work
+## Next Step
+
+Section guidance:
+- Primary Request and Intent: the user's actual goal, constraints, and desired product behavior.
+- Key Technical Concepts: architecture, APIs, settings, data flows, context limits, and implementation rules that matter.
+- Files and Code Sections: concrete files/functions/components already touched or discovered, with why they matter.
+- Errors and Fixes: failures, regressions, test output, user-reported issues, and fixes already applied.
+- Problem Solving: important decisions, rejected approaches, and rationale.
+- User Messages: preserve the user's messages in order as concise bullet summaries; do not drop late corrections.
+- Pending Tasks: unfinished work and acceptance criteria.
+- Current Work: the exact work in progress when compaction happened, including files/functions and partial edits.
+- Next Step: one concrete next action the assistant should take.
+
+If evidence is missing, say "Unknown" briefly instead of inventing details.
+CRITICAL: Respond with TEXT ONLY. No tool use. No follow-up question.`;
+
+interface CompactionSummaryResult {
+  text: string;
+  usedFallback: boolean;
+}
 
 function resolveRuntimeContextWindow(runtimeConfig: {
   model?: string;
@@ -137,7 +163,10 @@ export class SessionManager {
   private messageCache: Map<string, Message[]> = new Map();
   private projectMemoryService = new ProjectMemoryService();
   private restoreNoticeSent: Set<string> = new Set();
+  private compactionFailureCounts: Map<string, number> = new Map();
+  private compactingSessions: Set<string> = new Set();
   private static readonly MAX_CACHE_SIZE = 100;
+  private static readonly MAX_AUTOMATIC_COMPACTION_FAILURES = 3;
 
   constructor(
     db: DatabaseInstance,
@@ -842,32 +871,57 @@ export class SessionManager {
   }
 
   private buildFallbackCompactionSummary(messages: Message[]): string {
-    const lastUserText = [...messages]
-      .reverse()
-      .find((message) => message.role === 'user')
-      ?.content.find((block) => block.type === 'text');
+    const userTexts = messages
+      .filter((message) => message.role === 'user')
+      .flatMap((message) => message.content)
+      .filter((block) => block.type === 'text')
+      .map((block) => (block as TextContent).text.trim())
+      .filter(Boolean);
+    const lastUserText = userTexts[userTexts.length - 1];
     const touchedFiles = messages
       .flatMap((message) => message.content)
       .filter((block) => block.type === 'file_attachment')
       .map((block) => `- ${(block as FileAttachmentContent).relativePath}`)
       .slice(0, 6);
+    const recentUserMessages = userTexts.slice(-8).map((text, index) => `- ${index + 1}. ${text.slice(0, 300)}`);
     return [
-      '## Goal',
-      lastUserText && 'text' in lastUserText
-        ? lastUserText.text.slice(0, 400)
-        : 'Continue the existing session.',
+      '## Primary Request and Intent',
+      lastUserText ? lastUserText.slice(0, 500) : 'Continue the existing session.',
       '',
-      '## Important Context',
-      touchedFiles.length > 0
-        ? touchedFiles.join('\n')
-        : '- Preserve recent decisions and continue from the latest visible tail.',
+      '## Key Technical Concepts',
+      '- Unknown from fallback summary.',
+      '',
+      '## Files and Code Sections',
+      touchedFiles.length > 0 ? touchedFiles.join('\n') : '- Unknown from fallback summary.',
+      '',
+      '## Errors and Fixes',
+      '- Unknown from fallback summary.',
+      '',
+      '## Problem Solving',
+      '- Preserve recent decisions and continue from the latest visible tail.',
+      '',
+      '## User Messages',
+      recentUserMessages.length > 0 ? recentUserMessages.join('\n') : '- Unknown from fallback summary.',
+      '',
+      '## Pending Tasks',
+      '- Continue the current task using the preserved tail messages.',
+      '',
+      '## Current Work',
+      '- Fallback summary was used because structured compaction summary generation failed or returned empty text.',
+      '',
+      '## Next Step',
+      '- Inspect the latest preserved messages and continue the concrete implementation or debugging step.',
     ]
       .filter(Boolean)
       .join('\n');
   }
 
-  private async generateCompactionSummary(messages: Message[]): Promise<string> {
+  private async generateCompactionSummary(
+    messages: Message[],
+    options: { trigger: CompactionTrigger }
+  ): Promise<CompactionSummaryResult> {
     const language = (configStore.get('language') ?? 'zh') === 'zh' ? 'Chinese (中文)' : 'English';
+    const isAutomaticCompaction = options.trigger !== 'manual';
     const serializedHistory = messages
       .map((message) => this.serializeMessageForCompaction(message))
       .filter(Boolean)
@@ -875,7 +929,10 @@ export class SessionManager {
     const prompt = [
       'Summarize the earlier conversation so the assistant can continue with limited context.',
       `Write the summary in ${language}. Preserve code identifiers, commands, file paths, API names, and quoted errors exactly when needed.`,
-      'Focus on user goals, constraints, decisions, important tool findings, errors that still matter, and unfinished work.',
+      'Use the exact required sections from the system prompt. Keep the structure stable even when a section has little data.',
+      isAutomaticCompaction
+        ? 'This is automatic compaction. Suppress follow-up questions: if uncertainty exists, write the best assumption and a verification step in Next Step.'
+        : 'This is manual compaction. Record open questions as pending tasks only when they are genuinely blocking.',
       'Earlier history:',
       serializedHistory.slice(0, 24000),
     ].join('\n\n');
@@ -888,13 +945,13 @@ export class SessionManager {
       );
       const text = result.text.trim();
       if (text) {
-        return text;
+        return { text, usedFallback: false };
       }
     } catch (error) {
       logWarn('[SessionManager] Compaction summary generation failed, using fallback', error);
     }
 
-    return this.buildFallbackCompactionSummary(messages);
+    return { text: this.buildFallbackCompactionSummary(messages), usedFallback: true };
   }
 
   private saveCompactionSnapshot(input: {
@@ -918,6 +975,43 @@ export class SessionManager {
     });
   }
 
+  private buildNoopFullCompactionResult(
+    sessionId: string,
+    runtimeMessages: Message[],
+    trigger: CompactionTrigger,
+    preservedTailCount = Math.min(getPreservedTailCount(trigger), runtimeMessages.length),
+    metadata?: {
+      skipReason?: SessionCompactionInfo['skipReason'];
+      failureCount?: number;
+      emit?: boolean;
+    }
+  ): {
+    runtimeMessages: Message[];
+    info: SessionCompactionInfo;
+  } {
+    const estimatedTokens = estimateMessagesTokens(runtimeMessages);
+    const info = buildCompactionInfo({
+      sessionId,
+      compactionType: 'full',
+      trigger,
+      status: 'skipped',
+      skipReason: metadata?.skipReason,
+      failureCount: metadata?.failureCount,
+      boundaryCreated: false,
+      estimatedTokensBefore: estimatedTokens,
+      estimatedTokensAfter: estimatedTokens,
+      preservedTailCount,
+      compactedMessageCount: 0,
+    });
+    if (metadata?.emit) {
+      this.emitCompaction(sessionId, info);
+    }
+    return {
+      runtimeMessages,
+      info,
+    };
+  }
+
   private async performFullCompaction(
     session: Session,
     runtimeMessages: Message[],
@@ -926,7 +1020,42 @@ export class SessionManager {
     runtimeMessages: Message[];
     info: SessionCompactionInfo;
   }> {
+    const isAutomaticCompaction = trigger !== 'manual';
+    const failureCount = this.compactionFailureCounts.get(session.id) ?? 0;
+    if (
+      isAutomaticCompaction &&
+      failureCount >= SessionManager.MAX_AUTOMATIC_COMPACTION_FAILURES
+    ) {
+      const message = '自动上下文压缩连续失败，已暂停本次自动压缩。可稍后手动 Compact。';
+      this.emitCompactionNotice(session.id, 'warning', message);
+      this.emitCompactionTrace(
+        session.id,
+        'Application compaction skipped',
+        `Skipped ${trigger} compaction after ${failureCount} consecutive summary failures.`
+      );
+      return this.buildNoopFullCompactionResult(session.id, runtimeMessages, trigger, undefined, {
+        skipReason: 'failure_circuit_breaker',
+        failureCount,
+        emit: true,
+      });
+    }
+
+    if (isAutomaticCompaction && this.compactingSessions.has(session.id)) {
+      const message = '检测到上下文压缩正在进行，已跳过嵌套自动压缩。';
+      this.emitCompactionNotice(session.id, 'warning', message);
+      this.emitCompactionTrace(
+        session.id,
+        'Application compaction skipped',
+        `Skipped nested ${trigger} compaction while another compaction is active.`
+      );
+      return this.buildNoopFullCompactionResult(session.id, runtimeMessages, trigger, undefined, {
+        skipReason: 'nested_compaction',
+        emit: true,
+      });
+    }
+
     const startedAt = Date.now();
+    this.compactingSessions.add(session.id);
     this.emitCompactionState(session.id, {
       sessionId: session.id,
       compactionType: 'full',
@@ -952,23 +1081,31 @@ export class SessionManager {
       );
 
       if (olderMessages.length === 0) {
-        const estimatedTokens = estimateMessagesTokens(runtimeMessages);
-        return {
+        return this.buildNoopFullCompactionResult(
+          session.id,
           runtimeMessages,
-          info: buildCompactionInfo({
-            sessionId: session.id,
-            compactionType: 'full',
-            trigger,
-            boundaryCreated: false,
-            estimatedTokensBefore: estimatedTokens,
-            estimatedTokensAfter: estimatedTokens,
-            preservedTailCount,
-            compactedMessageCount: 0,
-          }),
-        };
+          trigger,
+          preservedTailCount,
+          { skipReason: 'no_older_messages' }
+        );
       }
 
-      const summaryText = await this.generateCompactionSummary(olderMessages);
+      const summaryResult = await this.generateCompactionSummary(olderMessages, { trigger });
+      const summaryText = summaryResult.text;
+      if (isAutomaticCompaction) {
+        if (summaryResult.usedFallback) {
+          const nextFailureCount = failureCount + 1;
+          this.compactionFailureCounts.set(session.id, nextFailureCount);
+          this.emitCompactionTrace(
+            session.id,
+            'Application compaction fallback',
+            `Used fallback summary for ${trigger} compaction. Consecutive failures: ${nextFailureCount}.`
+          );
+        } else {
+          this.compactionFailureCounts.delete(session.id);
+        }
+      }
+
       const boundaryMessage = createBoundarySummaryMessage(session.id, summaryText);
       const createdAt = Date.now();
       boundaryMessage.timestamp = createdAt;
@@ -990,6 +1127,10 @@ export class SessionManager {
         sessionId: session.id,
         compactionType: 'full',
         trigger,
+        status: summaryResult.usedFallback ? 'fallback' : 'created',
+        failureCount: isAutomaticCompaction
+          ? (this.compactionFailureCounts.get(session.id) ?? 0)
+          : undefined,
         boundaryCreated: true,
         estimatedTokensBefore,
         estimatedTokensAfter,
@@ -1016,6 +1157,7 @@ export class SessionManager {
 
       return { runtimeMessages: compactedRuntimeMessages, info };
     } finally {
+      this.compactingSessions.delete(session.id);
       this.emitCompactionState(session.id, null);
     }
   }

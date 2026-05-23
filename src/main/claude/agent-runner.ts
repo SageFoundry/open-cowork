@@ -81,7 +81,7 @@ import {
 } from './pi-session-runtime';
 import { ThinkTagStreamParser } from './think-tag-parser';
 import {
-  limitToolExecutionResultForModel,
+  limitToolExecutionResultForModelWithInfo,
   normalizeMcpToolResultForModel,
   normalizeToolExecutionResultForUi,
 } from './tool-result-utils';
@@ -95,6 +95,12 @@ import { fetchOllamaModelInfo } from '../config/ollama-api';
 import { executeWindowsBash } from '../tools/windows-bash-executor';
 import { compressToolExecutionResultForModel } from '../tools/tool-output-compression';
 import { recordToolOutputCompressionEvent } from '../tools/tool-output-compression-stats';
+import {
+  createToolOutputSnapshot,
+  formatToolOutputRecallNotice,
+  recallToolOutput,
+  type ToolOutputSnapshotReason,
+} from '../tools/tool-output-recall';
 import { getDatabase } from '../db/database';
 import {
   resolvePreferredWindowsShell,
@@ -183,6 +189,68 @@ function extractStableHistoryEntries(messages: Message[]): StableHistoryEntry[] 
 
 function serializeStableHistoryTurn(entry: StableHistoryEntry): string {
   return `<turn role="${entry.role}">${escapeXmlText(entry.text)}</turn>`;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function extractTextForToolOutputRecall(result: unknown): string {
+  if (typeof result === 'string') {
+    return result;
+  }
+
+  if (!isPlainRecord(result) || !Array.isArray(result.content)) {
+    return '';
+  }
+
+  return result.content
+    .map((part) => {
+      if (typeof part === 'string') {
+        return part;
+      }
+      if (isPlainRecord(part) && part.type === 'text' && typeof part.text === 'string') {
+        return part.text;
+      }
+      return '';
+    })
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function appendToolOutputRecallNotice<T>(result: T, notice: string): T {
+  if (!notice.trim()) {
+    return result;
+  }
+
+  if (typeof result === 'string') {
+    return `${result.trimEnd()}\n${notice}` as T;
+  }
+
+  if (!isPlainRecord(result) || !Array.isArray(result.content)) {
+    return result;
+  }
+
+  let appended = false;
+  const content = result.content.map((part) => {
+    if (!appended && isPlainRecord(part) && part.type === 'text' && typeof part.text === 'string') {
+      appended = true;
+      return {
+        ...part,
+        text: `${part.text.trimEnd()}\n${notice}`,
+      };
+    }
+    return part;
+  });
+
+  if (!appended) {
+    content.push({ type: 'text', text: notice });
+  }
+
+  return {
+    ...result,
+    content,
+  } as T;
 }
 
 /**
@@ -1214,9 +1282,52 @@ ${hints.join('\n')}
           ctx: any
         ) => {
           const result = await originalExecute(toolCallId, params, signal, onUpdate, ctx);
+          if (tool.name === 'recall_tool_output') {
+            return result;
+          }
+
+          const rawTextForRecall = extractTextForToolOutputRecall(result);
+          const createRecallNotice = (
+            reason: ToolOutputSnapshotReason,
+            visibleResult: unknown
+          ): string | null => {
+            if (!rawTextForRecall.trim()) {
+              return null;
+            }
+
+            try {
+              const handle = createToolOutputSnapshot(getDatabase(), {
+                sessionId,
+                projectPath: effectiveCwd,
+                toolName: tool.name || 'tool',
+                reason,
+                content: rawTextForRecall,
+              });
+              if (!handle) {
+                return null;
+              }
+              const visibleText = extractTextForToolOutputRecall(visibleResult);
+              return formatToolOutputRecallNotice({
+                handle,
+                reason,
+                rawChars: rawTextForRecall.length,
+                visibleChars: visibleText.length,
+              });
+            } catch (error) {
+              logCtxWarn('[ToolOutputRecall] Failed to save original tool output:', error);
+              return null;
+            }
+          };
+
           const level = configStore.get('toolOutputCompressionLevel') ?? 'off';
           if (level === 'off') {
-            return limitToolExecutionResultForModel(result);
+            const limited = limitToolExecutionResultForModelWithInfo(result);
+            if (!limited.info.truncated) {
+              return limited.result;
+            }
+
+            const notice = createRecallNotice('truncated', limited.result);
+            return notice ? appendToolOutputRecallNotice(limited.result, notice) : limited.result;
           }
 
           const compressed = compressToolExecutionResultForModel(result, {
@@ -1237,7 +1348,18 @@ ${hints.join('\n')}
             }
           }
 
-          return limitToolExecutionResultForModel(compressed.result);
+          const limited = limitToolExecutionResultForModelWithInfo(compressed.result);
+          const recallReason = compressed.event?.compressed
+            ? 'compressed'
+            : limited.info.truncated
+              ? 'truncated'
+              : null;
+          if (!recallReason) {
+            return limited.result;
+          }
+
+          const notice = createRecallNotice(recallReason, limited.result);
+          return notice ? appendToolOutputRecallNotice(limited.result, notice) : limited.result;
         },
       } as ToolDefinition;
     });
@@ -2722,6 +2844,60 @@ ${hints.join('\n')}
         baseCustomTools.push(searchHistoryTool);
         log('[ClaudeAgentRunner] Registered search_history custom tool');
       }
+
+      const recallToolOutputTool: ToolDefinition = {
+        name: 'recall_tool_output',
+        label: 'Recall Tool Output',
+        description:
+          'Read original local tool output that Open Cowork previously compressed or truncated. Use this whenever a tool result includes a tool-output:// handle and omitted evidence may matter. Supports reading by character range or searching within the saved original output.',
+        parameters: Type.Object({
+          handle: Type.String({
+            description:
+              'The saved output handle, for example tool-output://2f4d... or just the id after tool-output://.',
+          }),
+          query: Type.Optional(
+            Type.String({
+              description:
+                'Optional keywords to search inside the saved original output. If provided, returns a matching excerpt with surrounding context.',
+            })
+          ),
+          start: Type.Optional(
+            Type.Number({
+              description:
+                'Optional zero-based character offset for range reads. Ignored when query is provided.',
+            })
+          ),
+          end: Type.Optional(
+            Type.Number({
+              description:
+                'Optional exclusive character end offset for range reads. Ignored when query is provided.',
+            })
+          ),
+          maxChars: Type.Optional(
+            Type.Number({
+              description: 'Maximum characters to return. Defaults to 8000, capped at 20000.',
+            })
+          ),
+        }),
+        execute: async (
+          _toolCallId: string,
+          params: {
+            handle: string;
+            query?: string;
+            start?: number;
+            end?: number;
+            maxChars?: number;
+          }
+        ) => {
+          const result = recallToolOutput(getDatabase(), params);
+          return {
+            content: [{ type: 'text' as const, text: result.text }],
+            details: undefined as unknown,
+          };
+        },
+      };
+      baseCustomTools.push(recallToolOutputTool);
+      log('[ClaudeAgentRunner] Registered recall_tool_output custom tool');
 
       // Register memory tools for durable cross-session project knowledge.
       {

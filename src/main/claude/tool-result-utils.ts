@@ -15,6 +15,17 @@ type NormalizedToolExecutionResult = {
   images: ToolResultImage[];
 };
 
+export interface ToolResultLimitInfo {
+  truncated: boolean;
+  rawChars: number;
+  limitedChars: number;
+}
+
+export interface LimitedToolResult<T> {
+  result: T;
+  info: ToolResultLimitInfo;
+}
+
 const MAX_TOOL_RESULT_TEXT_CHARS = 20_000;
 const MAX_TOOL_RESULT_TEXT_LINES = 600;
 const TOOL_RESULT_HEAD_RATIO = 0.7;
@@ -131,27 +142,69 @@ export function limitToolResultTextForContext(text: string): string {
   return truncateByChars(truncateByLines(scrubbed));
 }
 
+export function limitToolResultTextForContextWithInfo(text: string): {
+  text: string;
+  info: ToolResultLimitInfo;
+} {
+  const scrubbed = scrubUnsafeControlChars(text);
+  const limited = truncateByChars(truncateByLines(scrubbed));
+  return {
+    text: limited,
+    info: {
+      truncated: limited !== scrubbed,
+      rawChars: scrubbed.length,
+      limitedChars: limited.length,
+    },
+  };
+}
+
 export function limitToolExecutionResultForModel<T>(result: T): T {
+  return limitToolExecutionResultForModelWithInfo(result).result;
+}
+
+export function limitToolExecutionResultForModelWithInfo<T>(result: T): LimitedToolResult<T> {
   if (typeof result === 'string') {
-    return limitToolResultTextForContext(result) as T;
+    const limited = limitToolResultTextForContextWithInfo(result);
+    return { result: limited.text as T, info: limited.info };
   }
 
   if (!isRecord(result) || !Array.isArray(result.content)) {
-    return result;
+    return {
+      result,
+      info: {
+        truncated: false,
+        rawChars: 0,
+        limitedChars: 0,
+      },
+    };
   }
 
+  let truncated = false;
+  let rawChars = 0;
+  let limitedChars = 0;
   return {
-    ...result,
-    content: result.content.map((part) => {
-      if (isRecord(part) && part.type === 'text' && typeof part.text === 'string') {
-        return {
-          ...part,
-          text: limitToolResultTextForContext(part.text),
-        };
-      }
-      return part;
-    }),
-  } as T;
+    result: {
+      ...result,
+      content: result.content.map((part) => {
+        if (isRecord(part) && part.type === 'text' && typeof part.text === 'string') {
+          const limited = limitToolResultTextForContextWithInfo(part.text);
+          truncated = truncated || limited.info.truncated;
+          rawChars += limited.info.rawChars;
+          limitedChars += limited.info.limitedChars;
+          return {
+            ...part,
+            text: limited.text,
+          };
+        }
+        return part;
+      }),
+    } as T,
+    info: {
+      truncated,
+      rawChars,
+      limitedChars,
+    },
+  };
 }
 
 function summarizeStructuredToolPart(part: unknown): string | null {

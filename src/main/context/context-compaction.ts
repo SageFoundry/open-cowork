@@ -11,7 +11,6 @@ import { estimateMessagesTokens, getStrategyThresholds } from './context-budget'
 
 const COMPACTABLE_TOOL_NAMES = new Set([
   'read',
-  'grep',
   'glob',
   'bash',
   'pwsh',
@@ -19,6 +18,11 @@ const COMPACTABLE_TOOL_NAMES = new Set([
   'edit',
   'write',
 ]);
+
+interface CompactableToolUse {
+  name: string;
+  input?: Record<string, unknown>;
+}
 
 export interface MicroCompactionResult {
   messages: Message[];
@@ -53,7 +57,31 @@ export function getPreservedTailCount(trigger: CompactionTrigger): number {
   return getStrategyThresholds('auto').preservedTailCount;
 }
 
-function compactToolResult(toolResult: ToolResultContent, toolName: string): ToolResultContent {
+function getCommandText(input?: Record<string, unknown>): string {
+  const command = input?.command;
+  if (typeof command === 'string') {
+    return command;
+  }
+  const query = input?.query;
+  if (typeof query === 'string') {
+    return query;
+  }
+  return '';
+}
+
+function isSearchCommand(toolUse: CompactableToolUse): boolean {
+  const normalizedName = normalizeToolName(toolUse.name);
+  if (normalizedName === 'grep') {
+    return true;
+  }
+  const command = getCommandText(toolUse.input);
+  return /\b(rg|grep|Select-String)\b/i.test(command);
+}
+
+function compactToolResult(
+  toolResult: ToolResultContent,
+  toolUse: CompactableToolUse
+): ToolResultContent {
   if (toolResult.images && toolResult.images.length > 0) {
     return {
       ...toolResult,
@@ -62,11 +90,15 @@ function compactToolResult(toolResult: ToolResultContent, toolName: string): Too
     };
   }
 
-  const normalizedName = normalizeToolName(toolName);
+  if (isSearchCommand(toolUse)) {
+    return toolResult;
+  }
+
+  const normalizedName = normalizeToolName(toolUse.name);
   if (normalizedName === 'bash') {
     return {
       ...toolResult,
-      content: truncateCompactedText(toolResult.content, 240, '[command output compacted]'),
+      content: truncateCompactedText(toolResult.content, 320, '[command output compacted]'),
     };
   }
 
@@ -74,7 +106,7 @@ function compactToolResult(toolResult: ToolResultContent, toolName: string): Too
     ...toolResult,
     content: truncateCompactedText(
       toolResult.content,
-      240,
+      320,
       `[${normalizedName || 'tool'} output compacted]`
     ),
   };
@@ -88,7 +120,11 @@ function truncateCompactedText(text: string, maxChars: number, fallback: string)
   if (normalized.length <= maxChars) {
     return normalized;
   }
-  return `${normalized.slice(0, maxChars).trimEnd()}\n...[compacted]`;
+  const headChars = Math.max(120, Math.floor(maxChars * 0.6));
+  const tailChars = Math.max(80, maxChars - headChars);
+  const head = normalized.slice(0, headChars).trimEnd();
+  const tail = normalized.slice(-tailChars).trimStart();
+  return `${head}\n...[middle compacted]...\n${tail}`;
 }
 
 export function microCompactMessages(
@@ -105,7 +141,7 @@ export function microCompactMessages(
     };
   }
 
-  const compactableToolUses = new Map<string, string>();
+  const compactableToolUses = new Map<string, CompactableToolUse>();
   const compactedMessages = messages.map((message, index) => {
     if (index >= messages.length - preservedTailCount) {
       return message;
@@ -116,7 +152,10 @@ export function microCompactMessages(
       if (block.type === 'tool_use') {
         const toolUse = block as ToolUseContent;
         if (COMPACTABLE_TOOL_NAMES.has(normalizeToolName(toolUse.name))) {
-          compactableToolUses.set(toolUse.id, toolUse.name);
+          compactableToolUses.set(toolUse.id, {
+            name: toolUse.name,
+            input: toolUse.input,
+          });
         }
         return block;
       }
@@ -126,13 +165,14 @@ export function microCompactMessages(
       }
 
       const toolResult = block as ToolResultContent;
-      const toolName = compactableToolUses.get(toolResult.toolUseId);
-      if (!toolName) {
+      const toolUse = compactableToolUses.get(toolResult.toolUseId);
+      if (!toolUse) {
         return block;
       }
 
-      changed = true;
-      return compactToolResult(toolResult, toolName);
+      const compactedResult = compactToolResult(toolResult, toolUse);
+      changed = changed || compactedResult !== toolResult;
+      return compactedResult;
     });
 
     if (!changed) {
@@ -218,6 +258,9 @@ export function buildCompactionInfo(input: {
   sessionId: string;
   compactionType: CompactionType;
   trigger: CompactionTrigger;
+  status?: SessionCompactionInfo['status'];
+  skipReason?: SessionCompactionInfo['skipReason'];
+  failureCount?: number;
   boundaryCreated: boolean;
   estimatedTokensBefore: number;
   estimatedTokensAfter: number;
@@ -229,6 +272,9 @@ export function buildCompactionInfo(input: {
     sessionId: input.sessionId,
     compactionType: input.compactionType,
     trigger: input.trigger,
+    status: input.status,
+    skipReason: input.skipReason,
+    failureCount: input.failureCount,
     boundaryCreated: input.boundaryCreated,
     estimatedTokensBefore: input.estimatedTokensBefore,
     estimatedTokensAfter: input.estimatedTokensAfter,

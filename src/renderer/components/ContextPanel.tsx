@@ -31,7 +31,7 @@ import {
   SlidersHorizontal,
   BarChart3,
 } from 'lucide-react';
-import type { TraceStep, MCPServerInfo, BackgroundTask } from '../types';
+import type { TraceStep, MCPServerInfo, BackgroundTask, SessionCompactionInfo } from '../types';
 import type { ToolCompressionBreakdownItem, ToolCompressionStats } from '../../shared/ipc-types';
 
 interface MemoryListItem {
@@ -114,6 +114,10 @@ function CompressionBreakdownList({
   );
 }
 
+function formatCompactionTrigger(trigger: SessionCompactionInfo['trigger']) {
+  return trigger;
+}
+
 export function ContextPanel() {
   const { t } = useTranslation();
   const activeSessionId = useAppStore((s) => s.activeSessionId);
@@ -160,10 +164,12 @@ export function ContextPanel() {
   const [sessionCompressionStats, setSessionCompressionStats] =
     useState<ToolCompressionStats | null>(null);
   const [compressionStatsOpen, setCompressionStatsOpen] = useState(false);
+  const [contextStatsOpen, setContextStatsOpen] = useState(false);
+  const [compactConfirmOpen, setCompactConfirmOpen] = useState(false);
   const ss = activeSessionId ? sessionStates[activeSessionId] : undefined;
   const steps = ss?.traceSteps ?? EMPTY_STEPS;
   const tokenBudget = ss?.tokenBudget ?? null;
-  const latestCompaction = ss?.latestCompaction ?? null;
+  const compactionHistory = ss?.compactionHistory ?? [];
   const compactionState = ss?.compactionState ?? null;
   const isCompacting = Boolean(compactionState);
 
@@ -203,13 +209,17 @@ export function ContextPanel() {
       return;
     }
 
-    const confirmed = window.confirm(t('context.compactConfirm'));
+    setCompactConfirmOpen(true);
+  };
 
-    if (!confirmed) {
+  const handleConfirmCompactNow = async () => {
+    if (!activeSessionId || ss?.compactionState) {
+      setCompactConfirmOpen(false);
       return;
     }
 
     try {
+      setCompactConfirmOpen(false);
       await compactSession(activeSessionId);
     } catch (error) {
       setGlobalNotice({
@@ -289,6 +299,36 @@ export function ContextPanel() {
     () => Math.max(1, ...(sessionCompressionStats?.daily.map((item) => item.savedTokens) ?? [0])),
     [sessionCompressionStats]
   );
+  const contextCompactionStats = useMemo(() => {
+    const created = compactionHistory.filter((item) => item.boundaryCreated);
+    const skipped = compactionHistory.filter((item) => item.status === 'skipped');
+    const fallback = compactionHistory.filter((item) => item.status === 'fallback');
+    const savedTokens = created.reduce(
+      (sum, item) =>
+        sum + Math.max(0, item.estimatedTokensBefore - item.estimatedTokensAfter),
+      0
+    );
+    const avgSavingsPct =
+      created.length > 0
+        ? created.reduce((sum, item) => {
+            if (item.estimatedTokensBefore <= 0) return sum;
+            return (
+              sum +
+              ((item.estimatedTokensBefore - item.estimatedTokensAfter) /
+                item.estimatedTokensBefore) *
+                100
+            );
+          }, 0) / created.length
+        : 0;
+    return {
+      total: compactionHistory.length,
+      created: created.length,
+      skipped: skipped.length,
+      fallback: fallback.length,
+      savedTokens,
+      avgSavingsPct,
+    };
+  }, [compactionHistory]);
 
   // Token usage aggregation
   const tokenUsage = useMemo(() => {
@@ -324,6 +364,30 @@ export function ContextPanel() {
     if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
     return String(Math.round(value));
   }, []);
+
+  const formatLatestCompaction = useCallback(
+    (info: SessionCompactionInfo) => {
+      const time = new Date(info.createdAt).toLocaleTimeString();
+      if (info.status === 'skipped') {
+        return t('context.lastCompactSkipped', {
+          reason: info.skipReason ? t(`context.compactionSkipReasons.${info.skipReason}`) : '--',
+          time,
+        });
+      }
+      if (info.status === 'fallback') {
+        return t('context.lastCompactFallback', {
+          type: formatCompactionTrigger(info.trigger),
+          time,
+          count: info.failureCount ?? 1,
+        });
+      }
+      return t('context.lastCompact', {
+        type: info.compactionType,
+        time,
+      });
+    },
+    [t]
+  );
 
   const isActiveBackgroundTask = useCallback(
     (task: BackgroundTask) =>
@@ -689,7 +753,7 @@ export function ContextPanel() {
   }
 
   return (
-    <div className="w-72 bg-background border-l border-border-muted flex flex-col overflow-hidden text-sm">
+    <div className="w-72 min-h-0 bg-background border-l border-border-muted flex flex-col overflow-hidden text-sm">
       {/* Header */}
       <div className="px-3 h-10 flex items-center gap-2 border-b border-border-muted shrink-0">
         <button
@@ -729,6 +793,76 @@ export function ContextPanel() {
           </div>
         </div>
       )}
+
+      {/* Working Directory */}
+      <div className="border-b border-border-muted shrink-0">
+        <div className="px-4 py-2.5">
+          <p className="text-xs font-medium text-text-muted uppercase tracking-wider mb-2">
+            {t('context.workingDirectory')}
+          </p>
+          <div className="flex items-center gap-1.5 min-w-0">
+            <FolderOpen className="w-3.5 h-3.5 text-text-muted shrink-0" />
+            <span
+              className={`text-xs truncate flex-1 ${currentWorkingDir ? 'text-text-primary cursor-pointer hover:text-accent-primary transition-colors' : 'text-text-muted'}`}
+              title={currentWorkingDir ? t('context.openInFileManager') : ''}
+              onClick={handleOpenWorkingDir}
+            >
+              {currentWorkingDir ? formatPath(currentWorkingDir) : t('context.noFolderSelected')}
+            </span>
+            {currentWorkingDir && (
+              <button
+                onClick={() => handleCopyPath(currentWorkingDir)}
+                className="text-text-muted hover:text-text-primary transition-colors shrink-0 ml-1"
+                title={t('context.copyPath')}
+              >
+                {copiedPath ? (
+                  <Check className="w-3 h-3 text-success" />
+                ) : (
+                  <Copy className="w-3 h-3" />
+                )}
+              </button>
+            )}
+            <button
+              onClick={async () => {
+                setIsChangingDir(true);
+                try {
+                  const result = await changeWorkingDir(
+                    activeSessionId || undefined,
+                    currentWorkingDir || undefined
+                  );
+                  if (!result.success && result.error && result.error !== 'User cancelled') {
+                    setGlobalNotice({
+                      id: `change-dir-failed-${Date.now()}`,
+                      type: 'warning',
+                      message: `${t('context.changeDirFailed')}: ${result.error}`,
+                    });
+                  }
+                } catch (error) {
+                  setGlobalNotice({
+                    id: `change-dir-failed-${Date.now()}`,
+                    type: 'error',
+                    message:
+                      error instanceof Error && error.message
+                        ? `${t('context.changeDirFailed')}: ${error.message}`
+                        : t('context.changeDirFailed'),
+                  });
+                } finally {
+                  setIsChangingDir(false);
+                }
+              }}
+              disabled={isChangingDir}
+              className="text-text-muted hover:text-text-primary disabled:opacity-50 transition-colors shrink-0"
+              title={t('context.changeDir')}
+            >
+              {isChangingDir ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : (
+                <FolderSync className="w-3 h-3" />
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
 
       {/* Context Usage */}
       {activeSession && (
@@ -787,21 +921,30 @@ export function ContextPanel() {
               )}
               <div className="flex items-center justify-between gap-2 pt-0.5">
                 <span className="text-[11px] text-text-muted truncate">
-                  {latestCompaction
-                    ? t('context.lastCompact', {
-                        type: latestCompaction.compactionType,
-                        time: new Date(latestCompaction.createdAt).toLocaleTimeString(),
-                      })
-                    : t('context.noCompaction')}
+                  {t('context.contextManageSummary', {
+                    saved: formatCompressionTokens(contextCompactionStats.savedTokens),
+                    compacted: contextCompactionStats.created,
+                    total: contextCompactionStats.total,
+                  })}
                 </span>
-                <button
-                  onClick={handleCompactNow}
-                  disabled={!activeSessionId || isCompacting}
-                  className="shrink-0 inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-border-muted text-[11px] text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isCompacting && <Loader2 className="w-3 h-3 animate-spin" />}
-                  <span>{isCompacting ? t('context.compacting') : t('context.compactNow')}</span>
-                </button>
+                <div className="shrink-0 flex items-center gap-1">
+                  <button
+                    onClick={() => setContextStatsOpen(true)}
+                    disabled={contextCompactionStats.total === 0}
+                    className="inline-flex items-center justify-center w-6 h-6 rounded-md text-text-muted hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
+                    title={t('context.manageContextStats')}
+                  >
+                    <SlidersHorizontal className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={handleCompactNow}
+                    disabled={!activeSessionId || isCompacting}
+                    className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-border-muted text-[11px] text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isCompacting && <Loader2 className="w-3 h-3 animate-spin" />}
+                    <span>{isCompacting ? t('context.compacting') : t('context.compactNowShort')}</span>
+                  </button>
+                </div>
               </div>
               {isCompacting && (
                 <div className="flex items-center gap-1.5 rounded-md bg-surface-muted px-2 py-1.5 text-[11px] text-text-muted">
@@ -819,6 +962,8 @@ export function ContextPanel() {
           )}
         </div>
       )}
+
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
 
       {/* Background Tasks Section */}
       <div className="border-b border-border-muted">
@@ -1102,7 +1247,7 @@ export function ContextPanel() {
       </div>
 
       {activeSessionId && (
-        <div className="border-b border-border-muted px-4 py-3 space-y-2">
+        <div className="border-b border-border-muted px-4 py-2.5">
           <div className="flex items-center justify-between gap-2">
             <span className="flex items-center gap-1.5 text-xs font-medium text-text-muted uppercase tracking-wider">
               <BarChart3 className="w-3.5 h-3.5 text-text-muted opacity-70" />
@@ -1111,40 +1256,53 @@ export function ContextPanel() {
             <button
               onClick={() => setCompressionStatsOpen(true)}
               disabled={!sessionCompressionStats || sessionCompressionStats.totalCommands === 0}
-              className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md text-text-secondary hover:bg-surface-hover transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
+              className="inline-flex items-center justify-center w-6 h-6 rounded-md text-text-muted hover:text-text-primary hover:bg-surface-hover transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
+              title={t('context.manageCompressionStats')}
             >
-              <SlidersHorizontal className="w-3 h-3" />
-              <span>{t('context.manageCompressionStats')}</span>
+              <SlidersHorizontal className="w-3.5 h-3.5" />
             </button>
           </div>
-
-          <div className="grid grid-cols-3 gap-1.5">
-            <div className="rounded-md border border-border-muted bg-surface/70 px-2 py-1.5">
-              <div className="text-[10px] text-text-muted">
-                {t('context.compressionSavedTotal')}
-              </div>
-              <div className="mt-0.5 text-xs font-semibold text-text-primary">
-                {formatCompressionTokens(sessionCompressionStats?.totalSavedTokens ?? 0)}
-              </div>
-            </div>
-            <div className="rounded-md border border-border-muted bg-surface/70 px-2 py-1.5">
-              <div className="text-[10px] text-text-muted">
-                {t('context.compressionAvgSavings')}
-              </div>
-              <div className="mt-0.5 text-xs font-semibold text-text-primary">
-                {(sessionCompressionStats?.avgSavingsPct ?? 0).toFixed(1)}%
-              </div>
-            </div>
-            <div className="rounded-md border border-border-muted bg-surface/70 px-2 py-1.5">
-              <div className="text-[10px] text-text-muted">{t('context.compressionCommands')}</div>
-              <div className="mt-0.5 text-xs font-semibold text-text-primary">
-                {sessionCompressionStats?.compressedCommands ?? 0}/
-                {sessionCompressionStats?.totalCommands ?? 0}
-              </div>
-            </div>
+          <div className="mt-1 text-[11px] text-text-muted truncate">
+            {t('context.compressionInlineSummary', {
+              saved: formatCompressionTokens(sessionCompressionStats?.totalSavedTokens ?? 0),
+              avg: (sessionCompressionStats?.avgSavingsPct ?? 0).toFixed(1),
+              compressed: sessionCompressionStats?.compressedCommands ?? 0,
+              total: sessionCompressionStats?.totalCommands ?? 0,
+            })}
           </div>
         </div>
       )}
+
+      {/* MCP Connectors */}
+      <div className="border-b border-border-muted">
+        <div className="px-4 py-2.5">
+          <p className="text-xs font-medium text-text-muted uppercase tracking-wider mb-2">
+            {t('context.mcpConnectors')}
+          </p>
+          {mcpServers.length === 0 ? (
+            <div className="flex items-center gap-2 text-xs text-text-muted py-1">
+              <Plug className="w-3.5 h-3.5 shrink-0" />
+              <span>{t('mcp.noConnectors')}</span>
+            </div>
+          ) : (
+            <div className="space-y-0.5">
+              {mcpServers.map((server) => (
+                <ConnectorItem
+                  key={server.id}
+                  server={server}
+                  steps={steps}
+                  expanded={expandedConnector === server.id}
+                  onToggle={() =>
+                    setExpandedConnector(expandedConnector === server.id ? null : server.id)
+                  }
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      </div>
 
       {compressionStatsOpen && (
         <div
@@ -1273,6 +1431,129 @@ export function ContextPanel() {
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {contextStatsOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => setContextStatsOpen(false)}
+        >
+          <div
+            className="bg-surface rounded-xl shadow-xl w-[min(760px,calc(100vw-32px))] h-[min(560px,calc(100vh-48px))] overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-border-muted flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-text-primary">
+                  {t('context.contextStatsDetail')}
+                </h3>
+                <p className="text-xs text-text-muted mt-1">{t('context.contextStatsHint')}</p>
+              </div>
+              <button
+                onClick={() => setContextStatsOpen(false)}
+                className="p-1.5 hover:bg-surface-hover rounded-md transition-colors"
+              >
+                <ChevronDown className="w-4 h-4 text-text-muted" />
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto space-y-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="rounded-lg border border-border-muted bg-surface/70 p-3">
+                  <div className="text-xs text-text-muted">{t('context.contextSavedTotal')}</div>
+                  <div className="mt-1 text-lg font-semibold text-text-primary">
+                    {formatCompressionTokens(contextCompactionStats.savedTokens)}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-border-muted bg-surface/70 p-3">
+                  <div className="text-xs text-text-muted">{t('context.contextAvgSavings')}</div>
+                  <div className="mt-1 text-lg font-semibold text-text-primary">
+                    {contextCompactionStats.avgSavingsPct.toFixed(1)}%
+                  </div>
+                </div>
+                <div className="rounded-lg border border-border-muted bg-surface/70 p-3">
+                  <div className="text-xs text-text-muted">{t('context.contextCompactions')}</div>
+                  <div className="mt-1 text-lg font-semibold text-text-primary">
+                    {contextCompactionStats.created}/{contextCompactionStats.total}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-border-muted bg-surface/70 p-3">
+                  <div className="text-xs text-text-muted">{t('context.contextSkipped')}</div>
+                  <div className="mt-1 text-lg font-semibold text-text-primary">
+                    {contextCompactionStats.skipped}
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-border-muted bg-surface/70 overflow-hidden">
+                <div className="px-3 py-2 text-xs font-medium text-text-secondary border-b border-border-muted">
+                  {t('context.contextRecentEvents')}
+                </div>
+                <div className="divide-y divide-border-muted">
+                  {compactionHistory.map((item) => (
+                    <div key={`${item.createdAt}-${item.compactionType}`} className="px-3 py-2">
+                      <div className="flex items-center justify-between gap-3 text-xs">
+                        <span className="text-text-primary truncate">
+                          {formatLatestCompaction(item)}
+                        </span>
+                        <span className="text-text-muted shrink-0">
+                          {formatCompressionTokens(
+                            Math.max(0, item.estimatedTokensBefore - item.estimatedTokensAfter)
+                          )}
+                        </span>
+                      </div>
+                      <div className="mt-1 text-[11px] text-text-muted">
+                        {t('context.contextEventDetail', {
+                          before: formatCompressionTokens(item.estimatedTokensBefore),
+                          after: formatCompressionTokens(item.estimatedTokensAfter),
+                          tail: item.preservedTailCount,
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                  {compactionHistory.length === 0 && (
+                    <div className="px-3 py-4 text-xs text-text-muted">
+                      {t('context.contextNoStats')}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {compactConfirmOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => setCompactConfirmOpen(false)}
+        >
+          <div
+            className="w-[min(420px,calc(100vw-32px))] rounded-xl bg-surface shadow-xl border border-border-muted overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-border-muted">
+              <h3 className="text-sm font-semibold text-text-primary">
+                {t('context.compactConfirmTitle')}
+              </h3>
+              <p className="mt-2 text-xs leading-5 text-text-muted">{t('context.compactConfirm')}</p>
+            </div>
+            <div className="px-5 py-3 flex justify-end gap-2">
+              <button
+                onClick={() => setCompactConfirmOpen(false)}
+                className="px-3 py-1.5 rounded-md border border-border-muted text-xs text-text-secondary hover:bg-surface-hover transition-colors"
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                onClick={handleConfirmCompactNow}
+                className="px-3 py-1.5 rounded-md bg-accent text-white text-xs hover:bg-accent-hover transition-colors"
+              >
+                {t('context.compactNow')}
+              </button>
             </div>
           </div>
         </div>
@@ -1619,104 +1900,6 @@ export function ContextPanel() {
         </div>
       )}
 
-      {/* Working Directory */}
-      <div className="border-b border-border-muted">
-        <div className="px-4 py-2.5">
-          <p className="text-xs font-medium text-text-muted uppercase tracking-wider mb-2">
-            {t('context.workingDirectory')}
-          </p>
-          <div className="flex items-center gap-1.5 min-w-0">
-            <FolderOpen className="w-3.5 h-3.5 text-text-muted shrink-0" />
-            <span
-              className={`text-xs truncate flex-1 ${currentWorkingDir ? 'text-text-primary cursor-pointer hover:text-accent-primary transition-colors' : 'text-text-muted'}`}
-              title={currentWorkingDir ? t('context.openInFileManager') : ''}
-              onClick={handleOpenWorkingDir}
-            >
-              {currentWorkingDir ? formatPath(currentWorkingDir) : t('context.noFolderSelected')}
-            </span>
-            {currentWorkingDir && (
-              <button
-                onClick={() => handleCopyPath(currentWorkingDir)}
-                className="text-text-muted hover:text-text-primary transition-colors shrink-0 ml-1"
-                title={t('context.copyPath')}
-              >
-                {copiedPath ? (
-                  <Check className="w-3 h-3 text-success" />
-                ) : (
-                  <Copy className="w-3 h-3" />
-                )}
-              </button>
-            )}
-            <button
-              onClick={async () => {
-                setIsChangingDir(true);
-                try {
-                  const result = await changeWorkingDir(
-                    activeSessionId || undefined,
-                    currentWorkingDir || undefined
-                  );
-                  if (!result.success && result.error && result.error !== 'User cancelled') {
-                    setGlobalNotice({
-                      id: `change-dir-failed-${Date.now()}`,
-                      type: 'warning',
-                      message: `${t('context.changeDirFailed')}: ${result.error}`,
-                    });
-                  }
-                } catch (error) {
-                  setGlobalNotice({
-                    id: `change-dir-failed-${Date.now()}`,
-                    type: 'error',
-                    message:
-                      error instanceof Error && error.message
-                        ? `${t('context.changeDirFailed')}: ${error.message}`
-                        : t('context.changeDirFailed'),
-                  });
-                } finally {
-                  setIsChangingDir(false);
-                }
-              }}
-              disabled={isChangingDir}
-              className="text-text-muted hover:text-text-primary disabled:opacity-50 transition-colors shrink-0"
-              title={t('context.changeDir')}
-            >
-              {isChangingDir ? (
-                <Loader2 className="w-3 h-3 animate-spin" />
-              ) : (
-                <FolderSync className="w-3 h-3" />
-              )}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* MCP Connectors */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="px-4 py-2.5">
-          <p className="text-xs font-medium text-text-muted uppercase tracking-wider mb-2">
-            {t('context.mcpConnectors')}
-          </p>
-          {mcpServers.length === 0 ? (
-            <div className="flex items-center gap-2 text-xs text-text-muted py-1">
-              <Plug className="w-3.5 h-3.5 shrink-0" />
-              <span>{t('mcp.noConnectors')}</span>
-            </div>
-          ) : (
-            <div className="space-y-0.5">
-              {mcpServers.map((server) => (
-                <ConnectorItem
-                  key={server.id}
-                  server={server}
-                  steps={steps}
-                  expanded={expandedConnector === server.id}
-                  onToggle={() =>
-                    setExpandedConnector(expandedConnector === server.id ? null : server.id)
-                  }
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
     </div>
   );
 }

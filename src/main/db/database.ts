@@ -62,6 +62,13 @@ export interface DatabaseInstance {
     delete: (id: string) => void;
   };
 
+  toolOutputSnapshots: {
+    create: (snapshot: ToolOutputSnapshotRow) => void;
+    get: (id: string) => ToolOutputSnapshotRow | undefined;
+    deleteOlderThan: (timestamp: number) => void;
+    deleteBySessionId: (sessionId: string) => void;
+  };
+
   // For compatibility with old interface
   prepare: (sql: string) => Database.Statement;
   exec: (sql: string) => void;
@@ -144,6 +151,17 @@ export interface BackgroundTaskRow {
   source_session_id: string | null;
   created_at: number;
   updated_at: number;
+}
+
+export interface ToolOutputSnapshotRow {
+  id: string;
+  session_id: string | null;
+  project_path: string | null;
+  tool_name: string;
+  reason: string;
+  raw_chars: number;
+  content: string;
+  created_at: number;
 }
 
 export interface CompactionSnapshotRow {
@@ -606,6 +624,30 @@ function initializeSchema(database: Database.Database): void {
     ON tool_output_compression_events(session_id, timestamp)
   `);
 
+    database.exec(`
+    CREATE TABLE IF NOT EXISTS tool_output_snapshots (
+      id TEXT PRIMARY KEY,
+      session_id TEXT,
+      project_path TEXT,
+      tool_name TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      raw_chars INTEGER NOT NULL,
+      content TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+    )
+  `);
+
+    database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_tool_output_snapshots_session_created
+    ON tool_output_snapshots(session_id, created_at DESC)
+  `);
+
+    database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_tool_output_snapshots_created
+    ON tool_output_snapshots(created_at)
+  `);
+
     log('[Database] Schema initialized');
   } catch (error) {
     logError('[Database] Schema initialization failed:', error);
@@ -810,6 +852,25 @@ export function initDatabase(): DatabaseInstance {
 
   const deleteBackgroundTaskStmt = rawDb.prepare(`
     DELETE FROM background_tasks WHERE id = ?
+  `);
+
+  const insertToolOutputSnapshot = rawDb.prepare(`
+    INSERT OR REPLACE INTO tool_output_snapshots (
+      id, session_id, project_path, tool_name, reason, raw_chars, content, created_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const getToolOutputSnapshotStmt = rawDb.prepare(`
+    SELECT * FROM tool_output_snapshots WHERE id = ?
+  `);
+
+  const deleteToolOutputSnapshotsOlderThanStmt = rawDb.prepare(`
+    DELETE FROM tool_output_snapshots WHERE created_at < ?
+  `);
+
+  const deleteToolOutputSnapshotsBySessionStmt = rawDb.prepare(`
+    DELETE FROM tool_output_snapshots WHERE session_id = ?
   `);
 
   db = {
@@ -1104,6 +1165,33 @@ export function initDatabase(): DatabaseInstance {
 
       delete: (id: string) => {
         deleteBackgroundTaskStmt.run(id);
+      },
+    },
+
+    toolOutputSnapshots: {
+      create: (snapshot: ToolOutputSnapshotRow) => {
+        insertToolOutputSnapshot.run(
+          snapshot.id,
+          snapshot.session_id,
+          snapshot.project_path,
+          snapshot.tool_name,
+          snapshot.reason,
+          snapshot.raw_chars,
+          snapshot.content,
+          snapshot.created_at
+        );
+      },
+
+      get: (id: string): ToolOutputSnapshotRow | undefined => {
+        return getToolOutputSnapshotStmt.get(id) as ToolOutputSnapshotRow | undefined;
+      },
+
+      deleteOlderThan: (timestamp: number) => {
+        deleteToolOutputSnapshotsOlderThanStmt.run(timestamp);
+      },
+
+      deleteBySessionId: (sessionId: string) => {
+        deleteToolOutputSnapshotsBySessionStmt.run(sessionId);
       },
     },
 

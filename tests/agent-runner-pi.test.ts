@@ -98,9 +98,10 @@ describe('ClaudeAgentRunner pi-coding-agent integration', () => {
 
   it('routes MCP image results through structured helpers instead of stringifying base64 into text', () => {
     expect(agentRunnerContent).toContain(
-      "import {\n  limitToolExecutionResultForModel,\n  normalizeMcpToolResultForModel,\n  normalizeToolExecutionResultForUi,\n} from './tool-result-utils'"
+      "import {\n  limitToolExecutionResultForModelWithInfo,\n  normalizeMcpToolResultForModel,\n  normalizeToolExecutionResultForUi,\n} from './tool-result-utils'"
     );
-    expect(agentRunnerContent).toContain('return limitToolExecutionResultForModel(result);');
+    expect(agentRunnerContent).toContain('limitToolExecutionResultForModelWithInfo(result);');
+    expect(agentRunnerContent).toContain('recall_tool_output');
     expect(agentRunnerContent).toContain(
       'const normalizedResult = normalizeMcpToolResultForModel(result);'
     );

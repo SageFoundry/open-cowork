@@ -56,6 +56,7 @@ export interface SessionState {
   contextWindow: number;
   tokenBudget: TokenBudgetSnapshot | null;
   latestCompaction: SessionCompactionInfo | null;
+  compactionHistory: SessionCompactionInfo[];
   compactionState: SessionCompactionState | null;
   planMode: boolean;
 }
@@ -77,6 +78,7 @@ const DEFAULT_SESSION_STATE: SessionState = {
   contextWindow: 0,
   tokenBudget: null,
   latestCompaction: null,
+  compactionHistory: [],
   compactionState: null,
   planMode: false,
 };
@@ -723,9 +725,18 @@ export const useAppStore = create<AppState>((set) => ({
       sessionStates: patchSession(state.sessionStates, sessionId, { compactionState }),
     })),
   setSessionCompaction: (sessionId, latestCompaction) =>
-    set((state) => ({
-      sessionStates: patchSession(state.sessionStates, sessionId, { latestCompaction }),
-    })),
+    set((state) => {
+      const current = getSession(state.sessionStates, sessionId);
+      const compactionHistory = latestCompaction
+        ? [latestCompaction, ...current.compactionHistory].slice(0, 20)
+        : current.compactionHistory;
+      return {
+        sessionStates: patchSession(state.sessionStates, sessionId, {
+          latestCompaction,
+          compactionHistory,
+        }),
+      };
+    }),
   setSessionPlanMode: (sessionId, planMode) =>
     set((state) => {
       // Also update the session object itself so it persists
