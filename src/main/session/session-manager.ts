@@ -39,7 +39,13 @@ import {
   reinitializeSandbox,
 } from '../sandbox/sandbox-adapter';
 import { SandboxSync } from '../sandbox/sandbox-sync';
-import { ClaudeAgentRunner, HistorySearchResult } from '../claude/agent-runner';
+import {
+  ClaudeAgentRunner,
+  type HistoryReadRequest,
+  type HistoryReadResult,
+  type HistorySearchRequest,
+  type HistorySearchResult,
+} from '../claude/agent-runner';
 import { configStore } from '../config/config-store';
 import { MCPManager } from '../mcp/mcp-manager';
 import { mcpConfigStore } from '../mcp/mcp-config-store';
@@ -91,6 +97,30 @@ interface AgentRunner {
 
 const WORKSPACE_MOUNT_VIRTUAL_PATH = '/mnt/workspace';
 const TITLE_GENERATION_TIMEOUT_MS = 20000;
+const HISTORY_SEARCH_MAX_RESULTS = 50;
+const HISTORY_READ_MAX_CHARS = 30000;
+const HISTORY_SEARCH_STOP_WORDS = new Set([
+  'history',
+  'record',
+  'records',
+  'conversation',
+  'session',
+  'chat',
+  'search',
+  'tool',
+  'tools',
+  '历史',
+  '记录',
+  '对话',
+  '会话',
+  '聊天',
+  '搜索',
+  '查询',
+  '工具',
+  '之前',
+  '前面',
+  '关于',
+]);
 const COMPACTION_SUMMARY_SYSTEM_PROMPT = `CRITICAL: Respond with TEXT ONLY. Do not call tools, do not browse files, do not ask the user questions, and do not include code fences unless a tiny snippet is essential.
 
 Create a structured continuation summary for a coding agent that must resume the same session after context compaction.
@@ -120,6 +150,178 @@ Section guidance:
 
 If evidence is missing, say "Unknown" briefly instead of inventing details.
 CRITICAL: Respond with TEXT ONLY. No tool use. No follow-up question.`;
+
+function normalizeHistorySearchText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[`"'“”‘’]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function tokenizeHistoryQuery(query: string): string[] {
+  const normalized = normalizeHistorySearchText(query);
+  if (!normalized) return [];
+  const terms = Array.from(new Set(normalized.split(/\s+/).filter(Boolean)));
+  const contentTerms = terms.filter((term) => !HISTORY_SEARCH_STOP_WORDS.has(term));
+  return contentTerms.length > 0 ? contentTerms : terms;
+}
+
+function normalizeHistoryLimit(value: number | undefined, fallback: number): number {
+  if (!Number.isFinite(value ?? NaN)) return fallback;
+  return Math.max(1, Math.min(HISTORY_SEARCH_MAX_RESULTS, Math.floor(value as number)));
+}
+
+function normalizeHistoryWindowCount(value: number | undefined, fallback: number): number {
+  if (!Number.isFinite(value ?? NaN)) return fallback;
+  return Math.max(0, Math.min(20, Math.floor(value as number)));
+}
+
+function normalizeHistoryMaxChars(value: number | undefined): number {
+  if (!Number.isFinite(value ?? NaN)) return 12000;
+  return Math.max(1000, Math.min(HISTORY_READ_MAX_CHARS, Math.floor(value as number)));
+}
+
+function isHistorySearchToolName(name: string | undefined): boolean {
+  return name === 'search_history' || name === 'read_history';
+}
+
+function isHistorySearchMetaText(text: string): boolean {
+  const normalized = text.toLowerCase();
+  const mentionsHistorySearch =
+    normalized.includes('search_history') ||
+    normalized.includes('read_history') ||
+    normalized.includes('历史搜索') ||
+    normalized.includes('搜索历史') ||
+    normalized.includes('历史会话') ||
+    normalized.includes('历史记录') ||
+    normalized.includes('搜索工具');
+  if (!mentionsHistorySearch) return false;
+  return (
+    normalized.includes('tool') ||
+    normalized.includes('tools') ||
+    normalized.includes('工具') ||
+    normalized.includes('测试') ||
+    normalized.includes('优化') ||
+    normalized.includes('再搜') ||
+    normalized.includes('搜一次') ||
+    normalized.includes('能不能搜到') ||
+    normalized.includes('找不到') ||
+    normalized.includes('没有找到')
+  );
+}
+
+function isHistorySearchToolResultText(text: string): boolean {
+  const normalized = text.toLowerCase();
+  return (
+    normalized.includes('no history messages found matching') ||
+    normalized.includes('no messages found matching') ||
+    normalized.includes('matching messages in the current session history') ||
+    normalized.includes('matching history messages') ||
+    normalized.includes('history window from session') ||
+    normalized.includes('搜索到了当前会话的历史记录') ||
+    (normalized.includes('没有找到') &&
+      (normalized.includes('历史记录') || normalized.includes('history')))
+  );
+}
+
+function flattenMessageForHistorySearch(
+  message: Message,
+  options: { includeToolResults: boolean; includeSearchToolResults: boolean }
+): string {
+  const textBlocks: string[] = [];
+  for (const block of message.content) {
+    if (block.type === 'text') {
+      if (
+        !options.includeSearchToolResults &&
+        (isHistorySearchToolResultText((block as { text: string }).text) ||
+          isHistorySearchMetaText((block as { text: string }).text))
+      ) {
+        continue;
+      }
+      textBlocks.push((block as { text: string }).text);
+    } else if (block.type === 'thinking') {
+      continue;
+    } else if (block.type === 'tool_use') {
+      const toolUse = block as { name?: string; input?: Record<string, unknown> };
+      if (!options.includeSearchToolResults && isHistorySearchToolName(toolUse.name)) {
+        continue;
+      }
+      textBlocks.push(
+        `[tool_use: ${toolUse.name ?? 'tool'}] ${JSON.stringify(toolUse.input ?? {})}`
+      );
+    } else if (block.type === 'tool_result') {
+      if (!options.includeToolResults) continue;
+      const resultText = String((block as { content?: unknown }).content ?? '');
+      if (!options.includeSearchToolResults && isHistorySearchToolResultText(resultText)) {
+        continue;
+      }
+      textBlocks.push(resultText.slice(0, 4000));
+    }
+  }
+  return textBlocks.join('\n');
+}
+
+function flattenMessageForHistoryRead(message: Message): string {
+  const textBlocks: string[] = [];
+  for (const block of message.content) {
+    if (block.type === 'text') {
+      textBlocks.push((block as { text: string }).text);
+    } else if (block.type === 'thinking') {
+      continue;
+    } else if (block.type === 'tool_use') {
+      const toolUse = block as { name?: string; input?: Record<string, unknown> };
+      textBlocks.push(
+        `[tool_use: ${toolUse.name ?? 'tool'}]\n${JSON.stringify(toolUse.input ?? {}, null, 2)}`
+      );
+    } else if (block.type === 'tool_result') {
+      textBlocks.push(`[tool_result]\n${String((block as { content?: unknown }).content ?? '')}`);
+    }
+  }
+  return textBlocks.join('\n\n');
+}
+
+function scoreHistoryMatch(
+  normalizedText: string,
+  normalizedQuery: string,
+  terms: string[],
+  mode: 'smart' | 'exact' | 'all' | 'any'
+): number {
+  const phraseMatch = normalizedText.includes(normalizedQuery);
+  if (mode === 'exact') return phraseMatch ? 1000 + normalizedQuery.length : 0;
+
+  const hitCount = terms.filter((term) => normalizedText.includes(term)).length;
+  if (mode === 'all') {
+    if (hitCount === terms.length) return 500 + hitCount * 20;
+    return hitCount > 0 ? hitCount * 20 : 0;
+  }
+  if (mode === 'any') return hitCount > 0 ? hitCount * 20 : 0;
+
+  if (phraseMatch) return 1000 + normalizedQuery.length;
+  if (hitCount === terms.length && terms.length > 1) return 500 + hitCount * 30;
+  if (hitCount > 0) return hitCount * 20;
+  return 0;
+}
+
+function buildHistorySnippet(
+  originalText: string,
+  normalizedText: string,
+  normalizedQuery: string,
+  terms: string[]
+): string {
+  const lowerOriginal = originalText.toLowerCase();
+  const firstTerm = normalizedText.includes(normalizedQuery)
+    ? normalizedQuery
+    : terms.find((term) => normalizedText.includes(term)) || terms[0] || '';
+  let index = firstTerm ? lowerOriginal.indexOf(firstTerm) : -1;
+  if (index < 0) index = Math.max(0, normalizedText.indexOf(firstTerm));
+  const start = Math.max(0, index - 120);
+  const end = Math.min(originalText.length, index + firstTerm.length + 360);
+  let snippet = originalText.slice(start, end).replace(/\s+/g, ' ').trim();
+  if (start > 0) snippet = `...${snippet}`;
+  if (end < originalText.length) snippet = `${snippet}...`;
+  return snippet;
+}
 
 interface CompactionSummaryResult {
   text: string;
@@ -217,8 +419,8 @@ export class SessionManager {
         saveMessage: (message: Message) => this.saveMessage(message),
         requestSudoPassword: (sessionId: string, toolUseId: string, command: string) =>
           this.requestSudoPassword(sessionId, toolUseId, command),
-        searchSessionMessages: (sessionId: string, keywords: string[], maxResults = 20) =>
-          this.searchSessionMessages(sessionId, keywords, maxResults),
+        searchHistory: (request: HistorySearchRequest) => this.searchHistory(request),
+        readHistory: (request: HistoryReadRequest) => this.readHistory(request),
         getSessionPlanMode: (sessionId: string) =>
           ((this.db.sessions.get(sessionId) as { plan_mode?: number } | null)?.plan_mode ?? 0) === 1,
       },
@@ -1814,68 +2016,126 @@ export class SessionManager {
   }
 
   /**
-   * Search the FULL message history of a session (bypasses compaction boundaries).
-   * Returns snippets from messages that contain ALL specified keywords.
-   * Used by the search_history agent tool so the model can retrieve information
-   * that was lost from context after compaction.
+   * Search the FULL message history of the current session (bypasses compaction boundaries).
+   * This intentionally stays session-scoped; durable project-level knowledge uses memory tools.
    */
-  private searchSessionMessages(
-    sessionId: string,
-    keywords: string[],
-    maxResults = 20
-  ): HistorySearchResult[] {
-    const messages = this.getMessages(sessionId);
+  private searchHistory(request: HistorySearchRequest): HistorySearchResult[] {
+    const session = this.db.sessions.get(request.currentSessionId);
+    const messages = this.getMessages(request.currentSessionId);
+    const query = normalizeHistorySearchText(request.query);
+    const terms = tokenizeHistoryQuery(query);
+    const mode = request.mode ?? 'smart';
+    const maxResults = normalizeHistoryLimit(request.maxResults, 20);
+    const excludedMessageIds = new Set(request.excludeMessageIds ?? []);
+    const beforeTimestamp = Number.isFinite(request.beforeTimestamp ?? NaN)
+      ? (request.beforeTimestamp as number)
+      : undefined;
     const results: HistorySearchResult[] = [];
 
-    for (let i = 0; i < messages.length; i++) {
-      if (results.length >= maxResults) break;
+    if (!query || terms.length === 0) {
+      return [];
+    }
 
+    for (let i = 0; i < messages.length; i++) {
       const msg = messages[i];
       if (msg.role !== 'user' && msg.role !== 'assistant') continue;
+      if (excludedMessageIds.has(msg.id)) continue;
+      if (beforeTimestamp !== undefined && msg.timestamp >= beforeTimestamp) continue;
 
-      // Flatten message content into searchable plain text
-      const textBlocks: string[] = [];
-      for (const block of msg.content) {
-        if (block.type === 'text') {
-          textBlocks.push((block as { text: string }).text);
-        } else if (block.type === 'thinking') {
-          // Skip thinking blocks — they're verbose and rarely useful for search
-          continue;
-        } else if (block.type === 'tool_use') {
-          const tu = block as { name: string; input: Record<string, unknown> };
-          textBlocks.push(`[tool_use: ${tu.name}]`);
-        } else if (block.type === 'tool_result') {
-          const tr = block as { content: string };
-          // Only index first 200 chars of tool results (they're huge)
-          textBlocks.push(tr.content.slice(0, 200));
-        }
-      }
+      const text = flattenMessageForHistorySearch(msg, {
+        includeToolResults: request.includeToolResults === true,
+        includeSearchToolResults: request.includeSearchToolResults === true,
+      });
+      const normalizedText = normalizeHistorySearchText(text);
+      if (!normalizedText) continue;
 
-      const fullText = textBlocks.join(' ').toLowerCase();
-
-      // Check ALL keywords match (AND logic)
-      const allMatch = keywords.every((kw) => fullText.includes(kw));
-      if (!allMatch) continue;
-
-      // Build a snippet around the first matched keyword
-      const firstKw = keywords[0];
-      const kwIndex = fullText.indexOf(firstKw);
-      const snippetStart = Math.max(0, kwIndex - 80);
-      const snippetEnd = Math.min(fullText.length, kwIndex + firstKw.length + 220);
-      let snippet = fullText.slice(snippetStart, snippetEnd);
-      if (snippetStart > 0) snippet = '…' + snippet;
-      if (snippetEnd < fullText.length) snippet = snippet + '…';
+      const score = scoreHistoryMatch(normalizedText, query, terms, mode);
+      if (score <= 0) continue;
 
       results.push({
+        sessionId: request.currentSessionId,
+        sessionTitle: session?.title ?? 'Untitled',
+        sessionCwd: session?.cwd ?? null,
         messageId: msg.id,
         role: msg.role as 'user' | 'assistant',
         timestamp: msg.timestamp,
-        snippet,
+        snippet: buildHistorySnippet(text, normalizedText, query, terms),
         turnIndex: i,
+        score,
       });
     }
 
-    return results;
+    return results
+      .sort((a, b) => b.score - a.score || b.timestamp - a.timestamp)
+      .slice(0, maxResults);
+  }
+
+  private readHistory(request: HistoryReadRequest): HistoryReadResult {
+    const sessionId = request.currentSessionId;
+    const session = this.db.sessions.get(sessionId);
+    const messages = this.getMessages(sessionId);
+    const before = normalizeHistoryWindowCount(request.before, 2);
+    const after = normalizeHistoryWindowCount(request.after, 2);
+    const maxChars = normalizeHistoryMaxChars(request.maxChars);
+    let centerIndex = -1;
+
+    if (request.messageId) {
+      centerIndex = messages.findIndex((message) => message.id === request.messageId);
+    }
+    if (centerIndex < 0 && Number.isFinite(request.turnIndex ?? NaN)) {
+      centerIndex = Math.floor(request.turnIndex as number);
+    }
+    if (centerIndex < 0 || centerIndex >= messages.length) {
+      return {
+        sessionId,
+        sessionTitle: session?.title ?? 'Untitled',
+        sessionCwd: session?.cwd ?? null,
+        messages: [],
+        truncated: false,
+        returnedChars: 0,
+        maxChars,
+      };
+    }
+
+    const start = Math.max(0, centerIndex - before);
+    const end = Math.min(messages.length, centerIndex + after + 1);
+    const selected: HistoryReadResult['messages'] = [];
+    let returnedChars = 0;
+    let truncated = false;
+
+    for (let i = start; i < end; i++) {
+      const message = messages[i];
+      if (message.role !== 'user' && message.role !== 'assistant') continue;
+      let text = flattenMessageForHistoryRead(message);
+      const remaining = maxChars - returnedChars;
+      if (remaining <= 0) {
+        truncated = true;
+        break;
+      }
+      if (text.length > remaining) {
+        text = `${text.slice(0, remaining)}\n[History output truncated]`;
+        truncated = true;
+      }
+      returnedChars += text.length;
+      selected.push({
+        messageId: message.id,
+        role: message.role as 'user' | 'assistant',
+        timestamp: message.timestamp,
+        turnIndex: i,
+        text,
+      });
+      if (truncated) break;
+    }
+
+    return {
+      sessionId,
+      sessionTitle: session?.title ?? 'Untitled',
+      sessionCwd: session?.cwd ?? null,
+      messages: selected,
+      truncated,
+      returnedChars,
+      maxChars,
+    };
   }
 
   private normalizeContent(raw: string): ContentBlock[] {

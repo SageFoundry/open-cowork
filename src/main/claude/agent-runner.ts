@@ -885,6 +885,9 @@ function normalizeTokenUsage(usage: unknown): Message['tokenUsage'] | undefined 
 }
 
 export interface HistorySearchResult {
+  sessionId: string;
+  sessionTitle: string;
+  sessionCwd?: string | null;
   messageId: string;
   role: 'user' | 'assistant';
   timestamp: number;
@@ -892,6 +895,45 @@ export interface HistorySearchResult {
   snippet: string;
   /** Turn index within the session (0-based) */
   turnIndex: number;
+  score: number;
+}
+
+export interface HistorySearchRequest {
+  currentSessionId: string;
+  query: string;
+  maxResults?: number;
+  mode?: 'smart' | 'exact' | 'all' | 'any';
+  includeToolResults?: boolean;
+  includeSearchToolResults?: boolean;
+  excludeMessageIds?: string[];
+  beforeTimestamp?: number;
+}
+
+export interface HistoryReadRequest {
+  currentSessionId: string;
+  messageId?: string;
+  turnIndex?: number;
+  before?: number;
+  after?: number;
+  maxChars?: number;
+}
+
+export interface HistoryReadMessage {
+  messageId: string;
+  role: 'user' | 'assistant';
+  timestamp: number;
+  turnIndex: number;
+  text: string;
+}
+
+export interface HistoryReadResult {
+  sessionId: string;
+  sessionTitle: string;
+  sessionCwd?: string | null;
+  messages: HistoryReadMessage[];
+  truncated: boolean;
+  returnedChars: number;
+  maxChars: number;
 }
 
 interface AgentRunnerOptions {
@@ -902,12 +944,10 @@ interface AgentRunnerOptions {
     toolUseId: string,
     command: string
   ) => Promise<string | null>;
-  /** Search the full message history of a session (bypasses compaction boundaries). */
-  searchSessionMessages?: (
-    sessionId: string,
-    keywords: string[],
-    maxResults?: number
-  ) => HistorySearchResult[];
+  /** Search persisted message history (bypasses compaction boundaries). */
+  searchHistory?: (request: HistorySearchRequest) => HistorySearchResult[];
+  /** Read exact persisted history messages or a nearby window after search_history finds a hit. */
+  readHistory?: (request: HistoryReadRequest) => HistoryReadResult;
   getSessionPlanMode?: (sessionId: string) => boolean;
 }
 
@@ -935,11 +975,8 @@ export class ClaudeAgentRunner {
     toolUseId: string,
     command: string
   ) => Promise<string | null>;
-  private searchSessionMessages?: (
-    sessionId: string,
-    keywords: string[],
-    maxResults?: number
-  ) => HistorySearchResult[];
+  private searchHistory?: (request: HistorySearchRequest) => HistorySearchResult[];
+  private readHistory?: (request: HistoryReadRequest) => HistoryReadResult;
   private getSessionPlanMode?: (sessionId: string) => boolean;
   private pathResolver: PathResolver;
   private mcpManager?: MCPManager;
@@ -1073,7 +1110,8 @@ ${hints.join('\n')}
     this.sendToRenderer = options.sendToRenderer;
     this.saveMessage = options.saveMessage;
     this.requestSudoPassword = options.requestSudoPassword;
-    this.searchSessionMessages = options.searchSessionMessages;
+    this.searchHistory = options.searchHistory;
+    this.readHistory = options.readHistory;
     this.getSessionPlanMode = options.getSessionPlanMode;
     this.pathResolver = pathResolver;
     this.mcpManager = mcpManager;
@@ -2773,20 +2811,46 @@ ${hints.join('\n')}
         log('[ClaudeAgentRunner] Registered background task tool');
       }
 
-      // Register search_history custom tool — allows the agent to search
-      // the full (pre-compaction) message history of the current session.
-      if (this.searchSessionMessages) {
-        const searchSessionMessages = this.searchSessionMessages;
+      // Register history tools — allows the agent to search and read persisted
+      // conversation history that may no longer fit in the active context.
+      if (this.searchHistory) {
+        const searchHistory = this.searchHistory;
         const searchHistoryTool: ToolDefinition = {
           name: 'search_history',
           label: 'Search History',
           description:
-            'Search the FULL message history of the current conversation session (including messages that were compacted/truncated from context). Use this when you need to recall details from earlier in the conversation that are no longer visible in the current context. Returns matching message snippets with timestamps.',
+            'Search the full persisted history of the current conversation session only, including messages that were compacted/truncated from active context. Use this for ordinary earlier chat details from this same session. Do not use it for durable project facts or cross-session preferences; use search_knowledge for those. Results include messageId and turnIndex; call read_history for full nearby context.',
           parameters: Type.Object({
-            keyword: Type.String({
-              description:
-                'One or more search keywords, separated by spaces. Messages containing ALL keywords will match (AND logic). For example: "database migration postgres" will match messages that contain all three words.',
-            }),
+            query: Type.Optional(
+              Type.String({
+                description:
+                  'Search text. Exact phrases, Chinese sentences, and space-separated keywords are supported.',
+              })
+            ),
+            keyword: Type.Optional(
+              Type.String({
+                description:
+                  'Legacy alias for query. Prefer query for new calls.',
+              })
+            ),
+            mode: Type.Optional(
+              Type.String({
+                description:
+                  'Matching mode: smart (default relevance ranking), exact (phrase), all (prefer all terms with partial fallback), or any (any term).',
+              })
+            ),
+            includeToolResults: Type.Optional(
+              Type.Boolean({
+                description:
+                  'Whether to search tool_result contents. Defaults to false because tool output is noisy.',
+              })
+            ),
+            includeSearchToolResults: Type.Optional(
+              Type.Boolean({
+                description:
+                  'Whether to include prior search_history/read_history tool calls and results. Defaults to false to avoid self-matching failed searches.',
+              })
+            ),
             maxResults: Type.Optional(
               Type.Number({
                 description: 'Maximum number of results to return. Defaults to 20.',
@@ -2795,28 +2859,45 @@ ${hints.join('\n')}
           }),
           execute: async (
             _toolCallId: string,
-            params: { keyword: string; maxResults?: number }
+            params: {
+              query?: string;
+              keyword?: string;
+              maxResults?: number;
+              mode?: 'smart' | 'exact' | 'all' | 'any';
+              includeToolResults?: boolean;
+              includeSearchToolResults?: boolean;
+            }
           ) => {
-            const keywords = params.keyword
-              .split(/\s+/)
-              .map((w: string) => w.toLowerCase())
-              .filter((w: string) => w.length > 0);
+            const query = (params.query ?? params.keyword ?? '').trim();
 
-            if (keywords.length === 0) {
+            if (!query) {
               return {
-                content: [{ type: 'text' as const, text: 'No search keywords provided.' }],
+                content: [{ type: 'text' as const, text: 'No search query provided.' }],
                 details: undefined as unknown,
               };
             }
 
-            const results = searchSessionMessages(session.id, keywords, params.maxResults ?? 20);
+            const results = searchHistory({
+              currentSessionId: session.id,
+              query,
+              maxResults: params.maxResults ?? 20,
+              mode: params.mode,
+              includeToolResults: params.includeToolResults,
+              includeSearchToolResults: params.includeSearchToolResults,
+              excludeMessageIds: existingMessages.length
+                ? [existingMessages[existingMessages.length - 1].id]
+                : undefined,
+              beforeTimestamp: existingMessages.length
+                ? existingMessages[existingMessages.length - 1].timestamp
+                : undefined,
+            });
 
             if (results.length === 0) {
               return {
                 content: [
                   {
                     type: 'text' as const,
-                    text: `No messages found matching: "${params.keyword}"`,
+                    text: `No history messages found matching: "${query}"`,
                   },
                 ],
                 details: undefined as unknown,
@@ -2826,7 +2907,13 @@ ${hints.join('\n')}
             const formatted = results
               .map(
                 (r) =>
-                  `[${new Date(r.timestamp).toISOString()}] ${r.role === 'user' ? '🧑 User' : '🤖 Assistant'} (turn #${r.turnIndex}): ${r.snippet}`
+                  [
+                    `[${new Date(r.timestamp).toISOString()}] ${r.role === 'user' ? 'User' : 'Assistant'} turn #${r.turnIndex} score=${r.score}`,
+                    `messageId: ${r.messageId}`,
+                    `snippet: ${r.snippet}`,
+                  ]
+                    .filter(Boolean)
+                    .join('\n')
               )
               .join('\n\n---\n\n');
 
@@ -2834,7 +2921,7 @@ ${hints.join('\n')}
               content: [
                 {
                   type: 'text' as const,
-                  text: `Found ${results.length} matching messages (out of the full pre-compaction history):\n\n${formatted}`,
+                  text: `Found ${results.length} matching messages in the current session history. Use read_history with turnIndex or messageId to inspect full context:\n\n${formatted}`,
                 },
               ],
               details: undefined as unknown,
@@ -2845,11 +2932,109 @@ ${hints.join('\n')}
         log('[ClaudeAgentRunner] Registered search_history custom tool');
       }
 
+      if (this.readHistory) {
+        const readHistory = this.readHistory;
+        const readHistoryTool: ToolDefinition = {
+          name: 'read_history',
+          label: 'Read History',
+          description:
+            'Read full persisted chat history around a specific search_history result in the current session only. Use messageId or turnIndex to fetch the exact message and nearby turns after a search result is relevant or truncated. Do not use this for project memory entries; use read_knowledge for those.',
+          parameters: Type.Object({
+            messageId: Type.Optional(
+              Type.String({
+                description: 'Exact message id to center the history window around.',
+              })
+            ),
+            turnIndex: Type.Optional(
+              Type.Number({
+                description:
+                  'Zero-based turn index from search_history to center the history window around.',
+              })
+            ),
+            before: Type.Optional(
+              Type.Number({
+                description: 'Number of messages before the target to include. Defaults to 2.',
+              })
+            ),
+            after: Type.Optional(
+              Type.Number({
+                description: 'Number of messages after the target to include. Defaults to 2.',
+              })
+            ),
+            maxChars: Type.Optional(
+              Type.Number({
+                description: 'Maximum characters to return. Defaults to 12000, capped by the app.',
+              })
+            ),
+          }),
+          execute: async (
+            _toolCallId: string,
+            params: {
+              messageId?: string;
+              turnIndex?: number;
+              before?: number;
+              after?: number;
+              maxChars?: number;
+            }
+          ) => {
+            const result = readHistory({
+              currentSessionId: session.id,
+              messageId: params.messageId,
+              turnIndex: params.turnIndex,
+              before: params.before,
+              after: params.after,
+              maxChars: params.maxChars,
+            });
+
+            if (result.messages.length === 0) {
+              return {
+                content: [
+                  {
+                    type: 'text' as const,
+                    text: 'No history messages found in the current session for the requested messageId/turnIndex.',
+                  },
+                ],
+                details: undefined as unknown,
+              };
+            }
+
+            const body = result.messages
+              .map((message) =>
+                [
+                  `#${message.turnIndex} ${message.role} ${new Date(message.timestamp).toISOString()}`,
+                  `messageId: ${message.messageId}`,
+                  message.text,
+                ].join('\n')
+              )
+              .join('\n\n---\n\n');
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: [
+                    `History window from session "${result.sessionTitle}" (${result.sessionId})`,
+                    result.sessionCwd ? `cwd: ${result.sessionCwd}` : '',
+                    `Returned ${result.returnedChars}/${result.maxChars} chars${result.truncated ? ' (truncated)' : ''}`,
+                    '',
+                    body,
+                  ]
+                    .filter((line) => line !== '')
+                    .join('\n'),
+                },
+              ],
+              details: undefined as unknown,
+            };
+          },
+        };
+        baseCustomTools.push(readHistoryTool);
+        log('[ClaudeAgentRunner] Registered read_history custom tool');
+      }
+
       const recallToolOutputTool: ToolDefinition = {
         name: 'recall_tool_output',
         label: 'Recall Tool Output',
         description:
-          'Read original local tool output that Open Cowork previously compressed or truncated. Use this whenever a tool result includes a tool-output:// handle and omitted evidence may matter. Supports reading by character range or searching within the saved original output.',
+          'Read original local tool output that Open Cowork previously compressed or truncated. Use this only when a prior tool result contains a tool-output:// handle and omitted command/file output may matter. This is not for chat history or project memory; use search_history/read_history or search_knowledge/read_knowledge for those.',
         parameters: Type.Object({
           handle: Type.String({
             description:
@@ -2945,7 +3130,7 @@ ${hints.join('\n')}
             (autoMemory
               ? 'For autonomous_high_value, call this rarely and only for stable cross-session knowledge: key architecture decisions, durable project conventions, explicit user preferences, or critical constraints. '
               : 'Because autoMemory is disabled, do not use autonomous_high_value. ') +
-            'Do not save temporary task progress, logs, one-off bug details, tool output summaries, or ordinary history recall; use search_history for those.',
+            'Do not save temporary task progress, logs, one-off bug details, tool output summaries, or ordinary current-session history recall; use search_history/read_history for those.',
           parameters: Type.Object({
             trigger: Type.String({
               description:
@@ -3053,173 +3238,118 @@ ${hints.join('\n')}
         };
         baseCustomTools.push(saveKnowledgeTool);
 
-        const queryKnowledgeTool: ToolDefinition = {
-          name: 'query_knowledge',
-          label: 'Query Knowledge',
+        const searchKnowledgeTool: ToolDefinition = {
+          name: 'search_knowledge',
+          label: 'Search Knowledge',
           description:
-            'Search durable project memory for relevant knowledge entries. Use this when you need to recall prior decisions, preferences, constraints, references, or project facts.',
+            'Search or list durable project memory for this project. Use this for stable cross-session knowledge such as decisions, preferences, constraints, references, and project facts. For ordinary details from the current conversation session, use search_history instead. Results are previews; call read_knowledge with an ID when you need the full entry or source evidence.',
           parameters: Type.Object({
-            query: Type.String({
-              description: 'Search query describing the knowledge you need to recall',
-            }),
-            maxResults: Type.Optional(
-              Type.Number({
-                description: 'Maximum number of entries to return, from 1 to 20 (default: 8)',
+            query: Type.Optional(
+              Type.String({
+                description:
+                  'Optional search query. Provide this when looking for specific project memory. Omit it to list recent/high-importance entries.',
               })
             ),
-          }),
-          execute: async (_toolCallId: string, params: { query: string; maxResults?: number }) => {
-            const limit = normalizeKnowledgeLimit(params.maxResults, 8);
-            const entries = projectMemory
-              .searchKnowledge(params.query, memoryProjectPath)
-              .slice(0, limit);
-            for (const entry of entries) {
-              projectMemory.markAccessed(entry.id);
-            }
-
-            if (entries.length === 0) {
-              return {
-                content: [
-                  {
-                    type: 'text' as const,
-                    text: `No matching knowledge entries found for query: ${params.query}`,
-                  },
-                ],
-                details: undefined as unknown,
-              };
-            }
-
-            const formatted = entries
-              .map((entry) => formatKnowledgeEntry(entry, true))
-              .join('\n\n---\n\n');
-            return {
-              content: [
-                {
-                  type: 'text' as const,
-                  text: `Found ${entries.length} knowledge entries:\n\n${formatted}`,
-                },
-              ],
-              details: undefined as unknown,
-            };
-          },
-        };
-        baseCustomTools.push(queryKnowledgeTool);
-
-        const listKnowledgeTool: ToolDefinition = {
-          name: 'list_knowledge',
-          label: 'List Knowledge',
-          description:
-            'List durable project memory entries, optionally filtered by type. Use this to inspect available memory before choosing a specific entry to read.',
-          parameters: Type.Object({
             type: Type.Optional(
               Type.String({
                 description:
-                  'Optional type filter: fact, preference, decision, reference, or project',
+                  'Optional type filter: fact, preference, decision, reference, or project.',
               })
             ),
             maxResults: Type.Optional(
               Type.Number({
-                description: 'Maximum number of entries to return, from 1 to 20 (default: 12)',
+                description: 'Maximum number of entries to return, from 1 to 20 (default: 8).',
               })
             ),
           }),
-          execute: async (_toolCallId: string, params: { type?: string; maxResults?: number }) => {
+          execute: async (
+            _toolCallId: string,
+            params: { query?: string; type?: string; maxResults?: number }
+          ) => {
+            const limit = normalizeKnowledgeLimit(params.maxResults, 8);
             const type =
               params.type && validKnowledgeTypes.includes(params.type as KnowledgeType)
                 ? (params.type as KnowledgeType)
                 : undefined;
-            const limit = normalizeKnowledgeLimit(params.maxResults, 12);
-            const entries = projectMemory.listKnowledge(memoryProjectPath, type).slice(0, limit);
+            const query = params.query?.trim();
+            const entries = query
+              ? projectMemory.searchKnowledge(query, memoryProjectPath).filter((entry) =>
+                  type ? entry.type === type : true
+                )
+              : projectMemory.listKnowledge(memoryProjectPath, type);
+            const limitedEntries = entries.slice(0, limit);
+            for (const entry of limitedEntries) {
+              projectMemory.markAccessed(entry.id);
+            }
 
-            if (entries.length === 0) {
+            if (limitedEntries.length === 0) {
               return {
                 content: [
                   {
                     type: 'text' as const,
-                    text: type
-                      ? `No knowledge entries found for type: ${type}`
-                      : 'No knowledge entries found.',
+                    text: query
+                      ? `No matching project memory entries found for query: ${query}`
+                      : type
+                        ? `No project memory entries found for type: ${type}`
+                        : 'No project memory entries found.',
                   },
                 ],
                 details: undefined as unknown,
               };
             }
 
-            const formatted = entries
+            const formatted = limitedEntries
               .map((entry) => formatKnowledgeEntry(entry, false))
               .join('\n\n---\n\n');
             return {
               content: [
                 {
                   type: 'text' as const,
-                  text: `Listed ${entries.length} knowledge entries:\n\n${formatted}`,
+                  text: `Found ${limitedEntries.length} project memory entries. Use read_knowledge with an ID for full content or source evidence:\n\n${formatted}`,
                 },
               ],
               details: undefined as unknown,
             };
           },
         };
-        baseCustomTools.push(listKnowledgeTool);
+        baseCustomTools.push(searchKnowledgeTool);
 
-        const getKnowledgeTool: ToolDefinition = {
-          name: 'get_knowledge',
-          label: 'Get Knowledge',
+        const readKnowledgeTool: ToolDefinition = {
+          name: 'read_knowledge',
+          label: 'Read Knowledge',
           description:
-            'Read one durable project memory entry by ID. Use this after list_knowledge or query_knowledge when you need the full stored content. If the summary is too compressed, call get_knowledge_evidence for bounded source snippets.',
+            'Read one durable project memory entry by ID. Use this after search_knowledge when a preview is relevant. Optionally include bounded source evidence to verify where the memory came from. For current-session conversation details, prefer read_history.',
           parameters: Type.Object({
             id: Type.String({
-              description: 'The ID of the knowledge entry to read',
+              description: 'The ID of the project memory entry to read.',
             }),
-          }),
-          execute: async (_toolCallId: string, params: { id: string }) => {
-            const entry = projectMemory.getKnowledge(params.id);
-            if (
-              !entry ||
-              !normalizedMemoryProjectPath ||
-              entry.projectPath !== normalizedMemoryProjectPath
-            ) {
-              return {
-                content: [
-                  { type: 'text' as const, text: `Knowledge entry not found: ${params.id}` },
-                ],
-                details: undefined as unknown,
-              };
-            }
-
-            projectMemory.markAccessed(entry.id);
-            return {
-              content: [{ type: 'text' as const, text: formatKnowledgeEntry(entry, true) }],
-              details: undefined as unknown,
-            };
-          },
-        };
-        baseCustomTools.push(getKnowledgeTool);
-
-        const getKnowledgeEvidenceTool: ToolDefinition = {
-          name: 'get_knowledge_evidence',
-          label: 'Get Knowledge Evidence',
-          description:
-            'Read bounded source snippets or a small nearby history window for one project memory entry. Use this when a memory entry is relevant but you need its original conversation evidence. This is budget-limited and should be preferred before broad search_history.',
-          parameters: Type.Object({
-            id: Type.String({
-              description: 'The ID of the knowledge entry whose source evidence should be read',
-            }),
-            mode: Type.Optional(
-              Type.String({
+            includeEvidence: Type.Optional(
+              Type.Boolean({
                 description:
-                  'Evidence mode: snippets for short saved source snippets, or window for a small nearby conversation window. Default: snippets',
+                  'Whether to include recorded source snippets/history evidence. Defaults to false.',
               })
             ),
-            maxChars: Type.Optional(
+            evidenceMode: Type.Optional(
+              Type.String({
+                description:
+                  'Evidence mode when includeEvidence is true: snippets for saved snippets, or window for a small nearby conversation window. Default: snippets.',
+              })
+            ),
+            maxEvidenceChars: Type.Optional(
               Type.Number({
                 description:
-                  'Maximum characters to return. Defaults: 3000 for snippets, 6000 for window. Hard capped by the app.',
+                  'Maximum evidence characters when includeEvidence is true. Defaults are chosen by the app and capped.',
               })
             ),
           }),
           execute: async (
             _toolCallId: string,
-            params: { id: string; mode?: string; maxChars?: number }
+            params: {
+              id: string;
+              includeEvidence?: boolean;
+              evidenceMode?: string;
+              maxEvidenceChars?: number;
+            }
           ) => {
             const entry = projectMemory.getKnowledge(params.id);
             if (
@@ -3235,47 +3365,41 @@ ${hints.join('\n')}
               };
             }
 
-            const mode = params.mode === 'window' ? 'window' : 'snippets';
-            const evidence = projectMemory.getKnowledgeEvidence(entry.id, {
-              mode,
-              maxChars: params.maxChars,
-            });
-            if (evidence.sources.length === 0) {
-              return {
-                content: [
-                  {
-                    type: 'text' as const,
-                    text: `No source evidence is recorded for knowledge entry: ${entry.id}`,
-                  },
-                ],
-                details: undefined as unknown,
-              };
+            projectMemory.markAccessed(entry.id);
+            const parts = [formatKnowledgeEntry(entry, true)];
+            if (params.includeEvidence) {
+              const mode = params.evidenceMode === 'window' ? 'window' : 'snippets';
+              const evidence = projectMemory.getKnowledgeEvidence(entry.id, {
+                mode,
+                maxChars: params.maxEvidenceChars,
+              });
+              if (evidence.sources.length === 0) {
+                parts.push('Source evidence: none recorded.');
+              } else {
+                const formattedEvidence = evidence.sources
+                  .map((source) =>
+                    [
+                      `Session: ${source.sessionId}`,
+                      `Message: ${source.messageId}`,
+                      `Role: ${source.role}`,
+                      `Turn: ${source.turnIndex}`,
+                      `Time: ${new Date(source.timestamp).toISOString()}`,
+                      `Snippet:\n${source.snippet}`,
+                    ].join('\n')
+                  )
+                  .join('\n\n---\n\n');
+                parts.push(
+                  `Source evidence (${mode}; ${evidence.returnedChars}/${evidence.maxChars} chars${evidence.truncated ? ', truncated' : ''}):\n${formattedEvidence}`
+                );
+              }
             }
-
-            const formatted = evidence.sources
-              .map((source) =>
-                [
-                  `Session: ${source.sessionId}`,
-                  `Message: ${source.messageId}`,
-                  `Role: ${source.role}`,
-                  `Turn: ${source.turnIndex}`,
-                  `Time: ${new Date(source.timestamp).toISOString()}`,
-                  `Snippet:\n${source.snippet}`,
-                ].join('\n')
-              )
-              .join('\n\n---\n\n');
             return {
-              content: [
-                {
-                  type: 'text' as const,
-                  text: `Evidence for "${entry.title}" (${mode}; ${evidence.returnedChars}/${evidence.maxChars} chars${evidence.truncated ? ', truncated' : ''}):\n\n${formatted}`,
-                },
-              ],
+              content: [{ type: 'text' as const, text: parts.join('\n\n---\n\n') }],
               details: undefined as unknown,
             };
           },
         };
-        baseCustomTools.push(getKnowledgeEvidenceTool);
+        baseCustomTools.push(readKnowledgeTool);
 
         const deleteKnowledgeTool: ToolDefinition = {
           name: 'delete_knowledge',

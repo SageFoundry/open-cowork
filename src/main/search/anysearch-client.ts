@@ -495,7 +495,7 @@ function formatScore(value: number): string {
 
 // ─── AnySearch MCP Extract ──────────────────────────────────────────
 
-const ANYSEARCH_MCP_ENDPOINT = 'https://api.anysearch.com/v1/mcp';
+const ANYSEARCH_MCP_ENDPOINT = 'https://api.anysearch.com/mcp';
 
 export interface AnySearchExtractInput {
   url: string;
