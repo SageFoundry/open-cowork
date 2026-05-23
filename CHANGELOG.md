@@ -5,6 +5,31 @@ All notable changes to the Open Cowork AI agent desktop app will be documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.4] - 2026-05-23
+
+### Added
+
+- **Tool Output Recall**：被压缩或截断的工具输出自动保存为 SQLite 快照，LLM 可通过 `recall_tool_output` 工具按 handle、关键词、字符范围回顾原始完整内容
+- **`read_history` 工具**：通过 messageId 或 turnIndex 读取完整的会话历史窗口，与 `search_history` 配合实现定位→查阅
+
+### Changed
+
+- **上下文压缩系统全面重构**：
+  - 熔断保护：自动压缩连续失败 3 次后暂停，防止反复重试
+  - 嵌套保护：同一会话压缩中不会重复触发
+  - 搜索命令跳过：rg/grep/Select-String 搜索结果不再被 Micro-Compact 压缩
+  - 三明治截断：工具输出截断改为保留头 60% + [中略] + 尾 40%
+  - 结构化摘要：Auto-Compact 改为固定 9 段 Markdown，压缩恢复后信息确定性更高
+- **`search_history` 结构化查询升级**：支持 query/mode（smart/exact/all/any）/工具结果过滤/排除指定消息/按时间范围过滤；中英文停词表过滤，防自指
+- **ContextPanel 布局重构**：顶部固定区合并展示模型/工作目录/上下文用量，底部统一滚动；压缩确认改为应用内模态弹窗
+- **会话配置面板**：新增压缩统计和执行记录展示
+
+### Fixed
+
+- 修复 AnySearch MCP 端点路径
+- 修复 `search_knowledge` 工具名不一致问题
+- 修复压缩确认弹窗焦点丢失问题
+
 ## [3.5.3] - 2026-05-22
 
 ### Added
