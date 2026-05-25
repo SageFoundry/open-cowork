@@ -100,6 +100,12 @@ const WORKSPACE_MOUNT_VIRTUAL_PATH = '/mnt/workspace';
 const TITLE_GENERATION_TIMEOUT_MS = 20000;
 const HISTORY_SEARCH_MAX_RESULTS = 50;
 const HISTORY_READ_MAX_CHARS = 30000;
+const MODE_EVENT_ENTER_PLAN = `<mode_event type="enter_plan">
+Current mode changed to Plan Mode. Research, inspect, and propose. Do not modify source files, project config, dependencies, git state, persistent memory, or external services.
+</mode_event>`;
+const MODE_EVENT_EXIT_PLAN = `<mode_event type="exit_plan">
+Current mode changed to Normal Mode. Previous Plan Mode restrictions are no longer current. Normal tool permissions apply, subject to standard safety checks.
+</mode_event>`;
 const HISTORY_SEARCH_STOP_WORDS = new Set([
   'history',
   'record',
@@ -1869,7 +1875,34 @@ export class SessionManager {
 
   updateSessionPlanMode(sessionId: string, planMode: boolean): void {
     log('[SessionManager] Updating plan mode:', sessionId, planMode);
+    const existing = this.db.sessions.get(sessionId) as { plan_mode?: number } | null;
+    if (!existing) {
+      logWarn('[SessionManager] Cannot update plan mode; session not found:', sessionId);
+      return;
+    }
+    const previousPlanMode = (existing?.plan_mode ?? 0) === 1;
+    const changed = previousPlanMode !== planMode;
     this.db.sessions.update(sessionId, { plan_mode: planMode ? 1 : 0, updated_at: Date.now() });
+
+    if (changed) {
+      const modeEvent: Message = {
+        id: uuidv4(),
+        sessionId,
+        role: 'assistant',
+        content: [{ type: 'text', text: planMode ? MODE_EVENT_ENTER_PLAN : MODE_EVENT_EXIT_PLAN }],
+        timestamp: Date.now(),
+      };
+      this.saveMessage(modeEvent);
+      if (this.agentRunner?.clearSdkSession) {
+        this.agentRunner.clearSdkSession(sessionId);
+      }
+      log(
+        '[SessionManager] Plan mode changed; mode event saved and SDK session cleared:',
+        sessionId,
+        planMode ? 'plan' : 'normal'
+      );
+    }
+
     this.sendToRenderer({
       type: 'session.planMode',
       payload: { sessionId, planMode },

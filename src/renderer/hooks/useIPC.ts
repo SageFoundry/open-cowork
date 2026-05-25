@@ -191,7 +191,8 @@ export function useIPC() {
             if (
               event.payload.updates.status &&
               (event.payload.updates.status === 'completed' ||
-                event.payload.updates.status === 'error')
+                event.payload.updates.status === 'error' ||
+                event.payload.updates.status === 'interrupted')
             ) {
               store.clearActiveTurn(event.payload.sessionId, event.payload.stepId);
             }

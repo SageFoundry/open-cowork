@@ -1953,6 +1953,7 @@ ${hints.join('\n')}
 
     const thinkingStepId = uuidv4();
     let abortedByTimeout = false;
+    const runningTraceStepIds = new Set<string>();
 
     try {
       this.pathResolver.registerSession(session.id, session.mountedPaths);
@@ -1969,6 +1970,7 @@ ${hints.join('\n')}
         title: 'Processing request...',
         timestamp: Date.now(),
       });
+      runningTraceStepIds.add(thinkingStepId);
       logTiming('sendTraceStep (thinking)', runStartTime);
 
       // Use session's cwd - each session has its own working directory
@@ -4042,6 +4044,15 @@ ${hints.join('\n')}
           logWarn('[ClaudeAgentRunner] Prompt timed out (no activity for 5 min), aborting');
           abortedByTimeout = true;
           controller.abort();
+          // Also abort the pi SDK session so the underlying HTTP request is
+          // cancelled. Without this, piSession.prompt() keeps awaiting the
+          // in-flight request and the session remains stuck indefinitely.
+          const cached = this.piSessions.get(session.id);
+          if (cached) {
+            cached.session.abort().catch((err) => {
+              logWarn('[ClaudeAgentRunner] Error aborting pi session during timeout:', err);
+            });
+          }
         }, PROMPT_TIMEOUT_MS);
       };
 
@@ -4139,6 +4150,7 @@ ${hints.join('\n')}
                 const toolContent = partial?.content?.[ame.contentIndex];
                 const toolName = toolContent?.type === 'toolCall' ? toolContent.name : 'unknown';
                 const toolCallId = toolContent?.type === 'toolCall' ? toolContent.id : uuidv4();
+                runningTraceStepIds.add(toolCallId);
                 this.sendTraceStep(session.id, {
                   id: toolCallId,
                   type: 'tool_call',
@@ -4334,6 +4346,7 @@ ${hints.join('\n')}
               const isError = event.isError;
               const normalizedToolResult = normalizeToolExecutionResultForUi(event.result);
               const outputText = normalizedToolResult.content;
+              runningTraceStepIds.delete(toolCallId);
               this.sendTraceUpdate(session.id, toolCallId, {
                 status: isError ? 'error' : 'completed',
                 toolName: event.toolName,
@@ -4370,6 +4383,7 @@ ${hints.join('\n')}
             case 'auto_compaction_start': {
               log('[ClaudeAgentRunner] Auto-compaction started, reason:', event.reason);
               compactionStepId = `compaction-${Date.now()}`;
+              runningTraceStepIds.add(compactionStepId);
               this.sendTraceStep(session.id, {
                 id: compactionStepId,
                 type: 'thinking',
@@ -4394,6 +4408,7 @@ ${hints.join('\n')}
                 event.willRetry
               );
               if (compactionStepId) {
+                runningTraceStepIds.delete(compactionStepId);
                 this.sendTraceUpdate(session.id, compactionStepId, { status, title });
                 compactionStepId = undefined;
               } else {
@@ -4479,6 +4494,7 @@ ${hints.join('\n')}
           timestamp: Date.now(),
         };
         this.sendMessage(session.id, errorMsg);
+        runningTraceStepIds.delete(thinkingStepId);
         this.sendTraceUpdate(session.id, thinkingStepId, {
           status: 'error',
           title: 'Request timed out',
@@ -4495,6 +4511,7 @@ ${hints.join('\n')}
         this.clearSdkSession(session.id);
       }
       // Complete - update the initial thinking step
+      runningTraceStepIds.delete(thinkingStepId);
       this.sendTraceUpdate(session.id, thinkingStepId, {
         status: terminalErrorText ? 'error' : 'completed',
         title: terminalErrorText ? 'Request failed' : 'Task completed',
@@ -4511,12 +4528,14 @@ ${hints.join('\n')}
             timestamp: Date.now(),
           };
           this.sendMessage(session.id, errorMsg);
+          runningTraceStepIds.delete(thinkingStepId);
           this.sendTraceUpdate(session.id, thinkingStepId, {
             status: 'error',
             title: 'Request timed out',
           });
         } else {
           logCtx('[ClaudeAgentRunner] Aborted by user');
+          runningTraceStepIds.delete(thinkingStepId);
           this.sendTraceUpdate(session.id, thinkingStepId, {
             status: 'completed',
             title: 'Cancelled',
@@ -4551,6 +4570,21 @@ ${hints.join('\n')}
     } finally {
       this.activeControllers.delete(session.id);
       this.pathResolver.unregisterSession(session.id);
+
+      // Close any steps that the SDK left running (for example, a tool call
+      // interrupted before tool_execution_end). Use the standard trace.update
+      // channel so SessionManager persists the change and the renderer keeps
+      // normal RAF ordering.
+      for (const stepId of Array.from(runningTraceStepIds)) {
+        const updates: Partial<TraceStep> = {
+          status: 'interrupted',
+        };
+        if (stepId === thinkingStepId) {
+          updates.title = 'Interrupted';
+        }
+        this.sendTraceUpdate(session.id, stepId, updates);
+        runningTraceStepIds.delete(stepId);
+      }
 
       // Sync changes from sandbox back to host OS (but don't cleanup - sandbox persists)
       if (useSandboxIsolation && sandboxPath) {

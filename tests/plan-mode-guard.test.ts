@@ -63,6 +63,15 @@ describe('plan mode guard', () => {
     expect(check('websearch', { query: 'latest docs' }).allowed).toBe(true);
   });
 
+  it('allows read-only history and project memory tools but blocks memory writes', () => {
+    expect(check('search_history', { query: 'old context' }).allowed).toBe(true);
+    expect(check('read_history', { turnIndex: 12 }).allowed).toBe(true);
+    expect(check('search_knowledge', { query: 'architecture' }).allowed).toBe(true);
+    expect(check('read_knowledge', { id: 'knowledge-1' }).allowed).toBe(true);
+    expect(check('save_knowledge', { title: 'remember this' }).allowed).toBe(false);
+    expect(check('delete_knowledge', { id: 'knowledge-1' }).allowed).toBe(false);
+  });
+
   it('allows only trusted read-only MCP tools', () => {
     expect(check('mcp__Repo__search', {}, { mcpReadOnlyHint: true }).allowed).toBe(true);
     expect(check('mcp__Repo__write_file', {}).allowed).toBe(false);

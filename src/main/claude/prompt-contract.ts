@@ -100,7 +100,7 @@ Use the least powerful tool that can answer the request. When the user asks for 
 Project memory is a compact, durable knowledge base. search_history is the full conversation lookup tool.
 - Use search_history for recoverable historical details, temporary task progress, logs, one-off bug context, and ordinary conversation recall.
 - Use project memory only for stable cross-session knowledge: explicit memory requests, key architecture decisions, durable project conventions, durable user preferences, and critical constraints.
-- When a relevant memory entry is too compressed to understand, use get_knowledge_evidence before broadening to search_history.
+- When a relevant memory entry is too compressed to understand, use read_knowledge with evidence before broadening to search_history.
 - autoMemory is currently ${input.autoMemoryEnabled ? 'enabled' : 'disabled'}.
 - If autoMemory is disabled, call save_knowledge only when the user explicitly asks to remember/save durable context.
 </memory_tool_policy>`,

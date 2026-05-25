@@ -34,9 +34,9 @@ export const PLAN_MODE_BLOCKED_ACTIONS = [
 
 const READ_ONLY_MEMORY_TOOLS = new Set([
   'search_history',
-  'query_knowledge',
-  'list_knowledge',
-  'get_knowledge',
+  'read_history',
+  'search_knowledge',
+  'read_knowledge',
 ]);
 
 const WRITE_MEMORY_TOOLS = new Set(['save_knowledge', 'delete_knowledge']);

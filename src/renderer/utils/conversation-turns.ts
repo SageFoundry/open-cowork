@@ -32,6 +32,15 @@ export function getMessageRenderableBlocks(message: Message): ContentBlock[] {
     : [{ type: 'text', text: String(rawContent ?? '') } as ContentBlock];
 }
 
+export function isModeEventMessage(message: Message): boolean {
+  const blocks = getMessageRenderableBlocks(message);
+  return (
+    blocks.length === 1 &&
+    blocks[0].type === 'text' &&
+    (blocks[0] as { type: 'text'; text: string }).text.trim().startsWith('<mode_event')
+  );
+}
+
 export function getAssistantFinalBlocks(contentBlocks: ContentBlock[]): ContentBlock[] {
   return contentBlocks.filter(
     (block) =>
@@ -50,6 +59,10 @@ export function groupMessagesByTurn(messages: Message[]): ConversationTurn[] {
   };
 
   for (const message of messages) {
+    if (isModeEventMessage(message)) {
+      continue;
+    }
+
     if (message.role === 'user') {
       flush();
       activeTurn = { userMessage: message, assistantMessages: [] };

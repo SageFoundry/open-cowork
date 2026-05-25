@@ -182,7 +182,7 @@ export interface TraceStep {
 }
 
 export type TraceStepType = 'thinking' | 'text' | 'tool_call' | 'tool_result';
-export type TraceStepStatus = 'pending' | 'running' | 'completed' | 'error';
+export type TraceStepStatus = 'pending' | 'running' | 'completed' | 'error' | 'interrupted';
 
 export type ScheduleRepeatUnit = 'minute' | 'hour' | 'day';
 export type ScheduleWeekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
