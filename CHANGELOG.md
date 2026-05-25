@@ -5,6 +5,22 @@ All notable changes to the Open Cowork AI agent desktop app will be documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.5] - 2026-05-25
+
+### Added
+
+- **Trace Step 中断状态**：新增 `interrupted` 状态类型，agent-runner 在超时或取消时同步中止 pi SDK session，并清理残留的 running trace step 标记为 `interrupted`
+
+### Changed
+
+- **Plan Mode 工具名同步**：更新 plan-mode-guard 的允许工具列表为当前记忆系统 API（`read_history`/`search_knowledge`/`read_knowledge`），禁用 `save_knowledge`/`delete_knowledge` 等写操作
+- **提示词对齐**：prompt-contract 中的 `get_knowledge_evidence` 更新为 `read_knowledge with evidence`
+- **Mode 事件过滤**：conversation-turns 工具新增 `isModeEventMessage()` 过滤函数，mode 切换事件不显示在对话中
+
+### Fixed
+
+- **Session 清理安全**：agent-runner 兜底清理所有 SDK 残留的 running step
+
 ## [3.5.4] - 2026-05-23
 
 ### Added
