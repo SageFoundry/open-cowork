@@ -123,6 +123,10 @@ export function ChatView() {
   const setMessages = useAppStore((s) => s.setMessages);
   const setMessagePagination = useAppStore((s) => s.setMessagePagination);
   const setGlobalNotice = useAppStore((s) => s.setGlobalNotice);
+  const setSessionInputDraft = useAppStore((s) => s.setSessionInputDraft);
+  const activeInputDraft = useAppStore((s) =>
+    activeSessionId ? (s.sessionStates[activeSessionId]?.inputDraft ?? '') : ''
+  );
   const tokenBudget = useAppStore((s) =>
     activeSessionId ? s.sessionStates[activeSessionId]?.tokenBudget ?? null : null
   );
@@ -200,6 +204,14 @@ export function ChatView() {
   useEffect(() => {
     adjustTextareaHeight();
   }, [adjustTextareaHeight, prompt]);
+
+  useEffect(() => {
+    setPrompt(activeInputDraft);
+    if (textareaRef.current) {
+      textareaRef.current.value = activeInputDraft;
+    }
+    requestAnimationFrame(() => adjustTextareaHeight());
+  }, [activeInputDraft, activeSessionId, adjustTextareaHeight]);
 
   const displayedMessages = useMemo(() => {
     if (!activeSessionId) return messages;
@@ -950,6 +962,7 @@ export function ChatView() {
 
       // Clean up
       setPrompt('');
+      setSessionInputDraft(activeSessionId, '');
       if (textareaRef.current) {
         textareaRef.current.value = '';
       }
@@ -1143,7 +1156,11 @@ export function ChatView() {
                   ref={textareaRef}
                   value={prompt}
                   onChange={(e) => {
-                    setPrompt(e.target.value);
+                    const nextPrompt = e.target.value;
+                    setPrompt(nextPrompt);
+                    if (activeSessionId) {
+                      setSessionInputDraft(activeSessionId, nextPrompt);
+                    }
                     adjustTextareaHeight();
                   }}
                   onCompositionStart={() => {

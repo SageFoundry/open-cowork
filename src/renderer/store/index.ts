@@ -59,6 +59,7 @@ export interface SessionState {
   compactionHistory: SessionCompactionInfo[];
   compactionState: SessionCompactionState | null;
   planMode: boolean;
+  inputDraft: string;
 }
 
 const DEFAULT_SESSION_STATE: SessionState = {
@@ -81,6 +82,7 @@ const DEFAULT_SESSION_STATE: SessionState = {
   compactionHistory: [],
   compactionState: null,
   planMode: false,
+  inputDraft: '',
 };
 
 // Helper to immutably update a single session's state within the record
@@ -241,6 +243,7 @@ interface AppState {
   ) => void;
   setSessionCompaction: (sessionId: string, info: SessionCompactionInfo | null) => void;
   setSessionPlanMode: (sessionId: string, planMode: boolean) => void;
+  setSessionInputDraft: (sessionId: string, draft: string) => void;
 
   // System theme actions
   setSystemDarkMode: (dark: boolean) => void;
@@ -746,6 +749,10 @@ export const useAppStore = create<AppState>((set) => ({
         sessionStates: patchSession(state.sessionStates, sessionId, { planMode }),
       };
     }),
+  setSessionInputDraft: (sessionId, inputDraft) =>
+    set((state) => ({
+      sessionStates: patchSession(state.sessionStates, sessionId, { inputDraft }),
+    })),
 
   // System theme actions
   setSystemDarkMode: (dark) => set({ systemDarkMode: dark }),
