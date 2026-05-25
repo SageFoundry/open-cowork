@@ -3993,6 +3993,12 @@ ${hints.join('\n')}
       const promptStartedAt = Date.now();
       const streamEventCounts = new Map<string, number>();
 
+      const FIRST_RESPONSE_WARNING_MS = 90 * 1000;
+      const SILENCE_TIMEOUT_MS = 3 * 60 * 1000;
+      let firstResponseWarningTimerId: ReturnType<typeof setTimeout> | undefined;
+      let silenceTimeoutId: ReturnType<typeof setTimeout> | undefined;
+      let receivedFirstSdkEvent = false;
+
       // Ollama cold-start feedback: if provider is 'ollama' and no stream event arrives
       // within 10 seconds, show a "model loading" trace update so users know what's happening.
       let ollamaColdStartTimerId: ReturnType<typeof setTimeout> | undefined;
@@ -4035,25 +4041,54 @@ ${hints.join('\n')}
         }
       };
 
-      // Activity-based timeout: reset the 5-min timer whenever the SDK sends events
-      const PROMPT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-      let activityTimeoutId: ReturnType<typeof setTimeout> | undefined;
-      const resetActivityTimeout = () => {
-        if (activityTimeoutId) clearTimeout(activityTimeoutId);
-        activityTimeoutId = setTimeout(() => {
-          logWarn('[ClaudeAgentRunner] Prompt timed out (no activity for 5 min), aborting');
-          abortedByTimeout = true;
-          controller.abort();
-          // Also abort the pi SDK session so the underlying HTTP request is
-          // cancelled. Without this, piSession.prompt() keeps awaiting the
-          // in-flight request and the session remains stuck indefinitely.
-          const cached = this.piSessions.get(session.id);
-          if (cached) {
-            cached.session.abort().catch((err) => {
-              logWarn('[ClaudeAgentRunner] Error aborting pi session during timeout:', err);
-            });
+      const abortPromptForTimeout = (reason: string) => {
+        logWarn(`[ClaudeAgentRunner] ${reason}, aborting`);
+        abortedByTimeout = true;
+        controller.abort();
+        // Also abort the pi SDK session so the underlying HTTP request is
+        // cancelled. Without this, piSession.prompt() keeps awaiting the
+        // in-flight request and the session remains stuck indefinitely.
+        const cached = this.piSessions.get(session.id);
+        if (cached) {
+          cached.session.abort().catch((err) => {
+            logWarn('[ClaudeAgentRunner] Error aborting pi session during timeout:', err);
+          });
+        }
+      };
+
+      const startFirstResponseWarningTimer = () => {
+        if (firstResponseWarningTimerId) clearTimeout(firstResponseWarningTimerId);
+        firstResponseWarningTimerId = setTimeout(() => {
+          if (receivedFirstSdkEvent || controller.signal.aborted) {
+            return;
           }
-        }, PROMPT_TIMEOUT_MS);
+          logWarn('[ClaudeAgentRunner] Model has not sent any event after 90 seconds');
+          this.sendTraceUpdate(session.id, thinkingStepId, {
+            title: 'Model is slow to respond',
+            content: 'No response yet. You can continue waiting or stop the request.',
+          });
+        }, FIRST_RESPONSE_WARNING_MS);
+      };
+
+      const resetSilenceTimeout = () => {
+        if (silenceTimeoutId) clearTimeout(silenceTimeoutId);
+        silenceTimeoutId = setTimeout(() => {
+          if (!receivedFirstSdkEvent || controller.signal.aborted) {
+            return;
+          }
+          abortPromptForTimeout('Prompt timed out (no SDK activity for 3 min after first event)');
+        }, SILENCE_TIMEOUT_MS);
+      };
+
+      const markSdkActivity = () => {
+        if (!receivedFirstSdkEvent) {
+          receivedFirstSdkEvent = true;
+          if (firstResponseWarningTimerId) {
+            clearTimeout(firstResponseWarningTimerId);
+            firstResponseWarningTimerId = undefined;
+          }
+        }
+        resetSilenceTimeout();
       };
 
       const recordStreamEvent = (eventType: string) => {
@@ -4071,8 +4106,9 @@ ${hints.join('\n')}
         try {
           if (controller.signal.aborted) return;
 
-          // Reset activity timeout on meaningful events
-          resetActivityTimeout();
+          // First-response warning only observes the time to any SDK event.
+          // After that, silence timeout aborts if the SDK goes quiet.
+          markSdkActivity();
 
           if (event.type === 'message_update') {
             const updateType = event.assistantMessageEvent.type;
@@ -4449,7 +4485,7 @@ ${hints.join('\n')}
 
       // Execute the prompt — unsubscribe in finally to prevent event listener leak
       try {
-        resetActivityTimeout();
+        startFirstResponseWarningTimer();
         if (provider === 'ollama') {
           log(
             '[ClaudeAgentRunner] Starting Ollama prompt',
@@ -4477,7 +4513,8 @@ ${hints.join('\n')}
         } catch (e) {
           logWarn('[ClaudeAgentRunner] unsubscribe error:', e);
         }
-        if (activityTimeoutId) clearTimeout(activityTimeoutId);
+        if (firstResponseWarningTimerId) clearTimeout(firstResponseWarningTimerId);
+        if (silenceTimeoutId) clearTimeout(silenceTimeoutId);
         if (ollamaColdStartTimerId) clearTimeout(ollamaColdStartTimerId);
       }
 
