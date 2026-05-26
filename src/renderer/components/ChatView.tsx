@@ -27,7 +27,7 @@ const CHAT_INPUT_MIN_HEIGHT_PX =
   CHAT_INPUT_MIN_ROWS * CHAT_INPUT_LINE_HEIGHT_PX + CHAT_INPUT_VERTICAL_PADDING_PX;
 const CHAT_INPUT_MAX_HEIGHT_PX =
   CHAT_INPUT_MAX_ROWS * CHAT_INPUT_LINE_HEIGHT_PX + CHAT_INPUT_VERTICAL_PADDING_PX;
-const MESSAGES_PAGE_SIZE = 5;
+const MESSAGES_PAGE_SIZE = 20;
 
 type AttachedFile = {
   name: string;
@@ -175,6 +175,7 @@ export function ChatView() {
   );
   const initialScrollDoneRef = useRef(false);
   const loadingOlderRef = useRef(false);
+  const isRestoringPrependRef = useRef(false);
 
   const adjustTextareaHeight = useCallback(() => {
     const textarea = textareaRef.current;
@@ -478,7 +479,7 @@ export function ChatView() {
     // 用户阅读旧消息时，阻止新消息自动滚动打断视线
     const onScroll = () => {
       updateScrollState();
-      if (container.scrollTop <= 80) {
+      if (!isRestoringPrependRef.current && container.scrollTop <= 80) {
         void loadOlderMessages();
       }
     };
@@ -489,6 +490,7 @@ export function ChatView() {
   useEffect(() => {
     initialScrollDoneRef.current = false;
     pendingPrependRestoreRef.current = null;
+    isRestoringPrependRef.current = false;
   }, [activeSessionId]);
 
   useEffect(() => {
@@ -498,9 +500,13 @@ export function ChatView() {
     if (pendingPrependRestoreRef.current) {
       const { previousHeight, previousTop } = pendingPrependRestoreRef.current;
       pendingPrependRestoreRef.current = null;
+      isRestoringPrependRef.current = true;
       requestAnimationFrame(() => {
-        const nextHeight = container.scrollHeight;
-        container.scrollTop = previousTop + (nextHeight - previousHeight);
+        requestAnimationFrame(() => {
+          const nextHeight = container.scrollHeight;
+          container.scrollTop = previousTop + (nextHeight - previousHeight);
+          isRestoringPrependRef.current = false;
+        });
       });
       prevMessageCountRef.current = messages.length;
       prevPartialLengthRef.current = partialMessage.length + partialThinking.length;
@@ -552,7 +558,7 @@ export function ChatView() {
 
     const resizeObserver = new ResizeObserver(() => {
       // Don't interfere with ongoing scrolls
-      if (!isScrollingRef.current && isUserAtBottomRef.current) {
+      if (!isScrollingRef.current && !isRestoringPrependRef.current && isUserAtBottomRef.current) {
         // Scroll to bottom when content height changes
         scrollToBottom('auto', false);
       }

@@ -1568,6 +1568,12 @@ async function handleClientEvent(event: ClientEvent): Promise<unknown> {
         event.payload.beforeTimestamp
       );
 
+    case 'session.getCompactionHistory':
+      return sm.getCompactionHistory(event.payload.sessionId, event.payload.limit);
+
+    case 'session.getTokenBudget':
+      return sm.getTokenBudgetSnapshot(event.payload.sessionId, event.payload.model);
+
     case 'session.getTraceSteps':
       return sm.getTraceSteps(event.payload.sessionId);
 

@@ -118,6 +118,22 @@ function formatCompactionTrigger(trigger: SessionCompactionInfo['trigger']) {
   return trigger;
 }
 
+function formatCompactionDateTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleString(undefined, {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function cleanContextSummaryPreview(value: string | undefined): string {
+  return (value || '')
+    .replace(/<\/?conversation_continuation_summary>/g, '')
+    .trim();
+}
+
 export function ContextPanel() {
   const { t } = useTranslation();
   const activeSessionId = useAppStore((s) => s.activeSessionId);
@@ -131,10 +147,14 @@ export function ContextPanel() {
   const toggleContextPanel = useAppStore((s) => s.toggleContextPanel);
   const workingDir = useAppStore((s) => s.workingDir);
   const setGlobalNotice = useAppStore((s) => s.setGlobalNotice);
+  const setSessionCompactionHistory = useAppStore((s) => s.setSessionCompactionHistory);
+  const setSessionTokenBudget = useAppStore((s) => s.setSessionTokenBudget);
   const {
     getMCPServers,
     changeWorkingDir,
     compactSession,
+    getSessionCompactionHistory,
+    getSessionTokenBudget,
     getBackgroundTaskLogTail,
     stopBackgroundTask,
   } = useIPC();
@@ -166,6 +186,7 @@ export function ContextPanel() {
   const [compressionStatsOpen, setCompressionStatsOpen] = useState(false);
   const [contextStatsOpen, setContextStatsOpen] = useState(false);
   const [expandedContextPreviewKey, setExpandedContextPreviewKey] = useState<string | null>(null);
+  const [expandedRuntimePreviewKey, setExpandedRuntimePreviewKey] = useState<string | null>(null);
   const [compactConfirmOpen, setCompactConfirmOpen] = useState(false);
   const ss = activeSessionId ? sessionStates[activeSessionId] : undefined;
   const steps = ss?.traceSteps ?? EMPTY_STEPS;
@@ -368,7 +389,7 @@ export function ContextPanel() {
 
   const formatLatestCompaction = useCallback(
     (info: SessionCompactionInfo) => {
-      const time = new Date(info.createdAt).toLocaleTimeString();
+      const time = formatCompactionDateTime(info.createdAt);
       if (info.status === 'skipped') {
         return t('context.lastCompactSkipped', {
           reason: info.skipReason ? t(`context.compactionSkipReasons.${info.skipReason}`) : '--',
@@ -706,6 +727,67 @@ export function ContextPanel() {
       cancelled = true;
     };
   }, [activeSessionId, contextPanelCollapsed, steps.length]);
+
+  useEffect(() => {
+    if (contextPanelCollapsed || !activeSessionId) {
+      return;
+    }
+
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const history = await getSessionCompactionHistory(activeSessionId, 20);
+        if (!cancelled) {
+          setSessionCompactionHistory(activeSessionId, history);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Failed to load session compaction history:', error);
+        }
+      }
+    };
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeSessionId,
+    contextPanelCollapsed,
+    getSessionCompactionHistory,
+    setSessionCompactionHistory,
+  ]);
+
+  useEffect(() => {
+    if (contextPanelCollapsed || !activeSessionId) {
+      return;
+    }
+
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const snapshot = await getSessionTokenBudget(activeSessionId, activeSession?.model);
+        if (!cancelled && snapshot) {
+          setSessionTokenBudget(activeSessionId, snapshot);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Failed to load session token budget:', error);
+        }
+      }
+    };
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeSession?.model,
+    activeSessionId,
+    contextPanelCollapsed,
+    getSessionTokenBudget,
+    setSessionTokenBudget,
+  ]);
 
   const handleTaskToggle = useCallback(
     async (taskId: string) => {
@@ -1496,8 +1578,14 @@ export function ContextPanel() {
                 <div className="divide-y divide-border-muted">
                   {compactionHistory.map((item) => {
                     const eventKey = `${item.createdAt}-${item.compactionType}`;
-                    const hasPreview = Boolean(item.compactedContextPreview || item.summaryPreview);
+                    const hasPreview = Boolean(
+                      item.compactedContextPreview || item.summaryText || item.summaryPreview
+                    );
                     const isPreviewOpen = expandedContextPreviewKey === eventKey;
+                    const isRuntimePreviewOpen = expandedRuntimePreviewKey === eventKey;
+                    const summaryText = cleanContextSummaryPreview(
+                      item.summaryText || item.summaryPreview
+                    );
                     return (
                     <div key={eventKey} className="px-3 py-2">
                       <div className="flex items-center justify-between gap-3 text-xs">
@@ -1532,11 +1620,51 @@ export function ContextPanel() {
                               : t('context.viewCompactedContext')}
                           </button>
                           {isPreviewOpen && (
-                            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-border-muted bg-surface-elevated/60 p-3 text-[11px] leading-5 text-text-secondary">
-                              {item.compactedContextPreview ||
-                                item.summaryPreview ||
-                                t('context.noCompactedContextPreview')}
-                            </pre>
+                            <div className="mt-2 max-h-72 overflow-auto rounded-md border border-border-muted bg-surface-elevated/60">
+                              {summaryText && (
+                                <div className="p-3">
+                                  <div className="text-[11px] font-medium text-text-primary">
+                                    {t('context.compactedSummaryTitle')}
+                                  </div>
+                                  <pre className="mt-2 whitespace-pre-wrap text-[11px] leading-5 text-text-secondary">
+                                    {summaryText}
+                                  </pre>
+                                </div>
+                              )}
+                              {item.compactedContextPreview && (
+                                <div className="border-t border-border-muted p-3">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setExpandedRuntimePreviewKey(
+                                        isRuntimePreviewOpen ? null : eventKey
+                                      )
+                                    }
+                                    className="inline-flex items-center gap-1 text-[11px] text-text-muted hover:text-text-primary transition-colors"
+                                  >
+                                    <SlidersHorizontal className="h-3 w-3" />
+                                    {isRuntimePreviewOpen
+                                      ? t('context.hideRuntimePreview')
+                                      : t('context.viewRuntimePreview')}
+                                  </button>
+                                  {isRuntimePreviewOpen && (
+                                    <div className="mt-3">
+                                      <div className="text-[11px] font-medium text-text-primary">
+                                        {t('context.compactedRuntimeTitle')}
+                                      </div>
+                                      <pre className="mt-2 whitespace-pre-wrap text-[11px] leading-5 text-text-secondary">
+                                        {item.compactedContextPreview}
+                                      </pre>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                              {!summaryText && !item.compactedContextPreview && (
+                                <div className="p-3 text-[11px] text-text-muted">
+                                  {t('context.noCompactedContextPreview')}
+                                </div>
+                              )}
+                            </div>
                           )}
                         </div>
                       )}

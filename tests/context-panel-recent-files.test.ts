@@ -45,6 +45,18 @@ describe('ContextPanel memory module integration', () => {
     expect(source).toContain('context.contextStatsDetail');
     expect(source).toContain('expandedContextPreviewKey');
     expect(source).toContain('context.viewCompactedContext');
+    expect(source).toContain('formatCompactionDateTime');
+    expect(source).toContain('context.compactedSummaryTitle');
+    expect(source).toContain('context.compactedRuntimeTitle');
+    expect(source).toContain('expandedRuntimePreviewKey');
+    expect(source).toContain('context.viewRuntimePreview');
+    expect(source).toContain('item.summaryText || item.summaryPreview');
+  });
+
+  it('hydrates token budget when opening a historical session', () => {
+    const source = fs.readFileSync(contextPanelPath, 'utf8');
+    expect(source).toContain("getSessionTokenBudget(activeSessionId, activeSession?.model)");
+    expect(source).toContain('setSessionTokenBudget(activeSessionId, snapshot)');
   });
 
   it('uses an in-app compact confirmation dialog instead of native confirm', () => {

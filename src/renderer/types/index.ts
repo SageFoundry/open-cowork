@@ -154,6 +154,7 @@ export interface SessionCompactionInfo {
   preservedTailCount: number;
   compactedMessageCount: number;
   createdAt: number;
+  summaryText?: string;
   summaryPreview?: string;
   compactedContextPreview?: string;
 }
@@ -457,6 +458,8 @@ export type ClientEvent =
       type: 'session.getMessages';
       payload: { sessionId: string; limit?: number; beforeTimestamp?: number };
     }
+  | { type: 'session.getCompactionHistory'; payload: { sessionId: string; limit?: number } }
+  | { type: 'session.getTokenBudget'; payload: { sessionId: string; model?: string } }
   | { type: 'session.getTraceSteps'; payload: { sessionId: string } }
   | { type: 'permission.response'; payload: { toolUseId: string; result: PermissionResult } }
   | { type: 'sudo.password.response'; payload: { toolUseId: string; password: string | null } }

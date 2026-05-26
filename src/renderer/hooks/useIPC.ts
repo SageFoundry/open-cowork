@@ -10,6 +10,8 @@ import type {
   TraceStep,
   ContentBlock,
   SessionMessagesPage,
+  SessionCompactionInfo,
+  TokenBudgetSnapshot,
   BackgroundTask,
   BackgroundTaskStartInput,
 } from '../types';
@@ -753,10 +755,29 @@ export function useIPC() {
     [send]
   );
 
-  const listSessions = useCallback(() => {
-    if (!isElectron) return;
-    send({ type: 'session.list', payload: {} });
-  }, [send]);
+  const listSessions = useCallback(async () => {
+    if (!isElectron) return [];
+
+    const load = async (): Promise<Session[]> => {
+      const sessions = await invoke<Session[]>({ type: 'session.list', payload: {} });
+      const nextSessions = sessions || [];
+      useAppStore.getState().setSessions(nextSessions);
+      return nextSessions;
+    };
+
+    try {
+      return await load();
+    } catch (error) {
+      console.error('[useIPC] Failed to list sessions, retrying once:', error);
+      await new Promise((resolve) => window.setTimeout(resolve, 300));
+      try {
+        return await load();
+      } catch (retryError) {
+        console.error('[useIPC] Failed to list sessions after retry:', retryError);
+        return [];
+      }
+    }
+  }, [invoke]);
 
   // Get messages for a session (from persistent storage)
   const getSessionMessages = useCallback(
@@ -790,6 +811,36 @@ export function useIPC() {
       }
       return (
         (await invoke<TraceStep[]>({ type: 'session.getTraceSteps', payload: { sessionId } })) || []
+      );
+    },
+    [invoke]
+  );
+
+  const getSessionCompactionHistory = useCallback(
+    async (sessionId: string, limit = 20): Promise<SessionCompactionInfo[]> => {
+      if (!isElectron) {
+        return [];
+      }
+      return (
+        (await invoke<SessionCompactionInfo[]>({
+          type: 'session.getCompactionHistory',
+          payload: { sessionId, limit },
+        })) || []
+      );
+    },
+    [invoke]
+  );
+
+  const getSessionTokenBudget = useCallback(
+    async (sessionId: string, model?: string): Promise<TokenBudgetSnapshot | null> => {
+      if (!isElectron) {
+        return null;
+      }
+      return (
+        (await invoke<TokenBudgetSnapshot | null>({
+          type: 'session.getTokenBudget',
+          payload: { sessionId, model },
+        })) || null
       );
     },
     [invoke]
@@ -925,6 +976,8 @@ export function useIPC() {
     batchDeleteSessions,
     listSessions,
     getSessionMessages,
+    getSessionCompactionHistory,
+    getSessionTokenBudget,
     getSessionTraceSteps,
     respondToPermission,
     respondToSudoPassword,

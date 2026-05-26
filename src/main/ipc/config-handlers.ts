@@ -106,14 +106,22 @@ export function registerConfigHandlers({
       anySearchApiKey: newConfig.anySearchApiKey ? '***' : '',
     });
     const previousConfig = configStore.getAll();
-    configStore.update(newConfig);
+    const modelSpec =
+      newConfig.model && newConfig.model !== previousConfig.model
+        ? resolveKnownModelSpecs(newConfig.model)
+        : undefined;
+    const configToSave =
+      modelSpec && newConfig.contextWindow === undefined
+        ? { ...newConfig, contextWindow: modelSpec.contextWindow }
+        : newConfig;
+    configStore.update(configToSave);
     const updatedConfig = await syncConfigAfterMutation(previousConfig);
 
     // If model changed, compute new context window so renderer can update immediately
     let modelContextWindow: number | undefined;
     if (newConfig.model && newConfig.model !== previousConfig.model) {
-      const spec = resolveKnownModelSpecs(newConfig.model);
-      modelContextWindow = spec?.contextWindow || newConfig.contextWindow || 128000;
+      modelContextWindow =
+        modelSpec?.contextWindow || configToSave.contextWindow || updatedConfig.contextWindow || 128000;
     }
 
     return { success: true, config: updatedConfig, modelContextWindow };

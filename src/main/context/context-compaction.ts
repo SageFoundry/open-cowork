@@ -39,6 +39,8 @@ export interface CompactionBoundaryRecordInput {
   estimatedTokensBefore: number;
   estimatedTokensAfter: number;
   compactType: CompactionType;
+  compactedMessageCount?: number;
+  compactedContextPreview?: string;
 }
 
 const MAX_COMPACTED_CONTEXT_PREVIEW_CHARS = 6000;
@@ -325,6 +327,7 @@ export function buildCompactionInfo(input: {
     preservedTailCount: input.preservedTailCount,
     compactedMessageCount: input.compactedMessageCount,
     createdAt: Date.now(),
+    summaryText: input.summaryText,
     summaryPreview: input.summaryText?.slice(0, 200),
     compactedContextPreview: input.compactedContextPreview,
   };

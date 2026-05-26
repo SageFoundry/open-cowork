@@ -43,6 +43,7 @@ export interface DatabaseInstance {
   compactionSnapshots: {
     create: (snapshot: CompactionSnapshotRow) => void;
     getLatestBySessionId: (sessionId: string) => CompactionSnapshotRow | undefined;
+    getBySessionId: (sessionId: string, limit: number) => CompactionSnapshotRow[];
     deleteBySessionId: (sessionId: string) => void;
   };
 
@@ -172,6 +173,10 @@ export interface CompactionSnapshotRow {
   preserved_tail: string;
   estimated_tokens_before: number;
   estimated_tokens_after: number;
+  compacted_message_count: number | null;
+  preserved_tail_count: number | null;
+  summary_preview: string | null;
+  compacted_context_preview: string | null;
   created_at: number;
 }
 
@@ -563,6 +568,25 @@ function initializeSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_compaction_snapshots_session_created
     ON compaction_snapshots(session_id, created_at DESC)
   `);
+    ensureColumn(
+      database,
+      'compaction_snapshots',
+      'compacted_message_count',
+      'compacted_message_count INTEGER'
+    );
+    ensureColumn(
+      database,
+      'compaction_snapshots',
+      'preserved_tail_count',
+      'preserved_tail_count INTEGER'
+    );
+    ensureColumn(database, 'compaction_snapshots', 'summary_preview', 'summary_preview TEXT');
+    ensureColumn(
+      database,
+      'compaction_snapshots',
+      'compacted_context_preview',
+      'compacted_context_preview TEXT'
+    );
 
     database.exec(`
     CREATE TABLE IF NOT EXISTS background_tasks (
@@ -803,13 +827,17 @@ export function initDatabase(): DatabaseInstance {
 
   const insertCompactionSnapshot = rawDb.prepare(`
     INSERT OR REPLACE INTO compaction_snapshots (
-      id, session_id, compact_type, summary_text, preserved_tail, estimated_tokens_before, estimated_tokens_after, created_at
+      id, session_id, compact_type, summary_text, preserved_tail, estimated_tokens_before, estimated_tokens_after, compacted_message_count, preserved_tail_count, summary_preview, compacted_context_preview, created_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const getLatestCompactionSnapshotBySessionStmt = rawDb.prepare(`
     SELECT * FROM compaction_snapshots WHERE session_id = ? ORDER BY created_at DESC LIMIT 1
+  `);
+
+  const getCompactionSnapshotsBySessionStmt = rawDb.prepare(`
+    SELECT * FROM compaction_snapshots WHERE session_id = ? ORDER BY created_at DESC LIMIT ?
   `);
 
   const deleteCompactionSnapshotsBySessionStmt = rawDb.prepare(`
@@ -1041,6 +1069,10 @@ export function initDatabase(): DatabaseInstance {
           snapshot.preserved_tail,
           snapshot.estimated_tokens_before,
           snapshot.estimated_tokens_after,
+          snapshot.compacted_message_count,
+          snapshot.preserved_tail_count,
+          snapshot.summary_preview,
+          snapshot.compacted_context_preview,
           snapshot.created_at
         );
       },
@@ -1049,6 +1081,10 @@ export function initDatabase(): DatabaseInstance {
         return getLatestCompactionSnapshotBySessionStmt.get(sessionId) as
           | CompactionSnapshotRow
           | undefined;
+      },
+
+      getBySessionId: (sessionId: string, limit: number): CompactionSnapshotRow[] => {
+        return getCompactionSnapshotsBySessionStmt.all(sessionId, limit) as CompactionSnapshotRow[];
       },
 
       deleteBySessionId: (sessionId: string) => {

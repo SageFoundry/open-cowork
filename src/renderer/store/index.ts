@@ -242,6 +242,7 @@ interface AppState {
     compactionState: SessionCompactionState | null
   ) => void;
   setSessionCompaction: (sessionId: string, info: SessionCompactionInfo | null) => void;
+  setSessionCompactionHistory: (sessionId: string, history: SessionCompactionInfo[]) => void;
   setSessionPlanMode: (sessionId: string, planMode: boolean) => void;
   setSessionInputDraft: (sessionId: string, draft: string) => void;
 
@@ -450,9 +451,12 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) => {
       const ss = getSession(state.sessionStates, sessionId);
       if (messages.length === 0) return {};
+      const existingIds = new Set(ss.messages.map((message) => message.id));
+      const nextMessages = messages.filter((message) => !existingIds.has(message.id));
+      if (nextMessages.length === 0) return {};
       return {
         sessionStates: patchSession(state.sessionStates, sessionId, {
-          messages: [...messages, ...ss.messages],
+          messages: [...nextMessages, ...ss.messages],
         }),
       };
     }),
@@ -740,6 +744,13 @@ export const useAppStore = create<AppState>((set) => ({
         }),
       };
     }),
+  setSessionCompactionHistory: (sessionId, compactionHistory) =>
+    set((state) => ({
+      sessionStates: patchSession(state.sessionStates, sessionId, {
+        latestCompaction: compactionHistory[0] ?? null,
+        compactionHistory,
+      }),
+    })),
   setSessionPlanMode: (sessionId, planMode) =>
     set((state) => {
       // Also update the session object itself so it persists

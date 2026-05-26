@@ -71,6 +71,12 @@ function makeDb(overrides: Partial<DatabaseInstance> = {}): DatabaseInstance {
       getBySessionId: vi.fn(() => []),
       deleteBySessionId: vi.fn(),
     },
+    compactionSnapshots: {
+      create: vi.fn(),
+      getLatestBySessionId: vi.fn(() => undefined),
+      getBySessionId: vi.fn(() => []),
+      deleteBySessionId: vi.fn(),
+    },
     ...overrides,
   } as unknown as DatabaseInstance;
 }

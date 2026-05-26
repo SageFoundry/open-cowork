@@ -52,6 +52,8 @@ const ALLOWED_CLIENT_EVENTS: ReadonlySet<string> = new Set<ClientEvent['type']>(
   'session.rename',
   'session.list',
   'session.getMessages',
+  'session.getCompactionHistory',
+  'session.getTokenBudget',
   'session.getTraceSteps',
   'permission.response',
   'sudo.password.response',

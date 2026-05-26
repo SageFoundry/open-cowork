@@ -979,6 +979,76 @@ export class SessionManager {
     });
   }
 
+  private buildCompactionInfoFromSnapshot(snapshot: CompactionSnapshotRow): SessionCompactionInfo {
+    let preservedTailCount = snapshot.preserved_tail_count ?? 0;
+    let compactedContextPreview = snapshot.compacted_context_preview ?? undefined;
+
+    if (!preservedTailCount || !compactedContextPreview) {
+      try {
+        const preservedTail = JSON.parse(snapshot.preserved_tail) as unknown;
+        if (Array.isArray(preservedTail)) {
+          preservedTailCount = preservedTailCount || preservedTail.length;
+          compactedContextPreview =
+            compactedContextPreview || buildCompactedContextPreview(preservedTail as Message[]);
+        }
+      } catch {
+        // Older rows can still hydrate the numeric stats below.
+      }
+    }
+
+    return {
+      sessionId: snapshot.session_id,
+      compactionType: snapshot.compact_type === 'micro' ? 'micro' : 'full',
+      trigger: 'auto',
+      status: 'created',
+      boundaryCreated: true,
+      estimatedTokensBefore: snapshot.estimated_tokens_before,
+      estimatedTokensAfter: snapshot.estimated_tokens_after,
+      preservedTailCount,
+      compactedMessageCount:
+        snapshot.compacted_message_count ??
+        Math.max(0, snapshot.estimated_tokens_before > snapshot.estimated_tokens_after ? 1 : 0),
+      createdAt: snapshot.created_at,
+      summaryText: snapshot.summary_text,
+      summaryPreview: snapshot.summary_preview ?? snapshot.summary_text.slice(0, 200),
+      compactedContextPreview,
+    };
+  }
+
+  getCompactionHistory(sessionId: string, limit = 20): SessionCompactionInfo[] {
+    return this.db.compactionSnapshots
+      .getBySessionId(sessionId, Math.max(1, Math.min(50, Math.floor(limit))))
+      .map((snapshot) => this.buildCompactionInfoFromSnapshot(snapshot));
+  }
+
+  getTokenBudgetSnapshot(sessionId: string, modelOverride?: string): TokenBudgetSnapshot | null {
+    const session = this.loadSession(sessionId);
+    if (!session) {
+      return null;
+    }
+
+    const runtime = this.getRuntimeMessages(sessionId);
+    this.maybeNotifyRestoredFromBoundary(sessionId, runtime.snapshot);
+    const contextConfig = this.resolveContextConfig();
+    const runtimeConfig = configStore.getAll();
+    const modelForBudget = modelOverride || session.model || runtimeConfig.model;
+    const modelSpecs = modelForBudget ? resolveKnownModelSpecs(modelForBudget) : undefined;
+    const contextWindow =
+      modelSpecs?.contextWindow ||
+      resolveRuntimeContextWindow({
+        ...runtimeConfig,
+        model: modelForBudget,
+      });
+    const systemPromptTokens = this.estimateSystemPromptTokens(session, '');
+    return buildTokenBudgetSnapshot({
+      messages: runtime.messages,
+      contextWindow,
+      maxContextTokens: contextConfig.maxContextTokens,
+      strategy: contextConfig.memoryStrategy,
+      systemPromptTokens,
+    });
+  }
+
   private emitCompactionState(sessionId: string, state: SessionCompactionState | null): void {
     this.sendToRenderer({
       type: 'session.compactionState',
@@ -1170,6 +1240,8 @@ export class SessionManager {
     preservedTail: Message[];
     estimatedTokensBefore: number;
     estimatedTokensAfter: number;
+    compactedMessageCount: number;
+    compactedContextPreview: string;
     createdAt: number;
   }): void {
     this.db.compactionSnapshots.create({
@@ -1180,6 +1252,10 @@ export class SessionManager {
       preserved_tail: JSON.stringify(input.preservedTail),
       estimated_tokens_before: input.estimatedTokensBefore,
       estimated_tokens_after: input.estimatedTokensAfter,
+      compacted_message_count: input.compactedMessageCount,
+      preserved_tail_count: input.preservedTail.length,
+      summary_preview: input.summaryText.slice(0, 200),
+      compacted_context_preview: input.compactedContextPreview,
       created_at: input.createdAt,
     });
   }
@@ -1321,6 +1397,7 @@ export class SessionManager {
       const compactedRuntimeMessages = [boundaryMessage, ...preservedTail];
       const estimatedTokensBefore = estimateMessagesTokens(runtimeMessages);
       const estimatedTokensAfter = estimateMessagesTokens(compactedRuntimeMessages);
+      const compactedContextPreview = buildCompactedContextPreview(compactedRuntimeMessages);
 
       this.saveCompactionSnapshot({
         sessionId: session.id,
@@ -1329,6 +1406,8 @@ export class SessionManager {
         preservedTail,
         estimatedTokensBefore,
         estimatedTokensAfter,
+        compactedMessageCount: olderMessages.length,
+        compactedContextPreview,
         createdAt,
       });
 
@@ -1346,7 +1425,7 @@ export class SessionManager {
         preservedTailCount,
         compactedMessageCount: olderMessages.length,
         summaryText,
-        compactedContextPreview: buildCompactedContextPreview(compactedRuntimeMessages),
+        compactedContextPreview,
       });
 
       if (this.agentRunner.clearSdkSession) {

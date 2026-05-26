@@ -10,6 +10,8 @@ export function eventRequiresSessionManager(event: ClientEvent): boolean {
     case 'session.batchDelete':
     case 'session.list':
     case 'session.getMessages':
+    case 'session.getCompactionHistory':
+    case 'session.getTokenBudget':
     case 'session.getTraceSteps':
     case 'permission.response':
       return true;

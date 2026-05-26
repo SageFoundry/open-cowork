@@ -27,7 +27,7 @@ import {
 
 import sidebarLogoSrc from '../assets/logo.png';
 
-const INITIAL_MESSAGES_PAGE_SIZE = 5;
+const INITIAL_MESSAGES_PAGE_SIZE = 20;
 
 type Translate = (key: string, values?: Record<string, string | number>) => string;
 
