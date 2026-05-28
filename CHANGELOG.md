@@ -5,6 +5,33 @@ All notable changes to the Open Cowork AI agent desktop app will be documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.7] - 2026-05-28
+
+### 🚀 重大更新
+
+#### 语言运行时重构
+- **每轮语言注入**：新增 `<language_runtime>` 块（`buildVisibleLanguageRuntimePrompt`），每轮对话前动态注入，与 `<language_policy>` 解耦
+- **中英文双路径**：UI 语言切换后下一轮对话自动生效，无需重启会话
+- **中文压缩摘要**：压缩 LLM 调用使用中文 system prompt（`COMPACTION_SUMMARY_SYSTEM_PROMPT_ZH`）
+- **中文记忆抽取**：记忆评估 LLM 调用根据 UI 语言使用中文 prompt
+
+#### Thinking Level 粒度化
+- `enableThinking` boolean → **6 级 ThinkingLevel**：`off` / `minimal` / `low` / `medium` / `high` / `xhigh`
+- 配置层自动迁移：旧 boolean 值映射为 `medium`
+- ChatView：下拉选择器替代开关按钮
+- 每级对应不同的 Pi SDK thinking 配置（`extended` / `medium` / `high`）
+
+### 🖥️ 前端体验
+- **每轮 Token 统计**：ChatView 显示每轮 input/output/cache tokens 用量
+- **i18n 时间格式化**：新增 `i18n-format.ts`，`formatChatTurnTime` 支持中英文时间格式
+- **会话状态 reconcile**：会话结束时从 DB 拉消息同步状态，清理 partials
+- **分页优化**：MESSAGES_PAGE_SIZE 5 → 20
+
+### 🧪 测试
+- 新增 `i18n-format.test.ts`
+- 新增 `use-ipc-session-status-reconcile.test.ts`
+- 更新 `prompt-contract.test.ts`、`config-store-config-sets.test.ts`、`session-compaction-history.test.ts`、`memory-evaluation.test.ts`
+
 ## [3.5.6] - 2026-05-28
 
 ### 🚀 重大更新
