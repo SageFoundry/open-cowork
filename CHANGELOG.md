@@ -5,6 +5,17 @@ All notable changes to the Open Cowork AI agent desktop app will be documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.6] - 2026-05-27
+
+### Added
+
+- **后台任务管理工具**：新增 3 个 AI 可调用工具 `list_background_tasks`、`read_background_task_log`、`stop_background_task`，让 Agent 能直接管理后台进程，无需手动 shell 操作
+- **日志文件保证创建**：后台任务启动时确保日志文件存在
+
+### Changed
+
+- **提示词优化**：prompt-contract 新增指令，引导 LLM 优先使用后台任务管理工具代替手动 PID 操作
+
 ## [3.5.5] - 2026-05-25
 
 ### Added
