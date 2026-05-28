@@ -197,8 +197,17 @@
     "localOllamaModelUnavailable": "Found local Ollama, but model {{model}} could not complete a minimal inference request.",
     "localOllamaModelLoading": "Found local Ollama, but the model is still loading into memory. Large models may take up to a minute.",
     "enableThinking": "Enable Thinking Mode",
+    "thinkingLevel": "Thinking Level",
     "enableThinkingHint": "Show Claude's thinking process step by step. This provides more transparency but may increase token usage.",
     "enableThinkingOllamaHint": "Most Ollama models do not support thinking mode. Enable only if your model explicitly supports it.",
+    "thinkingLevels": {
+      "off": "Off",
+      "minimal": "Minimal",
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High",
+      "xhigh": "X-High"
+    },
     "testSuccess": "Connection successful ({{ms}}ms)",
     "testSuccessNeedSave": "Connection test passed. Save settings before starting a session.",
     "testError": {
@@ -670,6 +679,11 @@
     "thinking": "Thinking",
     "toggleThinking": "Toggle thinking mode",
     "thinkingOff": "Off",
+    "thinkingMinimal": "Minimal",
+    "thinkingLow": "Low",
+    "thinkingMedium": "Medium",
+    "thinkingHigh": "High",
+    "thinkingXHigh": "X-High",
     "plan": "Plan",
     "planModeActive": "Currently in Plan Mode (read-only)",
     "planModeOff": "Switch to Plan Mode",
@@ -838,7 +852,9 @@
     "noQuestions": "No questions",
     "question": "Question",
     "thinking": "Thinking",
-    "executionTime": "Execution time: {{time}}"
+    "executionTime": "Execution time: {{time}}",
+    "turnTokenUsage": "{{total}} token · ({{input}}/{{output}})",
+    "turnTokenUsageDetail": "input {{input}} · output {{output}} · cache read {{cacheRead}} · cache write {{cacheWrite}}"
   },
   "schedule": {
     "createTitle": "Create Schedule",

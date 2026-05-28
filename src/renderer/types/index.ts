@@ -649,6 +649,7 @@ export type ProviderType =
 export type CustomProtocolType = 'anthropic' | 'openai' | 'gemini';
 export type AppTheme = 'dark' | 'light' | 'system';
 export type ToolOutputCompressionLevel = 'off' | 'conservative' | 'aggressive';
+export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 export type ProviderProfileKey =
   | 'openrouter'
   | 'anthropic'
@@ -679,6 +680,7 @@ export interface ApiConfigSet {
   customProtocol: CustomProtocolType;
   activeProfileKey: ProviderProfileKey;
   profiles: Partial<Record<ProviderProfileKey, ProviderProfile>>;
+  thinkingLevel: ThinkingLevel;
   enableThinking: boolean;
   updatedAt: string;
 }
@@ -709,6 +711,7 @@ export interface AppConfig {
   memoryStrategy?: MemoryStrategy;
   maxContextTokens?: number;
   sandboxEnabled?: boolean;
+  thinkingLevel?: ThinkingLevel;
   enableThinking?: boolean;
   autoMemory?: boolean;
   toolOutputCompressionLevel?: ToolOutputCompressionLevel;

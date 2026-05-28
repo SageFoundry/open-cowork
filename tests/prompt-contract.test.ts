@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildOpenCoworkAppendPrompt,
   buildPlanModeRuntimePrompt,
+  buildVisibleLanguageRuntimePrompt,
   buildWorkspaceInfoPrompt,
   estimateEffectiveSystemPromptTokens,
   VIRTUAL_WORKSPACE_PATH,
@@ -23,20 +24,29 @@ describe('Open Cowork prompt contract', () => {
 
     expect(prompt).toContain('<open_cowork_policy version="1">');
     expect(prompt).toContain('<language_policy>');
-    expect(prompt).toContain('Chinese (中文)');
+    expect(prompt).toContain('用户可见的自然语言输出');
+    expect(prompt).toContain('工具调用前后');
     expect(prompt).toContain('<work_policy>');
-    expect(prompt).toContain('proceed with reasonable assumptions');
-    expect(prompt).toContain('within two days');
+    expect(prompt).toContain('基于合理假设推进');
+    expect(prompt).toContain('最近两天');
     expect(prompt).toContain('<mode_policy>');
     expect(prompt).toContain('<memory_tool_policy>');
-    expect(prompt).toContain('search_history is the full conversation lookup tool');
-    expect(prompt).toContain('autoMemory is currently disabled');
+    expect(prompt).toContain('search_history 是完整对话检索工具');
+    expect(prompt).toContain('autoMemory 当前已关闭');
     expect(prompt).toContain('<project_memory_guidance>Use memory carefully.</project_memory_guidance>');
     expect(prompt).toContain('<bundled_executables>');
 
     expect(prompt).not.toContain('<plan_mode_capabilities>');
     expect(prompt).not.toContain('START DOING IT');
     expect(prompt).not.toContain('https://claude.ai/chat/URL');
+  });
+
+  it('builds a per-turn language reminder for visible reasoning', () => {
+    const prompt = buildVisibleLanguageRuntimePrompt({ visibleLanguage: 'Chinese (中文)' });
+
+    expect(prompt).toContain('<language_runtime>');
+    expect(prompt).toContain('必须使用中文展示');
+    expect(prompt).toContain('工具结果之后');
   });
 
   it('renders workspace information for sandboxed and normal workspaces', () => {
@@ -64,6 +74,23 @@ describe('Open Cowork prompt contract', () => {
     }
     expect(prompt).toContain('tmp');
     expect(prompt).toContain('session-123');
+  });
+
+  it('builds localized Chinese plan mode and workspace prompts', () => {
+    const workspace = buildWorkspaceInfoPrompt({
+      isSandboxed: false,
+      workingDir: 'E:/repo',
+      visibleLanguage: 'Chinese (中文)',
+    });
+    const plan = buildPlanModeRuntimePrompt({
+      sessionId: 'session-123',
+      cwd: 'E:/workspace/open-cowork',
+      visibleLanguage: 'Chinese (中文)',
+    });
+
+    expect(workspace).toContain('当前工作区');
+    expect(plan).toContain('当前模式：计划模式');
+    expect(plan).toContain('session-123');
   });
 
   it('estimates policy prompt tokens including Open Cowork additions', () => {

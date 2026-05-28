@@ -16,8 +16,18 @@ import { useApiConfigState } from '../../hooks/useApiConfigState';
 import { ApiConfigSetManager } from '../ApiConfigSetManager';
 import { CommonProviderSetupsCard, GuidanceInlineHint } from '../ProviderGuidance';
 import ApiDiagnosticsPanel from '../ApiDiagnosticsPanel';
+import type { ThinkingLevel } from '../../types';
 
 // ==================== API Settings Tab ====================
+
+const THINKING_LEVEL_OPTIONS: Array<{ value: ThinkingLevel; labelKey: string }> = [
+  { value: 'off', labelKey: 'api.thinkingLevels.off' },
+  { value: 'minimal', labelKey: 'api.thinkingLevels.minimal' },
+  { value: 'low', labelKey: 'api.thinkingLevels.low' },
+  { value: 'medium', labelKey: 'api.thinkingLevels.medium' },
+  { value: 'high', labelKey: 'api.thinkingLevels.high' },
+  { value: 'xhigh', labelKey: 'api.thinkingLevels.xhigh' },
+];
 
 export function SettingsAPI() {
   const { t } = useTranslation();
@@ -42,7 +52,7 @@ export function SettingsAPI() {
     isRefreshingOpenRouterSpecs,
     openRouterSpecsStatus,
     isDiscoveringLocalOllama,
-    enableThinking,
+    thinkingLevel,
     isOllamaMode,
     requiresApiKey,
     protocolGuidanceText,
@@ -64,7 +74,7 @@ export function SettingsAPI() {
     removeModel,
     setContextWindow,
     setMaxTokens,
-    setEnableThinking,
+    setThinkingLevel,
     applyCommonProviderSetup,
     changeProvider,
     changeProtocol,
@@ -455,18 +465,11 @@ export function SettingsAPI() {
         />
       )}
 
-      {/* Enable Thinking Mode */}
+      {/* Thinking Level */}
       <div className="space-y-3 py-5 border-b border-border-muted">
-        <div className="flex items-start gap-2 text-xs text-text-muted">
-          <input
-            type="checkbox"
-            id="enable-thinking"
-            checked={enableThinking}
-            onChange={(e) => setEnableThinking(e.target.checked)}
-            className="mt-0.5 w-4 h-4 rounded border-border text-accent focus:ring-accent"
-          />
-          <label htmlFor="enable-thinking" className="space-y-0.5 flex-1">
-            <div className="text-text-primary font-medium">{t('api.enableThinking')}</div>
+        <div className="flex items-start justify-between gap-4 text-xs text-text-muted">
+          <label htmlFor="thinking-level" className="space-y-0.5 flex-1">
+            <div className="text-text-primary font-medium">{t('api.thinkingLevel')}</div>
             <div>{t('api.enableThinkingHint')}</div>
             {isOllamaMode && (
               <div className="text-amber-500 dark:text-amber-400 text-xs mt-1">
@@ -474,6 +477,18 @@ export function SettingsAPI() {
               </div>
             )}
           </label>
+          <select
+            id="thinking-level"
+            value={thinkingLevel}
+            onChange={(e) => setThinkingLevel(e.target.value as ThinkingLevel)}
+            className="min-w-[132px] px-3 py-2 rounded-lg bg-background border border-border text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent transition-all"
+          >
+            {THINKING_LEVEL_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {t(option.labelKey)}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
 

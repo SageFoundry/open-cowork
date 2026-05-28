@@ -82,7 +82,35 @@ export function buildMemoryExtractionPrompt(
 ): { systemPrompt: string; prompt: string } {
   const transcript = serializeRecentMessages(messages);
   const existing = serializeExistingKnowledge(existingEntries);
-  const outputLanguage = options?.language === 'en' ? 'English' : 'Chinese (中文)';
+  const isChinese = options?.language !== 'en';
+
+  if (isChinese) {
+    return {
+      systemPrompt: `你负责为 Open Cowork 抽取持久项目记忆。
+只返回严格 JSON。不要写 markdown。不要写注释。
+
+记忆只用于稳定、跨会话知识。它不是对话记录、任务日志、临时状态或可搜索历史。
+可恢复的对话细节应使用 search_history。只有当信息能压缩成稳定事实、决策、偏好、参考资料或项目约定时，才保存到记忆。
+
+决策前必须和已有记忆对比：
+- create：只用于真正新的持久知识。
+- update：新信息应该合并进现有记忆时使用。
+- ignore：重复信息、临时细节、普通任务进展、工具输出摘要，或任何容易从 search_history 恢复的内容。
+
+允许类型：fact, preference, decision, reference, project。
+importance 必须为 1-5。只有关键、可复用知识才能使用 4-5。
+title、content 和 reason 使用中文。必要时精确保留代码标识符、路径、API 名称、模型名称和产品名称。
+最多返回 ${MAX_ACTIONS_TO_APPLY} 个 create/update 动作。`,
+      prompt: `已有记忆：
+${existing}
+
+待抽取对话：
+${transcript}
+
+返回这个 JSON 结构：
+{"actions":[{"action":"create|update|ignore","existingId":"optional-existing-id","type":"fact|preference|decision|reference|project","title":"short title","content":"concise durable knowledge","importance":1,"tags":["tag"],"reason":"brief reason"}]}`,
+    };
+  }
 
   return {
     systemPrompt: `You extract durable project memory for Open Cowork.
@@ -98,7 +126,7 @@ Compare against existing memory before deciding:
 
 Allowed types: fact, preference, decision, reference, project.
 Importance must be 1-5. Use 4-5 only for critical, reusable knowledge.
-Write title, content, and reason in ${outputLanguage}. Preserve code identifiers, paths, API names, model names, and product names exactly when needed.
+Write title, content, and reason in English. Preserve code identifiers, paths, API names, model names, and product names exactly when needed.
 Return at most ${MAX_ACTIONS_TO_APPLY} create/update actions.`,
     prompt: `Existing memory:
 ${existing}

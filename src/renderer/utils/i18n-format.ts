@@ -27,6 +27,38 @@ export function formatAppDate(
   ).format(new Date(value));
 }
 
+export function formatChatTurnTime(value: number | string | Date, now: Date = new Date()): string {
+  const date = new Date(value);
+  const locale = getAppLocale();
+  const isSameYear = date.getFullYear() === now.getFullYear();
+  const isSameDay =
+    isSameYear && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
+
+  if (isSameDay) {
+    return new Intl.DateTimeFormat(locale, {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(date);
+  }
+
+  if (isSameYear) {
+    return new Intl.DateTimeFormat(locale, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(date);
+  }
+
+  return new Intl.DateTimeFormat(locale, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  }).format(date);
+}
+
 export function joinAppList(values: string[]): string {
   return values.join(getAppLocale().startsWith('zh') ? '、' : ', ');
 }

@@ -14,6 +14,7 @@ import type {
   ProviderProfileKey,
   ProviderPresets,
   ProviderType,
+  ThinkingLevel,
 } from '../types';
 import { isLoopbackBaseUrl } from '../../shared/network/loopback';
 import {
@@ -50,6 +51,7 @@ interface UIProviderProfile {
 interface ConfigStateSnapshot {
   activeProfileKey: ProviderProfileKey;
   profiles: Record<ProviderProfileKey, UIProviderProfile>;
+  thinkingLevel: ThinkingLevel;
   enableThinking: boolean;
 }
 
@@ -68,6 +70,28 @@ const CONFIG_SET_LIMIT = 20;
 const DEFAULT_CONFIG_SET_ID = 'default';
 const DEFAULT_CONFIG_SET_NAME_ZH = '默认方案';
 export const FALLBACK_PROVIDER_PRESETS: ProviderPresets = API_PROVIDER_PRESETS;
+const THINKING_LEVELS: ThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+
+function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return typeof value === 'string' && THINKING_LEVELS.includes(value as ThinkingLevel);
+}
+
+function normalizeThinkingLevel(
+  level: unknown,
+  enableThinking: unknown,
+  fallback: ThinkingLevel = 'off'
+): ThinkingLevel {
+  if (level === 'off' && enableThinking === true) {
+    return 'medium';
+  }
+  if (isThinkingLevel(level)) {
+    return level;
+  }
+  if (typeof enableThinking === 'boolean') {
+    return enableThinking ? 'medium' : 'off';
+  }
+  return fallback;
+}
 
 const PROFILE_KEYS: ProviderProfileKey[] = [
   'openrouter',
@@ -347,10 +371,13 @@ export function buildApiConfigSnapshot(
     );
   }
 
+  const thinkingLevel = normalizeThinkingLevel(config?.thinkingLevel, config?.enableThinking);
+
   return {
     activeProfileKey,
     profiles,
-    enableThinking: Boolean(config?.enableThinking),
+    thinkingLevel,
+    enableThinking: thinkingLevel !== 'off',
   };
 }
 
@@ -375,12 +402,19 @@ function toPersistedProfiles(
 export function buildApiConfigDraftSignature(
   activeProfileKey: ProviderProfileKey,
   profiles: Record<ProviderProfileKey, UIProviderProfile>,
-  enableThinking: boolean
+  thinkingLevelOrEnableThinking: ThinkingLevel | boolean
 ): string {
   const persisted = toPersistedProfiles(profiles);
+  const thinkingLevel =
+    typeof thinkingLevelOrEnableThinking === 'boolean'
+      ? thinkingLevelOrEnableThinking
+        ? 'medium'
+        : 'off'
+      : thinkingLevelOrEnableThinking;
   return JSON.stringify({
     activeProfileKey,
-    enableThinking,
+    thinkingLevel,
+    enableThinking: thinkingLevel !== 'off',
     profiles: PROFILE_KEYS.map((key) => ({
       key,
       apiKey: persisted[key]?.apiKey || '',
@@ -446,6 +480,8 @@ export function buildApiConfigSets(
         };
       }
 
+      const thinkingLevel = normalizeThinkingLevel(set.thinkingLevel, set.enableThinking);
+
       return {
         ...set,
         id: typeof set.id === 'string' && set.id.trim() ? set.id : `set-${index + 1}`,
@@ -454,7 +490,8 @@ export function buildApiConfigSets(
         customProtocol,
         activeProfileKey,
         profiles: normalizedProfiles,
-        enableThinking: Boolean(set.enableThinking),
+        thinkingLevel,
+        enableThinking: thinkingLevel !== 'off',
         updatedAt: typeof set.updatedAt === 'string' && set.updatedAt.trim() ? set.updatedAt : now,
       };
     });
@@ -476,6 +513,7 @@ export function buildApiConfigSets(
       customProtocol: activeMeta.customProtocol,
       activeProfileKey: snapshot.activeProfileKey,
       profiles: toPersistedProfiles(snapshot.profiles),
+      thinkingLevel: snapshot.thinkingLevel,
       enableThinking: snapshot.enableThinking,
       updatedAt: now,
     },
@@ -581,7 +619,8 @@ interface ApiConfigState {
   activeConfigSetId: string;
   // Deferred action waiting for unsaved-changes resolution
   pendingConfigSetAction: PendingConfigSetAction | null;
-  // Extended thinking flag
+  // Extended thinking level
+  thinkingLevel: ThinkingLevel;
   enableThinking: boolean;
   // Remember last custom protocol so switching back to custom restores it
   lastCustomProtocol: CustomProtocolType;
@@ -625,6 +664,7 @@ type ApiConfigAction =
         presets: ProviderPresets;
         profiles: Record<ProviderProfileKey, UIProviderProfile>;
         activeProfileKey: ProviderProfileKey;
+        thinkingLevel: ThinkingLevel;
         enableThinking: boolean;
         configSets: ApiConfigSet[];
         activeConfigSetId: string;
@@ -634,7 +674,8 @@ type ApiConfigAction =
     }
   // Active profile key
   | { type: 'SET_ACTIVE_PROFILE_KEY'; payload: ProviderProfileKey }
-  // Enable thinking toggle
+  // Thinking level selector
+  | { type: 'SET_THINKING_LEVEL'; payload: ThinkingLevel }
   | { type: 'SET_ENABLE_THINKING'; payload: boolean }
   // Patch one profile in the profiles map
   | { type: 'PATCH_PROFILE'; profileKey: ProviderProfileKey; patch: Partial<UIProviderProfile> }
@@ -695,6 +736,7 @@ function apiConfigReducer(state: ApiConfigState, action: ApiConfigAction): ApiCo
         presets: action.payload.presets,
         profiles: action.payload.profiles,
         activeProfileKey: action.payload.activeProfileKey,
+        thinkingLevel: action.payload.thinkingLevel,
         enableThinking: action.payload.enableThinking,
         configSets: action.payload.configSets,
         activeConfigSetId: action.payload.activeConfigSetId,
@@ -706,8 +748,15 @@ function apiConfigReducer(state: ApiConfigState, action: ApiConfigAction): ApiCo
     case 'SET_ACTIVE_PROFILE_KEY':
       return { ...state, activeProfileKey: action.payload };
 
+    case 'SET_THINKING_LEVEL':
+      return { ...state, thinkingLevel: action.payload, enableThinking: action.payload !== 'off' };
+
     case 'SET_ENABLE_THINKING':
-      return { ...state, enableThinking: action.payload };
+      return {
+        ...state,
+        thinkingLevel: action.payload ? (state.thinkingLevel === 'off' ? 'medium' : state.thinkingLevel) : 'off',
+        enableThinking: action.payload,
+      };
 
     case 'PATCH_PROFILE':
       return {
@@ -856,7 +905,8 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
     pendingConfigSetAction: null,
     isMutatingConfigSet: false,
     lastCustomProtocol: initialLastCustomProtocol,
-    enableThinking: Boolean(initialConfig?.enableThinking),
+    thinkingLevel: initialBootstrap.snapshot.thinkingLevel,
+    enableThinking: initialBootstrap.snapshot.enableThinking,
     discoveredModels: {},
     isLoadingConfig: true,
     savedDraftSignature: '',
@@ -888,6 +938,7 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
     pendingConfigSetAction,
     isMutatingConfigSet,
     lastCustomProtocol,
+    thinkingLevel,
     enableThinking,
     discoveredModels,
     isLoadingConfig,
@@ -1132,8 +1183,8 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
         (customProtocol === 'gemini' && isCustomGeminiLoopbackGateway(baseUrl))));
   const requiresApiKey = !allowEmptyApiKey;
   const currentDraftSignature = useMemo(
-    () => buildApiConfigDraftSignature(activeProfileKey, profiles, enableThinking),
-    [activeProfileKey, profiles, enableThinking]
+    () => buildApiConfigDraftSignature(activeProfileKey, profiles, thinkingLevel),
+    [activeProfileKey, profiles, thinkingLevel]
   );
   const hasUnsavedChanges =
     savedDraftSignature !== '' && currentDraftSignature !== savedDraftSignature;
@@ -1158,6 +1209,7 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
           presets: loadedPresets,
           profiles: bootstrap.snapshot.profiles,
           activeProfileKey: bootstrap.snapshot.activeProfileKey,
+          thinkingLevel: bootstrap.snapshot.thinkingLevel,
           enableThinking: bootstrap.snapshot.enableThinking,
           configSets: bootstrap.configSets,
           activeConfigSetId: bootstrap.activeConfigSetId,
@@ -1165,7 +1217,7 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
           savedDraftSignature: buildApiConfigDraftSignature(
             bootstrap.snapshot.activeProfileKey,
             bootstrap.snapshot.profiles,
-            bootstrap.snapshot.enableThinking
+            bootstrap.snapshot.thinkingLevel
           ),
         },
       });
@@ -1299,6 +1351,10 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
     },
     [presets]
   );
+
+  const setThinkingLevel = useCallback((value: ThinkingLevel) => {
+    dispatch({ type: 'SET_THINKING_LEVEL', payload: value });
+  }, []);
 
   // Public setter exposed to consumers — wraps dispatch so the interface stays stable
   const setEnableThinking = useCallback((value: boolean) => {
@@ -1800,6 +1856,7 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
           activeProfileKey,
           profiles: persistedProfiles,
           activeConfigSetId,
+          thinkingLevel,
           enableThinking,
           configSets,
         };
@@ -1840,6 +1897,7 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
       currentPreset.baseUrl,
       customProtocol,
       enableThinking,
+      thinkingLevel,
       model,
       onSave,
       presets,
@@ -2114,6 +2172,7 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
     maxTokens,
     modelInputPlaceholder: modelInputGuidance.placeholder,
     modelInputHint: modelInputGuidance.hint,
+    thinkingLevel,
     enableThinking,
     isSaving,
     isTesting,
@@ -2154,6 +2213,7 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
     setContextWindow,
     setMaxTokens,
     setModels,
+    setThinkingLevel,
     setEnableThinking,
     applyCommonProviderSetup,
     changeProvider,

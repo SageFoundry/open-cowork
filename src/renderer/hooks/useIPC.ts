@@ -29,6 +29,7 @@ export function useIPC() {
     }
 
     console.log('[useIPC] Setting up IPC listener (once)');
+    let disposed = false;
 
     // --- RAF batching for high-frequency events ---
     const pendingPartials: Record<string, string[]> = {};
@@ -119,6 +120,34 @@ export function useIPC() {
       }
     };
 
+    const reconcileSessionMessagesFromDisk = async (sessionId: string) => {
+      try {
+        const page = await window.electronAPI.invoke<SessionMessagesPage>({
+          type: 'session.getMessages',
+          payload: { sessionId, limit: 20 },
+        });
+        if (disposed || !page?.messages?.length) return;
+
+        const store = useAppStore.getState();
+        const current = store.sessionStates[sessionId]?.messages ?? [];
+        const mergedById = new Map<string, Message>();
+        for (const message of current) mergedById.set(message.id, message);
+        for (const message of page.messages) mergedById.set(message.id, message);
+        const merged = Array.from(mergedById.values()).sort((a, b) => a.timestamp - b.timestamp);
+        if (merged.length !== current.length) {
+          store.setMessages(sessionId, merged);
+          store.setMessagePagination(sessionId, {
+            hasMore: page.hasMore,
+            oldestTimestamp: merged[0]?.timestamp ?? page.oldestTimestamp,
+            initialLoaded: true,
+            loadingOlder: false,
+          });
+        }
+      } catch (error) {
+        console.error('[useIPC] Failed to reconcile session messages after status change:', error);
+      }
+    };
+
     const cleanup = window.electronAPI.on((event: ServerEvent) => {
       const store = useAppStore.getState();
       console.log('[useIPC] Received event:', event.type);
@@ -134,12 +163,17 @@ export function useIPC() {
               status: event.payload.status,
             });
             if (event.payload.status !== 'running') {
+              delete pendingPartials[event.payload.sessionId];
+              delete pendingThinking[event.payload.sessionId];
               store.finishExecutionClock(event.payload.sessionId);
               store.finishStreamActivity(event.payload.sessionId);
               store.setLoading(false);
+              store.clearPartialMessage(event.payload.sessionId);
+              store.clearPartialThinking(event.payload.sessionId);
               store.clearActiveTurn(event.payload.sessionId);
               store.clearPendingTurns(event.payload.sessionId);
               store.clearQueuedMessages(event.payload.sessionId);
+              void reconcileSessionMessagesFromDisk(event.payload.sessionId);
             }
             break;
 
@@ -366,7 +400,6 @@ export function useIPC() {
       }
     });
 
-    let disposed = false;
     void (async () => {
       try {
         const [config, isConfigured, systemTheme] = await Promise.all([

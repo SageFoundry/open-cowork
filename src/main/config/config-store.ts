@@ -47,6 +47,7 @@ export type CustomProtocolType = 'anthropic' | 'openai' | 'gemini';
 export type AppTheme = 'dark' | 'light' | 'system';
 export type MemoryStrategy = 'auto' | 'manual' | 'rolling';
 export type ToolOutputCompressionLevel = 'off' | 'conservative' | 'aggressive';
+export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 export type ProviderProfileKey =
   | 'openrouter'
   | 'anthropic'
@@ -84,6 +85,7 @@ export interface ApiConfigSet {
   customProtocol: CustomProtocolType;
   activeProfileKey: ProviderProfileKey;
   profiles: Partial<Record<ProviderProfileKey, ProviderProfile>>;
+  thinkingLevel: ThinkingLevel;
   enableThinking: boolean;
   updatedAt: string;
 }
@@ -136,6 +138,7 @@ export interface AppConfig {
   sandboxEnabled: boolean;
 
   // Enable thinking mode (show thinking steps)
+  thinkingLevel: ThinkingLevel;
   enableThinking: boolean;
 
   // Auto memory: when enabled, the agent may proactively save knowledge
@@ -170,6 +173,7 @@ const DIRECT_READ_KEYS = new Set<keyof AppConfig>([
   'memoryStrategy',
   'maxContextTokens',
   'sandboxEnabled',
+  'thinkingLevel',
   'enableThinking',
   'autoMemory',
   'toolOutputCompressionLevel',
@@ -238,6 +242,7 @@ const defaultConfigSet: ApiConfigSet = {
   customProtocol: 'anthropic',
   activeProfileKey: 'openrouter',
   profiles: defaultProfiles,
+  thinkingLevel: 'off',
   enableThinking: false,
   updatedAt: '1970-01-01T00:00:00.000Z',
 };
@@ -261,6 +266,7 @@ const defaultConfig: AppConfig = {
   memoryStrategy: 'auto',
   maxContextTokens: 180000,
   sandboxEnabled: false,
+  thinkingLevel: 'off',
   enableThinking: false,
   autoMemory: false,
   toolOutputCompressionLevel: 'off',
@@ -339,6 +345,14 @@ const VALID_TOOL_OUTPUT_COMPRESSION_LEVELS: ToolOutputCompressionLevel[] = [
   'conservative',
   'aggressive',
 ];
+const VALID_THINKING_LEVELS: ThinkingLevel[] = [
+  'off',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+];
 
 function isProviderType(value: unknown): value is ProviderType {
   return (
@@ -374,6 +388,23 @@ function isToolOutputCompressionLevel(value: unknown): value is ToolOutputCompre
     typeof value === 'string' &&
     VALID_TOOL_OUTPUT_COMPRESSION_LEVELS.includes(value as ToolOutputCompressionLevel)
   );
+}
+
+function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return typeof value === 'string' && VALID_THINKING_LEVELS.includes(value as ThinkingLevel);
+}
+
+function normalizeThinkingLevel(rawLevel: unknown, rawEnabled: unknown, fallback: ThinkingLevel): ThinkingLevel {
+  if (rawLevel === 'off' && rawEnabled === true) {
+    return 'medium';
+  }
+  if (isThinkingLevel(rawLevel)) {
+    return rawLevel;
+  }
+  if (typeof rawEnabled === 'boolean') {
+    return rawEnabled ? 'medium' : 'off';
+  }
+  return fallback;
 }
 
 function profileKeyFromProvider(
@@ -615,6 +646,7 @@ export class ConfigStore {
     customProtocol: CustomProtocolType;
     activeProfileKey: ProviderProfileKey;
     profiles: Record<ProviderProfileKey, ProviderProfile>;
+    thinkingLevel: ThinkingLevel;
     enableThinking: boolean;
   } {
     const provider = isProviderType(raw.provider) ? raw.provider : defaultConfig.provider;
@@ -701,12 +733,19 @@ export class ConfigStore {
       activeProfileKey = derivedProfileKey;
     }
 
+    const thinkingLevel = normalizeThinkingLevel(
+      raw.thinkingLevel,
+      raw.enableThinking,
+      defaultConfig.thinkingLevel
+    );
+
     return {
       provider,
       customProtocol,
       activeProfileKey,
       profiles,
-      enableThinking: toBoolean(raw.enableThinking, defaultConfig.enableThinking),
+      thinkingLevel,
+      enableThinking: thinkingLevel !== 'off',
     };
   }
 
@@ -720,6 +759,7 @@ export class ConfigStore {
     model: string;
     contextWindow?: number;
     maxTokens?: number;
+    thinkingLevel: ThinkingLevel;
     enableThinking: boolean;
   } {
     const profiles = this.cloneProfiles(configSet.profiles);
@@ -727,6 +767,12 @@ export class ConfigStore {
       ? configSet.activeProfileKey
       : profileKeyFromProvider(configSet.provider, configSet.customProtocol);
     const activeProfile = profiles[activeProfileKey] || this.getDefaultProfile(activeProfileKey);
+
+    const thinkingLevel = normalizeThinkingLevel(
+      configSet.thinkingLevel,
+      configSet.enableThinking,
+      'off'
+    );
 
     return {
       provider: configSet.provider,
@@ -738,7 +784,8 @@ export class ConfigStore {
       model: activeProfile.model,
       contextWindow: activeProfile.contextWindow,
       maxTokens: activeProfile.maxTokens,
-      enableThinking: toBoolean(configSet.enableThinking, false),
+      thinkingLevel,
+      enableThinking: thinkingLevel !== 'off',
     };
   }
 
@@ -751,6 +798,7 @@ export class ConfigStore {
       customProtocol: CustomProtocolType;
       activeProfileKey: ProviderProfileKey;
       profiles: Record<ProviderProfileKey, ProviderProfile>;
+      thinkingLevel: ThinkingLevel;
       enableThinking: boolean;
       isSystem?: boolean;
     }
@@ -774,6 +822,11 @@ export class ConfigStore {
     const id = toNonEmptyString(rawSet?.id) || fallback.id;
     const name = toNonEmptyString(rawSet?.name) || fallback.name;
     const updatedAt = toNonEmptyString(rawSet?.updatedAt) || nowISO();
+    const thinkingLevel = normalizeThinkingLevel(
+      rawSet?.thinkingLevel,
+      rawSet?.enableThinking,
+      fallback.thinkingLevel
+    );
 
     return {
       id,
@@ -783,7 +836,8 @@ export class ConfigStore {
       customProtocol,
       activeProfileKey,
       profiles,
-      enableThinking: toBoolean(rawSet?.enableThinking, fallback.enableThinking),
+      thinkingLevel,
+      enableThinking: thinkingLevel !== 'off',
       updatedAt,
     };
   }
@@ -793,6 +847,7 @@ export class ConfigStore {
     customProtocol: CustomProtocolType;
     activeProfileKey: ProviderProfileKey;
     profiles: Record<ProviderProfileKey, ProviderProfile>;
+    thinkingLevel: ThinkingLevel;
     enableThinking: boolean;
   }): ApiConfigSet {
     return this.normalizeConfigSet(
@@ -804,6 +859,7 @@ export class ConfigStore {
         customProtocol: legacy.customProtocol,
         activeProfileKey: legacy.activeProfileKey,
         profiles: legacy.profiles,
+        thinkingLevel: legacy.thinkingLevel,
         enableThinking: legacy.enableThinking,
         updatedAt: nowISO(),
       },
@@ -815,6 +871,7 @@ export class ConfigStore {
         customProtocol: legacy.customProtocol,
         activeProfileKey: legacy.activeProfileKey,
         profiles: legacy.profiles,
+        thinkingLevel: legacy.thinkingLevel,
         enableThinking: legacy.enableThinking,
       }
     );
@@ -827,6 +884,7 @@ export class ConfigStore {
       customProtocol: CustomProtocolType;
       activeProfileKey: ProviderProfileKey;
       profiles: Record<ProviderProfileKey, ProviderProfile>;
+      thinkingLevel: ThinkingLevel;
       enableThinking: boolean;
     }
   ): ApiConfigSet[] {
@@ -856,6 +914,7 @@ export class ConfigStore {
         customProtocol: legacy.customProtocol,
         activeProfileKey: legacy.activeProfileKey,
         profiles: legacy.profiles,
+        thinkingLevel: legacy.thinkingLevel,
         enableThinking: legacy.enableThinking,
         isSystem: Boolean(rawSet.isSystem),
       });
@@ -876,12 +935,14 @@ export class ConfigStore {
     customProtocol: CustomProtocolType;
     activeProfileKey: ProviderProfileKey;
     profiles: Record<ProviderProfileKey, ProviderProfile>;
+    thinkingLevel: ThinkingLevel;
     enableThinking: boolean;
   }): boolean {
     if (
       legacy.provider !== defaultConfig.provider ||
       legacy.customProtocol !== (defaultConfig.customProtocol || 'anthropic') ||
       legacy.activeProfileKey !== defaultConfig.activeProfileKey ||
+      legacy.thinkingLevel !== defaultConfig.thinkingLevel ||
       legacy.enableThinking !== defaultConfig.enableThinking
     ) {
       return true;
@@ -905,6 +966,7 @@ export class ConfigStore {
       customProtocol: CustomProtocolType;
       activeProfileKey: ProviderProfileKey;
       profiles: Record<ProviderProfileKey, ProviderProfile>;
+      thinkingLevel: ThinkingLevel;
       enableThinking: boolean;
     }
   ): boolean {
@@ -926,6 +988,7 @@ export class ConfigStore {
       projected.provider === legacy.provider &&
       projected.customProtocol === legacy.customProtocol &&
       projected.activeProfileKey === legacy.activeProfileKey &&
+      projected.thinkingLevel === legacy.thinkingLevel &&
       projected.enableThinking === legacy.enableThinking &&
       projected.apiKey === legacyActive.apiKey &&
       (projected.baseUrl || '') === (legacyActive.baseUrl || '') &&
@@ -985,6 +1048,7 @@ export class ConfigStore {
           ? Math.max(8192, Math.floor(raw.maxContextTokens))
           : defaultConfig.maxContextTokens,
       sandboxEnabled: toBoolean(raw.sandboxEnabled, defaultConfig.sandboxEnabled),
+      thinkingLevel: projected.thinkingLevel,
       enableThinking: projected.enableThinking,
       autoMemory: toBoolean(raw.autoMemory, defaultConfig.autoMemory),
       toolOutputCompressionLevel: isToolOutputCompressionLevel(raw.toolOutputCompressionLevel)
@@ -1030,6 +1094,7 @@ export class ConfigStore {
       maxTokens: projected.maxTokens,
       activeProfileKey: projected.activeProfileKey,
       profiles: projected.profiles,
+      thinkingLevel: projected.thinkingLevel,
       enableThinking: projected.enableThinking,
       activeConfigSetId: activeConfigSet.id,
       configSets: nextConfigSets,
@@ -1097,6 +1162,7 @@ export class ConfigStore {
       customProtocol: payload.customProtocol,
       activeProfileKey,
       profiles,
+      thinkingLevel: 'off',
       enableThinking: false,
       updatedAt: nowISO(),
     };
@@ -1130,6 +1196,9 @@ export class ConfigStore {
           return defaultConfig[key];
         }
         if (key === 'memoryStrategy' && !isMemoryStrategy(rawValue)) {
+          return defaultConfig[key];
+        }
+        if (key === 'thinkingLevel' && !isThinkingLevel(rawValue)) {
           return defaultConfig[key];
         }
         if (
@@ -1296,6 +1365,7 @@ export class ConfigStore {
         ),
         activeProfileKey: current.activeProfileKey,
         profiles: this.cloneProfiles(current.profiles),
+        thinkingLevel: current.thinkingLevel,
         enableThinking: current.enableThinking,
       });
       nextConfigSets = normalizedSets;
@@ -1331,6 +1401,7 @@ export class ConfigStore {
       updates.model !== undefined ||
       updates.contextWindow !== undefined ||
       updates.maxTokens !== undefined ||
+      updates.thinkingLevel !== undefined ||
       updates.enableThinking !== undefined;
 
     if (mutatesActiveSet) {
@@ -1390,14 +1461,25 @@ export class ConfigStore {
         nextActiveProfile
       );
 
+      const nextThinkingLevel =
+        updates.thinkingLevel !== undefined
+          ? updates.thinkingLevel
+          : updates.enableThinking !== undefined
+            ? updates.enableThinking
+              ? targetSet.thinkingLevel === 'off'
+                ? 'medium'
+                : targetSet.thinkingLevel
+              : 'off'
+            : targetSet.thinkingLevel;
+
       const updatedSet: ApiConfigSet = {
         ...targetSet,
         provider: nextProvider,
         customProtocol: nextCustomProtocol,
         activeProfileKey: nextActiveProfileKey,
         profiles: nextProfiles,
-        enableThinking:
-          updates.enableThinking !== undefined ? updates.enableThinking : targetSet.enableThinking,
+        thinkingLevel: nextThinkingLevel,
+        enableThinking: nextThinkingLevel !== 'off',
         updatedAt: nowISO(),
       };
 
@@ -1432,6 +1514,22 @@ export class ConfigStore {
           : current.maxContextTokens,
       sandboxEnabled:
         updates.sandboxEnabled !== undefined ? updates.sandboxEnabled : current.sandboxEnabled,
+      thinkingLevel:
+        updates.thinkingLevel !== undefined
+          ? updates.thinkingLevel
+          : updates.enableThinking !== undefined
+            ? updates.enableThinking
+              ? current.thinkingLevel === 'off'
+                ? 'medium'
+                : current.thinkingLevel
+              : 'off'
+            : current.thinkingLevel,
+      enableThinking:
+        updates.thinkingLevel !== undefined
+          ? updates.thinkingLevel !== 'off'
+          : updates.enableThinking !== undefined
+            ? updates.enableThinking
+            : current.enableThinking,
       autoMemory: updates.autoMemory !== undefined ? updates.autoMemory : current.autoMemory,
       toolOutputCompressionLevel:
         updates.toolOutputCompressionLevel !== undefined

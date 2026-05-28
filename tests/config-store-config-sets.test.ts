@@ -68,8 +68,23 @@ describe('ConfigStore config sets', () => {
     expect(config.configSets[0].provider).toBe('openai');
     expect(config.provider).toBe('openai');
     expect(config.apiKey).toBe('sk-legacy-openai');
+    expect(config.thinkingLevel).toBe('medium');
     expect(config.enableThinking).toBe(true);
     expect(config.toolOutputCompressionLevel).toBe('off');
+  });
+
+  it('persists thinking level and derives the legacy thinking flag', () => {
+    const store = new ConfigStore();
+
+    store.update({ thinkingLevel: 'high' });
+    expect(store.getAll().thinkingLevel).toBe('high');
+    expect(store.getAll().enableThinking).toBe(true);
+    expect(store.getAll().configSets[0].thinkingLevel).toBe('high');
+    expect(store.getAll().configSets[0].enableThinking).toBe(true);
+
+    store.update({ thinkingLevel: 'off' });
+    expect(store.getAll().thinkingLevel).toBe('off');
+    expect(store.getAll().enableThinking).toBe(false);
   });
 
   it('persists tool output compression level outside config sets', () => {
@@ -148,6 +163,7 @@ describe('ConfigStore config sets', () => {
     expect(blankSet).toBeTruthy();
     expect(blankSet?.provider).toBe('custom');
     expect(blankSet?.customProtocol).toBe('openai');
+    expect(blankSet?.thinkingLevel).toBe('off');
     expect(blankSet?.enableThinking).toBe(false);
     expect(blankSet?.profiles['custom:openai']?.apiKey).toBe('');
     expect(blankSet?.profiles['custom:openai']?.baseUrl).toBe('https://api.openai.com/v1');

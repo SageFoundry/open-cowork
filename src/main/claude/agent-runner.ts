@@ -115,6 +115,7 @@ import { isPlanModeToolAllowed, type PlanModeToolDecision } from './plan-mode-gu
 import {
   buildOpenCoworkAppendPrompt,
   buildPlanModeRuntimePrompt,
+  buildVisibleLanguageRuntimePrompt,
   buildWorkspaceInfoPrompt,
   VIRTUAL_WORKSPACE_PATH,
 } from './prompt-contract';
@@ -2814,12 +2815,23 @@ ${hints.join('\n')}
 
       // pi-ai handles auth and model routing natively — no proxy, no env overrides needed.
       logCtx('[ClaudeAgentRunner] Using pi-ai native routing for:', piModel.provider, piModel.id);
+      const uiLanguage = configStore.get('language') ?? 'zh';
+      const visibleLanguage = uiLanguage === 'zh' ? 'Chinese (中文)' : 'English';
+      const turnLanguagePrompt = buildVisibleLanguageRuntimePrompt({ visibleLanguage });
 
       // Resolve thinking level early — needed for session reuse check below
-      const enableThinking = configStore.get('enableThinking') ?? false;
-      logCtx('[ClaudeAgentRunner] Enable thinking mode:', enableThinking);
       type PiThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
-      const thinkingLevel: PiThinkingLevel = enableThinking ? 'medium' : 'off';
+      const configuredThinkingLevel = configStore.get('thinkingLevel') as PiThinkingLevel | undefined;
+      const enableThinking =
+        (configStore.get('enableThinking') ?? false) ||
+        Boolean(configuredThinkingLevel && configuredThinkingLevel !== 'off');
+      const thinkingLevel: PiThinkingLevel =
+        configuredThinkingLevel && configuredThinkingLevel !== 'off'
+          ? configuredThinkingLevel
+          : enableThinking
+            ? 'medium'
+            : 'off';
+      logCtx('[ClaudeAgentRunner] Thinking level:', thinkingLevel);
       const sessionRuntimeSignature = buildPiSessionRuntimeSignature({
         configProvider: runtimeConfig.provider,
         customProtocol: runtimeConfig.customProtocol,
@@ -2929,9 +2941,9 @@ ${hints.join('\n')}
         logCtx('[ClaudeAgentRunner] Reusing existing SDK session for:', session.id);
       }
 
-      if (session.planMode) {
-        contextualPrompt = `${buildPlanModeRuntimePrompt({ sessionId: session.id, cwd: effectiveCwd })}\n\n${contextualPrompt}`;
-      }
+      contextualPrompt = session.planMode
+        ? `${buildPlanModeRuntimePrompt({ sessionId: session.id, cwd: effectiveCwd, visibleLanguage })}\n\n${turnLanguagePrompt}\n\n${contextualPrompt}`
+        : `${turnLanguagePrompt}\n\n${contextualPrompt}`;
 
       logTiming('before building MCP servers config', runStartTime);
 
@@ -3084,14 +3096,13 @@ ${hints.join('\n')}
       const workspaceInfoPrompt = buildWorkspaceInfoPrompt({
         isSandboxed: Boolean(useSandboxIsolation && sandboxPath),
         workingDir,
+        visibleLanguage,
       });
 
       const projectMemoryMaterial = workingDir
         ? this.projectMemoryService.buildPromptMaterial(workingDir, prompt)
         : null;
 
-      const uiLanguage = configStore.get('language') ?? 'zh';
-      const visibleLanguage = uiLanguage === 'zh' ? 'Chinese (中文)' : 'English';
       const coworkAppendPrompt = buildOpenCoworkAppendPrompt({
         visibleLanguage,
         workspaceInfoPrompt,

@@ -35,7 +35,7 @@ describe('memory evaluation', () => {
       [existingDecision]
     );
 
-    expect(prompt.systemPrompt).toContain('Compare against existing memory');
+    expect(prompt.systemPrompt).toContain('已有记忆对比');
     expect(prompt.prompt).toContain('existing-1');
     expect(prompt.prompt).toContain('SQLite knowledge tables');
     expect(prompt.prompt).toContain('好了，记忆系统全部存 SQLite');

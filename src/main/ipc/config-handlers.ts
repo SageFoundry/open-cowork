@@ -36,6 +36,7 @@ const buildAgentRuntimeSignature = (config: AppConfig): string =>
     model: config.model,
     contextWindow: config.contextWindow,
     maxTokens: config.maxTokens,
+    thinkingLevel: config.thinkingLevel,
     enableThinking: config.enableThinking,
   });
 

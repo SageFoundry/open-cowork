@@ -158,6 +158,70 @@ Section guidance:
 If evidence is missing, say "Unknown" briefly instead of inventing details.
 CRITICAL: Respond with TEXT ONLY. No tool use. No follow-up question.`;
 
+const COMPACTION_SUMMARY_SYSTEM_PROMPT_ZH = `关键要求：只返回文本。不要调用工具，不要浏览文件，不要向用户提问，除非极短代码片段确有必要，否则不要使用代码围栏。
+
+为即将因上下文压缩而继续同一会话的编码 agent 创建结构化续接摘要。
+相比冗长叙述，更要保留持久信息结构。仍会影响下一步的文件路径、命令、代码标识符、API 名称、错误信息和用户偏好必须精确保留。
+
+必须严格按以下 markdown 标题和顺序输出：
+## Primary Request and Intent
+## Key Technical Concepts
+## Files and Code Sections
+## Errors and Fixes
+## Problem Solving
+## User Messages
+## Pending Tasks
+## Current Work
+## Next Step
+
+各部分要求：
+- Primary Request and Intent：用户真实目标、约束和期望产品行为。
+- Key Technical Concepts：重要的架构、API、设置、数据流、上下文限制和实现规则。
+- Files and Code Sections：已经修改或发现的具体文件/函数/组件，以及它们为什么重要。
+- Errors and Fixes：失败、回归、测试输出、用户反馈的问题和已经应用的修复。
+- Problem Solving：重要决策、放弃的方案和理由。
+- User Messages：按顺序保留用户消息的简洁要点，不要丢掉后续修正。
+- Pending Tasks：未完成工作和验收标准。
+- Current Work：压缩发生时正在进行的确切工作，包括文件/函数和未完成编辑。
+- Next Step：一个具体的下一步动作。
+
+如果缺少证据，简短写 "Unknown"，不要编造。
+关键要求：只返回文本。不要使用工具。不要追问。`;
+
+function buildCompactionSummarySystemPrompt(language: 'zh' | 'en'): string {
+  return language === 'zh' ? COMPACTION_SUMMARY_SYSTEM_PROMPT_ZH : COMPACTION_SUMMARY_SYSTEM_PROMPT;
+}
+
+function buildCompactionSummaryPrompt(input: {
+  language: 'zh' | 'en';
+  isAutomaticCompaction: boolean;
+  serializedHistory: string;
+}): string {
+  if (input.language === 'zh') {
+    return [
+      '请总结较早的对话，使助手能在有限上下文中继续工作。',
+      '摘要必须使用中文。代码标识符、命令、文件路径、API 名称和引用的错误信息需要时保持原样。',
+      '使用系统提示中要求的固定章节。即使某个章节信息很少，也保持结构稳定。',
+      input.isAutomaticCompaction
+        ? '这是自动上下文压缩。不要提出后续问题；如有不确定性，请写出最佳假设，并在 Next Step 中给出验证步骤。'
+        : '这是手动上下文压缩。只有真正阻塞后续工作的问题，才记录为待办。',
+      '较早历史：',
+      input.serializedHistory.slice(0, 24000),
+    ].join('\n\n');
+  }
+
+  return [
+    'Summarize the earlier conversation so the assistant can continue with limited context.',
+    'Write the summary in English. Preserve code identifiers, commands, file paths, API names, and quoted errors exactly when needed.',
+    'Use the exact required sections from the system prompt. Keep the structure stable even when a section has little data.',
+    input.isAutomaticCompaction
+      ? 'This is automatic compaction. Suppress follow-up questions: if uncertainty exists, write the best assumption and a verification step in Next Step.'
+      : 'This is manual compaction. Record open questions as pending tasks only when they are genuinely blocking.',
+    'Earlier history:',
+    input.serializedHistory.slice(0, 24000),
+  ].join('\n\n');
+}
+
 function normalizeHistorySearchText(value: string): string {
   return value
     .toLowerCase()
@@ -959,6 +1023,7 @@ export class SessionManager {
       workspaceInfoPrompt: buildWorkspaceInfoPrompt({
         isSandboxed: false,
         workingDir: session.cwd,
+        visibleLanguage: allConfig.language === 'zh' ? 'Chinese (中文)' : 'English',
       }),
       autoMemoryEnabled: Boolean(allConfig.autoMemory),
       projectMemorySections: promptMaterial?.promptSections,
@@ -1199,27 +1264,22 @@ export class SessionManager {
     messages: Message[],
     options: { trigger: CompactionTrigger }
   ): Promise<CompactionSummaryResult> {
-    const language = (configStore.get('language') ?? 'zh') === 'zh' ? 'Chinese (中文)' : 'English';
+    const language = (configStore.get('language') ?? 'zh') === 'zh' ? 'zh' : 'en';
     const isAutomaticCompaction = options.trigger !== 'manual';
     const serializedHistory = messages
       .map((message) => this.serializeMessageForCompaction(message))
       .filter(Boolean)
       .join('\n\n');
-    const prompt = [
-      'Summarize the earlier conversation so the assistant can continue with limited context.',
-      `Write the summary in ${language}. Preserve code identifiers, commands, file paths, API names, and quoted errors exactly when needed.`,
-      'Use the exact required sections from the system prompt. Keep the structure stable even when a section has little data.',
-      isAutomaticCompaction
-        ? 'This is automatic compaction. Suppress follow-up questions: if uncertainty exists, write the best assumption and a verification step in Next Step.'
-        : 'This is manual compaction. Record open questions as pending tasks only when they are genuinely blocking.',
-      'Earlier history:',
-      serializedHistory.slice(0, 24000),
-    ].join('\n\n');
+    const prompt = buildCompactionSummaryPrompt({
+      language,
+      isAutomaticCompaction,
+      serializedHistory,
+    });
 
     try {
       const result = await completeWithClaudeSdk(
         prompt,
-        `${COMPACTION_SUMMARY_SYSTEM_PROMPT}\n\nWrite all natural-language summary text in ${language}.`,
+        buildCompactionSummarySystemPrompt(language),
         configStore.getAll()
       );
       const text = result.text.trim();

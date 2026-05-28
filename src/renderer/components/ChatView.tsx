@@ -13,10 +13,11 @@ import {
 } from '../store/selectors';
 import { getDisplayStreamRate, useAppStore } from '../store';
 import { useIPC } from '../hooks/useIPC';
-import { groupMessagesByTurn } from '../utils/conversation-turns';
+import { groupMessagesByTurn, type ConversationTurn } from '../utils/conversation-turns';
+import { formatChatTurnTime } from '../utils/i18n-format';
 import { AssistantTurnGroup } from './AssistantTurnGroup';
 import { MessageCard } from './MessageCard';
-import type { Message, ContentBlock } from '../types';
+import type { Message, ContentBlock, ThinkingLevel } from '../types';
 import {
   Send,
   Square,
@@ -42,6 +43,49 @@ const CHAT_INPUT_MIN_HEIGHT_PX =
 const CHAT_INPUT_MAX_HEIGHT_PX =
   CHAT_INPUT_MAX_ROWS * CHAT_INPUT_LINE_HEIGHT_PX + CHAT_INPUT_VERTICAL_PADDING_PX;
 const MESSAGES_PAGE_SIZE = 20;
+const THINKING_LEVEL_OPTIONS: Array<{ value: ThinkingLevel; labelKey: string }> = [
+  { value: 'off', labelKey: 'chat.thinkingOff' },
+  { value: 'minimal', labelKey: 'chat.thinkingMinimal' },
+  { value: 'low', labelKey: 'chat.thinkingLow' },
+  { value: 'medium', labelKey: 'chat.thinkingMedium' },
+  { value: 'high', labelKey: 'chat.thinkingHigh' },
+  { value: 'xhigh', labelKey: 'chat.thinkingXHigh' },
+];
+
+const THINKING_LEVEL_STYLES: Record<ThinkingLevel, string> = {
+  off: 'border-border-subtle bg-background/60 text-text-muted hover:bg-surface-hover hover:text-text-secondary',
+  minimal: 'bg-emerald-500/5 border-emerald-500/20 text-emerald-600 dark:text-emerald-400',
+  low: 'bg-emerald-500/10 border-emerald-500/35 text-emerald-700 dark:text-emerald-300',
+  medium: 'bg-amber-500/10 border-amber-500/35 text-amber-700 dark:text-amber-300',
+  high: 'bg-orange-500/12 border-orange-500/40 text-orange-700 dark:text-orange-300',
+  xhigh: 'bg-red-500/12 border-red-500/45 text-red-700 dark:text-red-300',
+};
+const THINKING_LEVEL_MENU_STYLES: Record<ThinkingLevel, { selected: string; dot: string }> = {
+  off: {
+    selected: 'bg-surface-hover text-text-secondary',
+    dot: 'bg-border',
+  },
+  minimal: {
+    selected: 'bg-emerald-500/8 text-emerald-600 dark:text-emerald-400',
+    dot: 'bg-emerald-400',
+  },
+  low: {
+    selected: 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300',
+    dot: 'bg-emerald-600',
+  },
+  medium: {
+    selected: 'bg-amber-500/12 text-amber-700 dark:text-amber-300',
+    dot: 'bg-amber-500',
+  },
+  high: {
+    selected: 'bg-orange-500/12 text-orange-700 dark:text-orange-300',
+    dot: 'bg-orange-500',
+  },
+  xhigh: {
+    selected: 'bg-red-500/12 text-red-700 dark:text-red-300',
+    dot: 'bg-red-500',
+  },
+};
 
 type AttachedFile = {
   name: string;
@@ -50,6 +94,14 @@ type AttachedFile = {
   type: string;
   inlineDataBase64?: string;
 };
+
+interface TurnTokenSummary {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  total: number;
+}
 
 export function ChatView() {
   const { t } = useTranslation();
@@ -90,34 +142,38 @@ export function ChatView() {
     });
   }, [appConfig]);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
-  const [enableThinking, setEnableThinking] = useState(() => appConfig?.enableThinking ?? false);
+  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(() =>
+    appConfig?.thinkingLevel || (appConfig?.enableThinking ? 'medium' : 'off')
+  );
   const isSavingThinking = useRef(false);
 
-  // Sync enableThinking from appConfig whenever it changes
+  // Sync thinking level from appConfig whenever it changes
   useEffect(() => {
     if (!isSavingThinking.current) {
-      setEnableThinking(appConfig?.enableThinking ?? false);
+      setThinkingLevel(appConfig?.thinkingLevel || (appConfig?.enableThinking ? 'medium' : 'off'));
     }
-  }, [appConfig?.enableThinking]);
+  }, [appConfig?.enableThinking, appConfig?.thinkingLevel]);
 
-  const toggleThinking = useCallback(async () => {
-    const next = !enableThinking;
-    setEnableThinking(next);
+  const updateThinkingLevel = useCallback(async (next: ThinkingLevel) => {
+    const previous = thinkingLevel;
+    setThinkingLevel(next);
     isSavingThinking.current = true;
     try {
-      const result = await window.electronAPI.config.save({ enableThinking: next });
+      const result = await window.electronAPI.config.save({
+        thinkingLevel: next,
+        enableThinking: next !== 'off',
+      });
       if (result.success) {
         useAppStore.getState().setAppConfig(result.config);
       } else {
-        // Revert on failure
-        setEnableThinking(!next);
+        setThinkingLevel(previous);
       }
     } catch {
-      setEnableThinking(!next);
+      setThinkingLevel(previous);
     } finally {
       isSavingThinking.current = false;
     }
-  }, [enableThinking]);
+  }, [thinkingLevel]);
 
   const messagePagination = useAppStore((s) =>
     activeSessionId
@@ -149,19 +205,30 @@ export function ChatView() {
     activeSessionId ? s.sessionStates[activeSessionId]?.streamActivity ?? null : null
   );
   const { continueSession, stopSession, getSessionMessages, isElectron } = useIPC();
+  const currentThinkingLabel =
+    THINKING_LEVEL_OPTIONS.find((option) => option.value === thinkingLevel)?.labelKey ||
+    'chat.thinkingOff';
 
   const modelPickerRef = useRef<HTMLDivElement>(null);
+  const thinkingPickerRef = useRef<HTMLDivElement>(null);
+  const [thinkingPickerOpen, setThinkingPickerOpen] = useState(false);
 
   useEffect(() => {
-    if (!modelPickerOpen) return;
+    if (!modelPickerOpen && !thinkingPickerOpen) return;
     const handleClickOutside = (e: MouseEvent) => {
       if (modelPickerRef.current && !modelPickerRef.current.contains(e.target as Node)) {
         setModelPickerOpen(false);
       }
+      if (
+        thinkingPickerRef.current &&
+        !thinkingPickerRef.current.contains(e.target as Node)
+      ) {
+        setThinkingPickerOpen(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [modelPickerOpen]);
+  }, [modelPickerOpen, thinkingPickerOpen]);
 
   const [prompt, setPrompt] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -500,6 +567,36 @@ export function ChatView() {
 
   const formatTokenCount = useCallback((tokens: number): string => {
     return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(tokens);
+  }, []);
+
+  const formatCompactTokenCount = useCallback((tokens: number): string => {
+    if (tokens >= 1000000) return `${(tokens / 1000000).toFixed(tokens >= 10000000 ? 0 : 1)}m`;
+    if (tokens >= 1000) return `${(tokens / 1000).toFixed(tokens >= 10000 ? 0 : 1)}k`;
+    return Math.round(tokens).toString();
+  }, []);
+
+  const getTurnStartedAt = useCallback((turn: ConversationTurn): number | null => {
+    return turn.userMessage?.timestamp ?? turn.assistantMessages[0]?.timestamp ?? null;
+  }, []);
+
+  const getTurnTokenSummary = useCallback((turn: ConversationTurn): TurnTokenSummary | null => {
+    let input = 0;
+    let output = 0;
+    let cacheRead = 0;
+    let cacheWrite = 0;
+
+    for (const message of turn.assistantMessages) {
+      const usage = message.tokenUsage;
+      if (!usage) continue;
+      input += usage.input || 0;
+      output += usage.output || 0;
+      cacheRead += usage.cacheRead || 0;
+      cacheWrite += usage.cacheWrite || 0;
+    }
+
+    const total = input + output;
+    if (total <= 0 && cacheRead <= 0 && cacheWrite <= 0) return null;
+    return { input, output, cacheRead, cacheWrite, total };
   }, []);
 
   // Debounced scroll function to prevent scroll conflicts
@@ -1141,6 +1238,39 @@ export function ChatView() {
                     }
                   />
                 )}
+                {(() => {
+                  const startedAt = getTurnStartedAt(turn);
+                  const tokenSummary = getTurnTokenSummary(turn);
+                  if (!startedAt && !tokenSummary) return null;
+
+                  return (
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 pt-0.5 text-[11px] text-text-muted/75">
+                      {startedAt && (
+                        <span className="inline-flex items-center gap-1">
+                          <Clock className="h-3 w-3" />
+                          {formatChatTurnTime(startedAt)}
+                        </span>
+                      )}
+                      {startedAt && tokenSummary && <span className="text-text-muted/35">·</span>}
+                      {tokenSummary && (
+                        <span
+                          title={t('messageCard.turnTokenUsageDetail', {
+                            input: formatTokenCount(tokenSummary.input),
+                            output: formatTokenCount(tokenSummary.output),
+                            cacheRead: formatTokenCount(tokenSummary.cacheRead),
+                            cacheWrite: formatTokenCount(tokenSummary.cacheWrite),
+                          })}
+                        >
+                          {t('messageCard.turnTokenUsage', {
+                            total: formatCompactTokenCount(tokenSummary.total),
+                            input: formatCompactTokenCount(tokenSummary.input),
+                            output: formatCompactTokenCount(tokenSummary.output),
+                          })}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             ))
           )}
@@ -1459,36 +1589,82 @@ export function ChatView() {
                     )}
                   </div>
 
-                  {/* Thinking mode switch */}
+                  {/* Thinking level selector */}
                   {isElectron && (
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={enableThinking}
-                      onClick={toggleThinking}
-                      disabled={isSavingThinking.current}
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] transition-colors ${
-                        enableThinking
-                          ? 'bg-accent/10 border-accent/30 text-accent'
-                          : 'border-border-subtle bg-background/60 text-text-muted hover:bg-surface-hover hover:text-text-secondary'
-                      }`}
-                      title={t('chat.toggleThinking')}
-                    >
-                      <Brain className={`w-3 h-3 ${enableThinking ? '' : 'opacity-60'}`} />
-                      <span>{enableThinking ? t('chat.thinking') : t('chat.thinkingOff')}</span>
-                      {/* Switch knob */}
-                      <span
-                        className={`relative inline-block w-7 h-4 rounded-full transition-colors ${
-                          enableThinking ? 'bg-accent' : 'bg-border'
-                        }`}
+                    <div className="relative" ref={thinkingPickerRef}>
+                      <button
+                        type="button"
+                        onClick={() => setThinkingPickerOpen((open) => !open)}
+                        disabled={isSavingThinking.current}
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] transition-colors ${
+                          THINKING_LEVEL_STYLES[thinkingLevel]
+                        } ${isSavingThinking.current ? 'opacity-60 cursor-not-allowed' : ''}`}
+                        title={t('chat.toggleThinking')}
+                        aria-haspopup="menu"
+                        aria-expanded={thinkingPickerOpen}
                       >
-                        <span
-                          className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
-                            enableThinking ? 'translate-x-3' : 'translate-x-0'
+                        <Brain className={`w-3 h-3 ${thinkingLevel === 'off' ? 'opacity-60' : ''}`} />
+                        <span className="font-medium">{t(currentThinkingLabel)}</span>
+                        <ChevronUp
+                          className={`w-3 h-3 transition-transform ${
+                            thinkingPickerOpen ? 'rotate-0' : 'rotate-180'
                           }`}
                         />
-                      </span>
-                    </button>
+                      </button>
+
+                      {thinkingPickerOpen && (
+                        <div className="absolute bottom-full left-0 mb-2 w-40 rounded-xl border border-border bg-background shadow-xl z-50 py-1.5">
+                          <div className="px-3 py-1.5 text-[10px] font-semibold text-text-muted uppercase tracking-wider">
+                            {t('chat.thinking')}
+                          </div>
+                          {THINKING_LEVEL_OPTIONS.map((option, index) => {
+                            const selected = option.value === thinkingLevel;
+                            const active = option.value !== 'off';
+                            const menuStyle = THINKING_LEVEL_MENU_STYLES[option.value];
+                            return (
+                              <button
+                                key={option.value}
+                                type="button"
+                                onClick={() => {
+                                  setThinkingPickerOpen(false);
+                                  updateThinkingLevel(option.value);
+                                }}
+                                className={`w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors ${
+                                  selected
+                                    ? menuStyle.selected
+                                    : 'text-text-primary hover:bg-surface-hover'
+                                } ${index === 1 ? 'border-t border-border-subtle mt-1 pt-2' : ''}`}
+                                role="menuitemradio"
+                                aria-checked={selected}
+                              >
+                                <span
+                                  className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                    active ? menuStyle.dot : 'bg-border'
+                                  } ${selected ? 'opacity-100' : 'opacity-35'}`}
+                                />
+                                <span
+                                  className={`flex-1 ${
+                                    selected
+                                      ? ''
+                                      : option.value === 'off'
+                                        ? 'text-text-primary'
+                                        : THINKING_LEVEL_STYLES[option.value]
+                                            .split(' ')
+                                            .filter((part) => part.startsWith('text-') || part.startsWith('dark:text-'))
+                                            .join(' ')
+                                  }`}
+                                >
+                                  {t(option.labelKey)}
+                                </span>
+                                {selected && (
+                                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${menuStyle.dot}`} />
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
                   )}
 
                   {/* Plan mode toggle */}

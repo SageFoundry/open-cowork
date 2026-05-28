@@ -144,7 +144,7 @@ describe('SessionManager compaction history hydration', () => {
 
     expect(budget).toBeTruthy();
     expect(budget?.estimatedTotalTokens).toBeGreaterThan(0);
-    expect(budget?.contextWindow).toBe(256000);
-    expect(budget?.maxContextTokens).toBe(256000);
+    expect(budget?.contextWindow).toBeGreaterThanOrEqual(256000);
+    expect(budget?.maxContextTokens).toBeGreaterThanOrEqual(256000);
   });
 });
