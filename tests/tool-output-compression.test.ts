@@ -384,6 +384,26 @@ describe('tool output compression', () => {
     expect(text).toContain('5. Result title 4');
   });
 
+  it('keeps read_full output unchanged because it is explicitly paginated source context', () => {
+    const raw = [
+      'read_full: /mnt/workspace/src/large.ts',
+      'lines 1-900 of 2000, returned 50000/120000 chars, maxChars=80000',
+      'More available. Continue with read_full({"path":"src/large.ts","startLine":901,"maxChars":80000}).',
+      '',
+      ...Array.from({ length: 900 }, (_, i) => `export const value${i} = ${i};`),
+    ].join('\n');
+
+    const compressed = compressToolExecutionResultForModel(textResult(raw), {
+      toolName: 'read_full',
+      params: { path: 'src/large.ts' },
+      level: 'aggressive',
+    });
+
+    expect(compressed.event?.compressed).toBe(false);
+    expect(compressed.event?.skipReason).toBe('semantic_sensitive');
+    expect(getText(compressed.result)).toBe(raw);
+  });
+
   it('strips ANSI table formatting from PowerShell file lists', () => {
     const raw = [
       'STDOUT:',

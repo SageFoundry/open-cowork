@@ -672,7 +672,19 @@
     "thinkingOff": "Off",
     "plan": "Plan",
     "planModeActive": "Currently in Plan Mode (read-only)",
-    "planModeOff": "Switch to Plan Mode"
+    "planModeOff": "Switch to Plan Mode",
+    "running": "Running",
+    "outputActive": "Streaming",
+    "waitingOutput": "Waiting for output",
+    "waitingTool": "Waiting for tool",
+    "tokenRate": "5s avg ≈ {{rate}} tok/s",
+    "streamReceived": "Received ≈ {{tokens}} tokens",
+    "toolArgsGenerating": "Generating {{tool}} args {{file}}",
+    "toolRunning": "Running {{tool}} {{file}}",
+    "tool": "tool",
+    "streamText": "Reply",
+    "streamThinking": "Thinking",
+    "streamToolCall": "Tool args"
   },
   "context": {
     "progress": "Progress",

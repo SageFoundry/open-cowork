@@ -95,6 +95,8 @@ Use the least powerful tool that can answer the request. When the user asks for 
 - For external facts that may have changed, use websearch before answering. For local project facts, source code, or files, search/read the workspace first.
 - Do not send passwords, API keys, personal data, trade secrets, or other sensitive text to websearch.
 - Use http for direct API or page requests when needed; do not use it as the default search path.
+- If a normal read, search, shell, browser, or MCP result says it was truncated or saved as tool-output://..., use recall_tool_output with start, startLine/endLine, maxChars, or query before assuming the omitted text is irrelevant.
+- If you need most or all of a large source file, or you find yourself reading adjacent chunks of the same file, use read_full with startLine/endLine/maxChars instead of stitching many narrow reads manually.
 </tool_behavior>`,
     `<memory_tool_policy>
 Project memory is a compact, durable knowledge base. search_history is the full conversation lookup tool.

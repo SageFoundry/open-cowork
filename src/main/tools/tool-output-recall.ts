@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { DatabaseInstance } from '../db/database';
 
 const SNAPSHOT_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
-const DEFAULT_RECALL_MAX_CHARS = 8_000;
-const MAX_RECALL_MAX_CHARS = 20_000;
+const DEFAULT_RECALL_MAX_CHARS = 20_000;
+const MAX_RECALL_MAX_CHARS = 100_000;
 const SEARCH_CONTEXT_CHARS = 700;
 
 export type ToolOutputSnapshotReason = 'compressed' | 'truncated';
@@ -21,6 +21,8 @@ export interface RecallToolOutputInput {
   query?: string;
   start?: number;
   end?: number;
+  startLine?: number;
+  endLine?: number;
   maxChars?: number;
 }
 
@@ -42,6 +44,47 @@ function clampMaxChars(maxChars: number | undefined): number {
 
 function buildRangeLabel(start: number, end: number, total: number): string {
   return `chars ${start}-${end} of ${total}`;
+}
+
+function buildNextCharHint(handle: string, nextStart: number, maxChars: number): string {
+  return `[more available: call recall_tool_output with {"handle":"${handle}","start":${nextStart},"maxChars":${maxChars}}]`;
+}
+
+function buildNextLineHint(handle: string, nextStartLine: number, maxChars: number): string {
+  return `[more available: call recall_tool_output with {"handle":"${handle}","startLine":${nextStartLine},"maxChars":${maxChars}}]`;
+}
+
+function getLineRange(content: string, startLine: number, endLine: number | undefined, maxChars: number) {
+  const lines = content.split(/\r?\n/);
+  const normalizedStartLine = Math.max(1, Math.floor(startLine));
+  const startIndex = Math.min(lines.length, normalizedStartLine - 1);
+  const explicitEndIndex =
+    endLine !== undefined ? Math.max(startIndex, Math.min(lines.length, Math.floor(endLine))) : lines.length;
+
+  const selected: string[] = [];
+  let chars = 0;
+  let endIndex = startIndex;
+  for (let index = startIndex; index < explicitEndIndex; index += 1) {
+    const line = lines[index];
+    const nextChars = chars + line.length + (selected.length > 0 ? 1 : 0);
+    if (selected.length > 0 && nextChars > maxChars) {
+      break;
+    }
+    selected.push(line);
+    chars = nextChars;
+    endIndex = index + 1;
+    if (chars >= maxChars) {
+      break;
+    }
+  }
+
+  return {
+    text: selected.join('\n'),
+    startLine: normalizedStartLine,
+    endLine: endIndex,
+    totalLines: lines.length,
+    hasMore: endIndex < lines.length && endIndex < explicitEndIndex,
+  };
 }
 
 export function createToolOutputSnapshot(
@@ -80,11 +123,11 @@ export function formatToolOutputRecallNotice(input: {
   const savedTokens = Math.max(0, Math.ceil((input.rawChars - input.visibleChars) / 4));
   const action =
     input.reason === 'compressed'
-      ? 'Use recall_tool_output with this handle to inspect omitted original text.'
-      : 'Use recall_tool_output with this handle to inspect truncated original text.';
+      ? 'Use recall_tool_output with this handle to inspect omitted original text. You can pass start, startLine/endLine, maxChars, or query.'
+      : 'Use recall_tool_output with this handle to inspect truncated original text. You can pass start, startLine/endLine, maxChars, or query.';
   return [
     '',
-    `[Open Cowork original output saved: ${input.handle}, raw=${input.rawChars} chars, visible=${input.visibleChars} chars, est_saved_tokens=${savedTokens}. ${action}]`,
+    `[Open Cowork original output saved: ${input.handle}, raw=${input.rawChars} chars, visible=${input.visibleChars} chars, est_saved_tokens=${savedTokens}. ${action} Next page example: recall_tool_output({"handle":"${input.handle}","start":${input.visibleChars},"maxChars":20000}).]`,
   ].join('\n');
 }
 
@@ -103,6 +146,21 @@ export function recallToolOutput(
 
   const maxChars = clampMaxChars(input.maxChars);
   const content = snapshot.content;
+
+  if (input.startLine !== undefined) {
+    const range = getLineRange(content, input.startLine, input.endLine, maxChars);
+    return {
+      found: true,
+      text: [
+        `Saved output ${input.handle} (${snapshot.tool_name}, ${snapshot.reason}, lines ${range.startLine}-${range.endLine} of ${range.totalLines}, maxChars=${maxChars})`,
+        '',
+        range.text,
+        range.hasMore ? `\n${buildNextLineHint(input.handle, range.endLine + 1, maxChars)}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    };
+  }
 
   if (input.query?.trim()) {
     const terms = input.query
@@ -131,7 +189,7 @@ export function recallToolOutput(
         )})`,
         '',
         content.slice(start, end),
-        end < content.length ? `\n[more available: request start=${end}]` : '',
+        end < content.length ? `\n${buildNextCharHint(input.handle, end, maxChars)}` : '',
       ]
         .filter(Boolean)
         .join('\n'),
@@ -155,7 +213,7 @@ export function recallToolOutput(
       )})`,
       '',
       content.slice(requestedStart, end),
-      end < content.length ? `\n[more available: request start=${end}]` : '',
+      end < content.length ? `\n${buildNextCharHint(input.handle, end, maxChars)}` : '',
     ]
       .filter(Boolean)
       .join('\n'),

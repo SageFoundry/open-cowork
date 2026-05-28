@@ -50,6 +50,7 @@ npm run build:win
 - Keep IPC registration split under `src/main/ipc/`; do not grow `src/main/index.ts` with new handler bodies.
 - Keep skill path logic centralized in `src/main/skills/skill-paths.ts`.
 - Put scratch scripts, research notes, and temporary test data under `tmp/`; the project root is not for scratch files.
+- **Within `tmp/`, organize files into purpose-named subdirectories** (`session-analysis/`, `db-query/`, `tests/`, `build-release/`, `pi-docs/`, `deadcode/`, `anysearch/`, `context-research/`, `asar-scan/`, `icon-research/`, `misc/` etc.). **Do not dump loose files at the `tmp/` root** — each file must belong to a category subdirectory. Large binary files (≥ 1 MB) like DB copies, zip archives, or cloned research directories should be flagged for cleanup after use.
 - Use `rg` first for search. If `rg` hits WindowsApps access-denied issues, fall back to PowerShell `Get-ChildItem` and `Select-String`.
 
 ## Windows Execution Notes

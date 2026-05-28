@@ -44,7 +44,7 @@ vi.mock('electron-store', () => {
   };
 });
 
-vi.mock('@mariozechner/pi-ai', () => ({
+vi.mock('@earendil-works/pi-ai', () => ({
   completeSimple: mocks.completeSimple,
 }));
 

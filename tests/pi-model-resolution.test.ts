@@ -1,15 +1,23 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   applyPiModelRuntimeOverrides,
   buildPiModelLookupCandidates,
   buildSyntheticPiModel,
+  clearRuntimeOpenRouterModelSpecsForTests,
   inferPiApi,
   resolvePiModelString,
+  resolvePiRegistryModel,
+  resolveKnownModelSpecs,
   resolvePiRouteProtocol,
   resolveSyntheticPiModelFallback,
+  setRuntimeOpenRouterModelSpecs,
 } from '../src/main/claude/pi-model-resolution';
 
 describe('pi model resolution helpers', () => {
+  afterEach(() => {
+    clearRuntimeOpenRouterModelSpecsForTests();
+  });
+
   it('skips invalid custom raw provider lookups and deduplicates candidates', () => {
     const candidates = buildPiModelLookupCandidates('openai/gpt-5.4', {
       configProvider: 'openai',
@@ -37,10 +45,185 @@ describe('pi model resolution helpers', () => {
     ]);
   });
 
+  it('tries raw provider bare model id for first-party openai-compatible providers', () => {
+    const candidates = buildPiModelLookupCandidates('openai/deepseek-v4-flash', {
+      configProvider: 'openai',
+      rawProvider: 'deepseek',
+    });
+
+    expect(candidates.slice(0, 2)).toEqual([
+      { provider: 'deepseek', model: 'deepseek-v4-flash' },
+      { provider: 'deepseek', model: 'openai/deepseek-v4-flash' },
+    ]);
+  });
+
+  it('tries raw provider before protocol fallback for bare openai-compatible model ids', () => {
+    const candidates = buildPiModelLookupCandidates('deepseek-v4-flash', {
+      configProvider: 'openai',
+      rawProvider: 'deepseek',
+    });
+
+    expect(candidates.slice(0, 2)).toEqual([
+      { provider: 'deepseek', model: 'deepseek-v4-flash' },
+      { provider: 'openai', model: 'deepseek-v4-flash' },
+    ]);
+  });
+
+  it('resolves DeepSeek V4 Flash from the native pi registry', () => {
+    const model = resolvePiRegistryModel('openai/deepseek-v4-flash', {
+      configProvider: 'openai',
+      rawProvider: 'deepseek',
+      customBaseUrl: 'https://api.deepseek.com/v1',
+    });
+
+    expect(model?.provider).toBe('deepseek');
+    expect(model?.id).toBe('deepseek-v4-flash');
+    expect(model?.reasoning).toBe(true);
+    expect(model?.compat?.thinkingFormat).toBe('deepseek');
+  });
+
+  it('resolves bare DeepSeek V4 Flash from the native pi registry', () => {
+    const model = resolvePiRegistryModel('deepseek-v4-flash', {
+      configProvider: 'openai',
+      rawProvider: 'deepseek',
+      customBaseUrl: 'https://api.deepseek.com/v1',
+    });
+
+    expect(model?.provider).toBe('deepseek');
+    expect(model?.id).toBe('deepseek-v4-flash');
+    expect(model?.compat?.thinkingFormat).toBe('deepseek');
+  });
+
+  it('tries Xiaomi MiMo registry aliases for prefixed custom model ids', () => {
+    const candidates = buildPiModelLookupCandidates('mimo-v2.5/mimo-v2.5-pro', {
+      configProvider: 'openai',
+      rawProvider: 'custom',
+    });
+
+    expect(candidates).toContainEqual({ provider: 'xiaomi', model: 'mimo-v2.5-pro' });
+  });
+
+  it('tries native openai-compatible registry aliases for known reasoning model ids', () => {
+    expect(
+      buildPiModelLookupCandidates('qwen3.6-plus', {
+        configProvider: 'openai',
+        rawProvider: 'custom',
+      })
+    ).toContainEqual({ provider: 'opencode-go', model: 'qwen3.6-plus' });
+
+    expect(
+      buildPiModelLookupCandidates('kimi-k2.6', {
+        configProvider: 'openai',
+        rawProvider: 'custom',
+      })
+    ).toEqual(
+      expect.arrayContaining([
+        { provider: 'moonshotai', model: 'kimi-k2.6' },
+        { provider: 'moonshotai-cn', model: 'kimi-k2.6' },
+      ])
+    );
+
+    expect(
+      buildPiModelLookupCandidates('deepseek-v4-pro', {
+        configProvider: 'openai',
+        rawProvider: 'custom',
+      })
+    ).toContainEqual({ provider: 'deepseek', model: 'deepseek-v4-pro' });
+  });
+
+  it('resolves Xiaomi MiMo Pro from the native pi registry', () => {
+    const model = resolvePiRegistryModel('mimo-v2.5/mimo-v2.5-pro', {
+      configProvider: 'openai',
+      rawProvider: 'custom',
+      customBaseUrl: 'https://api.xiaomimimo.com/v1',
+      customProtocol: 'openai',
+    });
+
+    expect(model?.provider).toBe('xiaomi');
+    expect(model?.id).toBe('mimo-v2.5-pro');
+    expect(model?.baseUrl).toBe('https://api.xiaomimimo.com/v1');
+    expect(model?.reasoning).toBe(true);
+    expect(model?.compat?.thinkingFormat).toBe('deepseek');
+    expect(model?.compat?.requiresReasoningContentOnAssistantMessages).toBe(true);
+  });
+
+  it('resolves bare Xiaomi MiMo Pro from the native pi registry', () => {
+    const model = resolvePiRegistryModel('mimo-v2.5-pro', {
+      configProvider: 'openai',
+      rawProvider: 'openai',
+      customBaseUrl: 'https://api.xiaomimimo.com/v1',
+    });
+
+    expect(model?.provider).toBe('xiaomi');
+    expect(model?.id).toBe('mimo-v2.5-pro');
+    expect(model?.compat?.thinkingFormat).toBe('deepseek');
+  });
+
+  it('resolves Qwen 3.6 Plus from a native pi registry entry with qwen thinking format', () => {
+    const model = resolvePiRegistryModel('qwen3.6-plus', {
+      configProvider: 'openai',
+      rawProvider: 'custom',
+      customBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      customProtocol: 'openai',
+    });
+
+    expect(model?.provider).toBe('opencode-go');
+    expect(model?.id).toBe('qwen3.6-plus');
+    expect(model?.baseUrl).toBe('https://dashscope.aliyuncs.com/compatible-mode/v1');
+    expect(model?.reasoning).toBe(true);
+    expect(model?.compat?.thinkingFormat).toBe('qwen');
+  });
+
+  it('resolves bare Kimi K2.6 from the native Moonshot pi registry entry', () => {
+    const model = resolvePiRegistryModel('kimi-k2.6', {
+      configProvider: 'openai',
+      rawProvider: 'custom',
+      customBaseUrl: 'https://api.moonshot.cn/v1',
+      customProtocol: 'openai',
+    });
+
+    expect(model?.provider).toBe('moonshotai');
+    expect(model?.id).toBe('kimi-k2.6');
+    expect(model?.baseUrl).toBe('https://api.moonshot.cn/v1');
+    expect(model?.reasoning).toBe(true);
+    expect(model?.compat?.supportsDeveloperRole).toBe(false);
+    expect(model?.compat?.supportsStore).toBe(false);
+  });
+
   it('builds provider-prefixed model ids from config-like input', () => {
     expect(resolvePiModelString({ provider: 'openai', customProtocol: 'openai', model: 'gpt-5.4' })).toBe('openai/gpt-5.4');
     expect(resolvePiModelString({ provider: 'custom', customProtocol: 'gemini', model: 'gemini-3-flash-preview' })).toBe('gemini/gemini-3-flash-preview');
     expect(resolvePiModelString({ provider: 'anthropic', customProtocol: 'anthropic', model: 'anthropic/claude-sonnet-4-6' })).toBe('anthropic/claude-sonnet-4-6');
+  });
+
+  it('uses refreshed OpenRouter specs for context and multimodal support', () => {
+    expect(resolveKnownModelSpecs('qwen/qwen3.7-max')).toMatchObject({
+      contextWindow: 1000000,
+      maxTokens: 65536,
+    });
+
+    expect(resolveKnownModelSpecs('google/gemini-3.5-flash')).toMatchObject({
+      contextWindow: 1048576,
+      maxTokens: 65536,
+      input: ['text', 'image'],
+    });
+  });
+
+  it('prefers runtime OpenRouter specs over built-in specs', () => {
+    setRuntimeOpenRouterModelSpecs([
+      {
+        aliases: ['qwen/qwen3.7-max'],
+        contextWindow: 123456,
+        maxTokens: 7890,
+        input: ['text', 'image'],
+      },
+    ]);
+
+    expect(resolveKnownModelSpecs('qwen/qwen3.7-max')).toEqual({
+      contextWindow: 123456,
+      maxTokens: 7890,
+      input: ['text', 'image'],
+    });
   });
 
   it('routes openrouter through the openai-compatible protocol', () => {
@@ -215,11 +398,17 @@ describe('pi model resolution helpers', () => {
     const deepseekR1 = buildSyntheticPiModel('deepseek-r1-distill', 'deepseek', 'openai', 'https://api.deepseek.com/v1');
     expect(deepseekR1.reasoning).toBe(true);
 
+    const deepseekV4 = buildSyntheticPiModel('deepseek-v4', 'deepseek', 'openai', 'https://api.deepseek.com/v1');
+    expect(deepseekV4.reasoning).toBe(false);
+
     const qwen35 = buildSyntheticPiModel('qwen3.5:0.8b', 'openai', 'openai', 'http://localhost:11434/v1');
     expect(qwen35.reasoning).toBe(true);
 
     const qwen3 = buildSyntheticPiModel('qwen3:8b', 'openai', 'openai', 'http://localhost:11434/v1');
     expect(qwen3.reasoning).toBe(true);
+
+    const qwen36 = buildSyntheticPiModel('qwen3.6-plus', 'openai', 'openai', 'https://example.com/v1');
+    expect(qwen36.reasoning).toBe(true);
 
     const reasoner = buildSyntheticPiModel('o3-reasoner', 'openai', 'openai');
     expect(reasoner.reasoning).toBe(true);
@@ -279,7 +468,7 @@ describe('pi model resolution helpers', () => {
     expect(model.compat?.supportsDeveloperRole).toBe(false);
   });
 
-  it('maps ollama thinking off to reasoning_effort none for reasoning models', () => {
+  it('maps ollama thinking off to thinking level none for reasoning models', () => {
     const model = applyPiModelRuntimeOverrides(
       {
         id: 'qwen3.5:0.8b',
@@ -301,7 +490,7 @@ describe('pi model resolution helpers', () => {
     );
 
     expect(model.compat?.supportsReasoningEffort).toBe(true);
-    expect((model.compat?.reasoningEffortMap as Record<string, string> | undefined)?.off).toBe('none');
+    expect((model.thinkingLevelMap as Record<string, string> | undefined)?.off).toBe('none');
   });
 
   it('disables developer role for openrouter with custom endpoint', () => {
@@ -378,5 +567,33 @@ describe('pi model resolution helpers', () => {
     expect(model.compat?.supportsDeveloperRole).toBe(false);
     expect(model.compat?.supportsStore).toBe(false);
     expect((model.compat as any)?.supportsStreaming).toBe(true);
+  });
+
+  it.skip('applies DeepSeek V4 thinking compat to synthetic fallback aliases', () => {
+    const model = applyPiModelRuntimeOverrides(
+      {
+        id: 'deepseek-v4',
+        name: 'deepseek-v4',
+        api: 'openai-completions',
+        provider: 'openai',
+        baseUrl: 'https://api.deepseek.com/v1',
+        reasoning: false,
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 16384,
+      },
+      {
+        configProvider: 'deepseek',
+        rawProvider: 'deepseek',
+        customBaseUrl: 'https://api.deepseek.com/v1',
+      },
+    );
+
+    expect(model.reasoning).toBe(true);
+    expect(model.compat?.thinkingFormat).toBe('deepseek');
+    expect(model.compat?.requiresReasoningContentOnAssistantMessages).toBe(true);
+    expect(model.thinkingLevelMap?.high).toBe('high');
+    expect(model.thinkingLevelMap?.xhigh).toBe('max');
   });
 });

@@ -68,7 +68,7 @@ describe('ClaudeAgentRunner pi-coding-agent integration', () => {
 
   it('uses pi DefaultResourceLoader with additionalSkillPaths and appendSystemPrompt', () => {
     expect(agentRunnerContent).toContain('additionalSkillPaths: skillPaths');
-    expect(agentRunnerContent).toContain('appendSystemPrompt: coworkAppendPrompt');
+    expect(agentRunnerContent).toContain('appendSystemPrompt: [coworkAppendPrompt]');
     expect(agentRunnerContent).toContain('buildPlanModeRuntimePrompt');
     expect(agentRunnerContent).not.toContain('<plan_mode_capabilities>');
     expect(agentRunnerContent).not.toContain('systemPromptOverride');
@@ -96,6 +96,14 @@ describe('ClaudeAgentRunner pi-coding-agent integration', () => {
     expect(agentRunnerContent).toContain('buildOpenCoworkAppendPrompt');
   });
 
+  it('teaches the model to use recall and read_full for truncated large context', () => {
+    const promptContractPath = path.resolve(process.cwd(), 'src/main/claude/prompt-contract.ts');
+    const promptContractContent = readFileSync(promptContractPath, 'utf8');
+    expect(promptContractContent).toContain('tool-output://');
+    expect(promptContractContent).toContain('recall_tool_output with start, startLine/endLine');
+    expect(promptContractContent).toContain('use read_full with startLine/endLine/maxChars');
+  });
+
   it('routes MCP image results through structured helpers instead of stringifying base64 into text', () => {
     expect(agentRunnerContent).toContain(
       "import {\n  limitToolExecutionResultForModelWithInfo,\n  normalizeMcpToolResultForModel,\n  normalizeToolExecutionResultForUi,\n} from './tool-result-utils'"
@@ -110,6 +118,27 @@ describe('ClaudeAgentRunner pi-coding-agent integration', () => {
     );
     expect(agentRunnerContent).not.toContain('else textParts.push(JSON.stringify(part));');
     expect(agentRunnerContent).not.toContain(": JSON.stringify(event.result || '');");
+  });
+
+  it('registers a large-file aware read_full tool and richer recall pagination', () => {
+    expect(agentRunnerContent).toContain("name: 'read_full'");
+    expect(agentRunnerContent).toContain('buildReadFullTool(session.id, effectiveCwd)');
+    expect(agentRunnerContent).toContain("tool.name === 'recall_tool_output' || tool.name === 'read_full'");
+    expect(agentRunnerContent).toContain('startLine');
+    expect(agentRunnerContent).toContain('endLine');
+    expect(agentRunnerContent).toContain('Defaults to 20000, capped at 100000');
+  });
+
+  it('does not remap Windows absolute paths as workspace-relative read_full paths', () => {
+    expect(agentRunnerContent).toContain(
+      'const isWindowsAbsolutePath = /^[a-zA-Z]:[\\\\/]/.test(trimmed) || /^\\\\\\\\/.test(trimmed);'
+    );
+    expect(agentRunnerContent).toContain(
+      'if (!isNativeAbsolutePath || /^\\/(?:workspace|mnt\\/workspace)(?:\\/|$)/.test(slashPath)) {'
+    );
+    expect(agentRunnerContent).toContain(
+      'const candidate = isNativeAbsolutePath ? trimmed : path.resolve(root, trimmed);'
+    );
   });
 
   it('does not reference removed AskUserQuestion or TodoWrite tools', () => {

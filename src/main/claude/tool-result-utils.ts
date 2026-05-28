@@ -26,8 +26,8 @@ export interface LimitedToolResult<T> {
   info: ToolResultLimitInfo;
 }
 
-const MAX_TOOL_RESULT_TEXT_CHARS = 20_000;
-const MAX_TOOL_RESULT_TEXT_LINES = 600;
+const MAX_TOOL_RESULT_TEXT_CHARS = 80_000;
+const MAX_TOOL_RESULT_TEXT_LINES = 2_000;
 const TOOL_RESULT_HEAD_RATIO = 0.7;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -99,7 +99,7 @@ function buildTruncationMarker(omittedChars: number, omittedLines: number): stri
     omittedLines > 0 ? `${omittedLines} lines` : null,
   ].filter(Boolean);
   const omitted = details.length > 0 ? details.join(', ') : 'content';
-  return `[Tool output truncated: omitted ${omitted}. Use a narrower command or redirect large output to a file, then inspect a small slice.]`;
+  return `[Tool output truncated: omitted ${omitted}. Open Cowork saves oversized original tool output when possible and appends a tool-output:// handle below. Use recall_tool_output with that handle to read the omitted text by start offset, line range, or query.]`;
 }
 
 function truncateByLines(text: string): string {

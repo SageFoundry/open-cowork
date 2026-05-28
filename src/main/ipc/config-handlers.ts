@@ -7,6 +7,10 @@ import {
 } from '../config/config-store';
 import { runConfigApiTest } from '../config/config-test-routing';
 import { listOllamaModels } from '../config/ollama-api';
+import {
+  getOpenRouterModelSpecsStatus,
+  refreshOpenRouterModelSpecsCache,
+} from '../config/openrouter-model-specs-cache';
 import type { SessionManager } from '../session/session-manager';
 import { log, logError } from '../utils/logger';
 import type {
@@ -96,6 +100,24 @@ export function registerConfigHandlers({
     } catch (error) {
       logError('[Config] Error getting presets:', error);
       return [];
+    }
+  });
+
+  ipcMain.handle('config.openrouterSpecsStatus', async () => {
+    try {
+      return await getOpenRouterModelSpecsStatus();
+    } catch (error) {
+      logError('[Config] Error getting OpenRouter specs status:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('config.refreshOpenRouterSpecs', async () => {
+    try {
+      return await refreshOpenRouterModelSpecsCache();
+    } catch (error) {
+      logError('[Config] Error refreshing OpenRouter specs:', error);
+      throw error;
     }
   });
 

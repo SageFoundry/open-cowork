@@ -20,9 +20,9 @@ import {
   type BashOperations,
   type AgentSession as PiAgentSession,
   type ToolDefinition,
-} from '@mariozechner/pi-coding-agent';
-import type { ImageContent as PiImageContent } from '@mariozechner/pi-ai';
-import { Type, type TSchema } from '@sinclair/typebox';
+} from '@earendil-works/pi-coding-agent';
+import type { ImageContent as PiImageContent } from '@earendil-works/pi-ai';
+import { Type, type TSchema } from 'typebox';
 import { getSharedAuthStorage, ModelRegistry } from './shared-auth';
 import type { Session, Message, TraceStep, ServerEvent, ContentBlock } from '../../renderer/types';
 import { v4 as uuidv4 } from 'uuid';
@@ -118,6 +118,7 @@ import {
   buildWorkspaceInfoPrompt,
   VIRTUAL_WORKSPACE_PATH,
 } from './prompt-contract';
+import { isPathWithinRoot } from '../../shared/path-containment';
 import { buildAnySearchTool, buildAnySearchExtractTool } from '../search/anysearch-tool';
 
 const DEFAULT_HISTORY_CHARS_PER_TOKEN = 2; // Conservative estimate: 2 chars ≈ 1 token (handles CJK-heavy content)
@@ -257,13 +258,13 @@ function appendToolOutputRecallNotice<T>(result: T, notice: string): T {
  * Convert Open Cowork Message[] to pi SDK AgentMessage[] format.
  * Tool results are omitted — the SDK manages its own tool result flow.
  */
-function convertToPiAgentMessages(messages: Message[]): import('@mariozechner/pi-ai').Message[] {
-  const result: import('@mariozechner/pi-ai').Message[] = [];
+function convertToPiAgentMessages(messages: Message[]): import('@earendil-works/pi-ai').Message[] {
+  const result: import('@earendil-works/pi-ai').Message[] = [];
   for (const msg of messages) {
     if (msg.role === 'user') {
       const content: (
-        | import('@mariozechner/pi-ai').TextContent
-        | import('@mariozechner/pi-ai').ImageContent
+        | import('@earendil-works/pi-ai').TextContent
+        | import('@earendil-works/pi-ai').ImageContent
       )[] = [];
       for (const c of msg.content) {
         if (c.type === 'text') {
@@ -282,7 +283,7 @@ function convertToPiAgentMessages(messages: Message[]): import('@mariozechner/pi
         timestamp: msg.timestamp ?? Date.now(),
       });
     } else if (msg.role === 'assistant') {
-      const content: import('@mariozechner/pi-ai').AssistantMessage['content'] = [];
+      const content: import('@earendil-works/pi-ai').AssistantMessage['content'] = [];
       for (const c of msg.content) {
         if (c.type === 'text') {
           content.push({ type: 'text' as const, text: c.text });
@@ -299,8 +300,8 @@ function convertToPiAgentMessages(messages: Message[]): import('@mariozechner/pi
       result.push({
         role: 'assistant',
         content,
-        api: '' as import('@mariozechner/pi-ai').Api,
-        provider: '' as import('@mariozechner/pi-ai').Provider,
+        api: '' as import('@earendil-works/pi-ai').Api,
+        provider: '' as import('@earendil-works/pi-ai').Provider,
         model: '',
         usage: {
           input: 0,
@@ -960,7 +961,7 @@ interface CachedPiSession {
 }
 
 /**
- * ClaudeAgentRunner - Uses @mariozechner/pi-coding-agent SDK
+ * ClaudeAgentRunner - Uses @earendil-works/pi-coding-agent SDK
  *
  * Environment variables should be set before running:
  *   ANTHROPIC_BASE_URL=https://openrouter.ai/api
@@ -1320,7 +1321,7 @@ ${hints.join('\n')}
           ctx: any
         ) => {
           const result = await originalExecute(toolCallId, params, signal, onUpdate, ctx);
-          if (tool.name === 'recall_tool_output') {
+          if (tool.name === 'recall_tool_output' || tool.name === 'read_full') {
             return result;
           }
 
@@ -1401,6 +1402,152 @@ ${hints.join('\n')}
         },
       } as ToolDefinition;
     });
+  }
+
+  private buildReadFullTool(sessionId: string, effectiveCwd: string): ToolDefinition<TSchema, unknown> {
+    const clampMaxChars = (value: number | undefined): number => {
+      if (!Number.isFinite(value ?? NaN)) return 80_000;
+      return Math.max(4_000, Math.min(160_000, Math.floor(value as number)));
+    };
+
+    const resolveReadablePath = (requestedPath: string): string | null => {
+      const trimmed = requestedPath.trim();
+      if (!trimmed) return null;
+
+      const virtualResolved = this.pathResolver.resolve(sessionId, trimmed);
+      if (virtualResolved) return virtualResolved;
+
+      const isWindowsAbsolutePath = /^[a-zA-Z]:[\\/]/.test(trimmed) || /^\\\\/.test(trimmed);
+      const isNativeAbsolutePath = path.isAbsolute(trimmed) || isWindowsAbsolutePath;
+      const slashPath = trimmed.replace(/\\/g, '/');
+      if (!isNativeAbsolutePath || /^\/(?:workspace|mnt\/workspace)(?:\/|$)/.test(slashPath)) {
+        const workspaceRelative = slashPath
+          .replace(/^\/workspace\/?/, '')
+          .replace(/^\/mnt\/workspace\/?/, '');
+        const workspaceCandidate = this.pathResolver.resolve(
+          sessionId,
+          path.posix.join('/mnt/workspace', workspaceRelative)
+        );
+        if (workspaceCandidate) return workspaceCandidate;
+      }
+
+      if (!effectiveCwd) return null;
+      const root = fs.realpathSync.native(effectiveCwd);
+      const candidate = isNativeAbsolutePath ? trimmed : path.resolve(root, trimmed);
+      const realCandidate = fs.existsSync(candidate)
+        ? fs.realpathSync.native(candidate)
+        : path.resolve(root, path.relative(root, candidate));
+      return isPathWithinRoot(realCandidate, root) ? realCandidate : null;
+    };
+
+    const readPage = (content: string, maxChars: number, startLine?: number, endLine?: number) => {
+      const lines = content.split(/\r?\n/);
+      const totalLines = lines.length;
+      const normalizedStartLine = Math.max(1, Math.floor(startLine ?? 1));
+      const startIndex = Math.min(totalLines, normalizedStartLine - 1);
+      const explicitEndIndex =
+        endLine !== undefined
+          ? Math.max(startIndex, Math.min(totalLines, Math.floor(endLine)))
+          : totalLines;
+
+      const selected: string[] = [];
+      let chars = 0;
+      let endIndex = startIndex;
+      for (let index = startIndex; index < explicitEndIndex; index += 1) {
+        const line = lines[index];
+        const nextChars = chars + line.length + (selected.length > 0 ? 1 : 0);
+        if (selected.length > 0 && nextChars > maxChars) break;
+        selected.push(line);
+        chars = nextChars;
+        endIndex = index + 1;
+        if (chars >= maxChars) break;
+      }
+
+      return {
+        text: selected.join('\n'),
+        startLine: normalizedStartLine,
+        endLine: endIndex,
+        totalLines,
+        hasMore: endIndex < totalLines && endIndex < explicitEndIndex,
+      };
+    };
+
+    return {
+      name: 'read_full',
+      label: 'Read Full File',
+      description:
+        'Read a workspace file with large-file aware pagination. Use this when the normal read tool is truncated, when you need a complete file, or when you are repeatedly reading adjacent chunks. Small files are returned in one call; large files return a clear page plus the next startLine to continue. Supports startLine/endLine and maxChars.',
+      parameters: Type.Object({
+        path: Type.String({
+          description:
+            'Workspace file path. Accepts /mnt/workspace paths, paths relative to the current working directory, or absolute paths inside the workspace.',
+        }),
+        startLine: Type.Optional(
+          Type.Number({
+            description: 'Optional 1-based line number to start reading from. Defaults to 1.',
+          })
+        ),
+        endLine: Type.Optional(
+          Type.Number({
+            description: 'Optional inclusive 1-based line number to stop at.',
+          })
+        ),
+        maxChars: Type.Optional(
+          Type.Number({
+            description: 'Maximum characters to return. Defaults to 80000, capped at 160000.',
+          })
+        ),
+      }),
+      execute: async (
+        _toolCallId: string,
+        params: { path: string; startLine?: number; endLine?: number; maxChars?: number }
+      ) => {
+        const resolvedPath = resolveReadablePath(params.path);
+        if (!resolvedPath) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: `read_full failed: path is empty, missing, or outside the workspace: ${params.path}`,
+              },
+            ],
+            details: undefined as unknown,
+          };
+        }
+
+        const stat = fs.statSync(resolvedPath);
+        if (!stat.isFile()) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: `read_full failed: path is not a file: ${params.path}`,
+              },
+            ],
+            details: undefined as unknown,
+          };
+        }
+
+        const maxChars = clampMaxChars(params.maxChars);
+        const content = fs.readFileSync(resolvedPath, 'utf-8');
+        const page = readPage(content, maxChars, params.startLine, params.endLine);
+        const virtualPath = this.pathResolver.virtualize(sessionId, resolvedPath) ?? resolvedPath;
+        const nextLine = page.endLine + 1;
+        const header = [
+          `read_full: ${virtualPath}`,
+          `lines ${page.startLine}-${page.endLine} of ${page.totalLines}, returned ${page.text.length}/${content.length} chars, maxChars=${maxChars}`,
+          page.hasMore
+            ? `More available. Continue with read_full({"path":"${params.path}","startLine":${nextLine},"maxChars":${maxChars}}).`
+            : 'Complete for requested range.',
+          '',
+        ].join('\n');
+
+        return {
+          content: [{ type: 'text' as const, text: `${header}${page.text}` }],
+          details: undefined as unknown,
+        };
+      },
+    };
   }
 
   private buildBackgroundTaskTool(
@@ -1935,6 +2082,14 @@ ${hints.join('\n')}
     }
     this.activeControllers.set(session.id, controller);
 
+    const throwIfRunAborted = (stage: string): void => {
+      if (!controller.signal.aborted) return;
+      logCtx('[ClaudeAgentRunner] Run aborted before continuing:', stage);
+      const abortError = new Error('Request was aborted');
+      abortError.name = 'AbortError';
+      throw abortError;
+    };
+
     // Sandbox isolation state (defined outside try for finally access)
     let sandboxPath: string | null = null;
     let useSandboxIsolation = false;
@@ -2325,6 +2480,7 @@ ${hints.join('\n')}
 
       // Resolve model via pi-ai
       const runtimeConfig = configStore.getAll();
+      throwIfRunAborted('before model resolution');
       const modelString = this.getCurrentModelString(runtimeConfig.model);
       const configProtocol = resolvePiRouteProtocol(
         runtimeConfig.provider,
@@ -2799,9 +2955,16 @@ ${hints.join('\n')}
       // Re-read every query so newly added/removed MCP servers take effect immediately.
       const mcpCustomTools = this.mcpManager ? buildMcpCustomTools(this.mcpManager) : [];
       const backgroundTaskTools = this.buildBackgroundTaskTool(session.id, effectiveCwd);
+      const readFullTool = this.buildReadFullTool(session.id, effectiveCwd);
       const anySearchTool = buildAnySearchTool();
       const anySearchExtractTool = buildAnySearchExtractTool();
-      const baseCustomTools = [anySearchTool, anySearchExtractTool, ...backgroundTaskTools, ...mcpCustomTools];
+      const baseCustomTools = [
+        anySearchTool,
+        anySearchExtractTool,
+        readFullTool,
+        ...backgroundTaskTools,
+        ...mcpCustomTools,
+      ];
       log('[ClaudeAgentRunner] Registered AnySearch websearch custom tool');
       if (mcpCustomTools.length > 0) {
         log(
@@ -3060,9 +3223,21 @@ ${hints.join('\n')}
                 'Optional exclusive character end offset for range reads. Ignored when query is provided.',
             })
           ),
+          startLine: Type.Optional(
+            Type.Number({
+              description:
+                'Optional 1-based line number for line-range reads. Takes precedence over start/end when provided.',
+            })
+          ),
+          endLine: Type.Optional(
+            Type.Number({
+              description:
+                'Optional inclusive 1-based end line for line-range reads. Used with startLine.',
+            })
+          ),
           maxChars: Type.Optional(
             Type.Number({
-              description: 'Maximum characters to return. Defaults to 8000, capped at 20000.',
+              description: 'Maximum characters to return. Defaults to 20000, capped at 100000.',
             })
           ),
         }),
@@ -3073,6 +3248,8 @@ ${hints.join('\n')}
             query?: string;
             start?: number;
             end?: number;
+            startLine?: number;
+            endLine?: number;
             maxChars?: number;
           }
         ) => {
@@ -3667,19 +3844,18 @@ ${hints.join('\n')}
         effectiveCwd
       );
 
-      const shellOverrideTools = guardedShellTools.filter(
-        (tool) => tool.name === 'bash' || tool.name === 'pwsh' || tool.name === 'http'
-      );
       const limitedShellTools = this.wrapToolsWithResultLimit(
         guardedShellTools,
         session.id,
         effectiveCwd
       );
-      const customTools = this.wrapToolsWithResultLimit(
-        [...guardedBaseCustomTools, ...shellOverrideTools],
+      const limitedBaseCustomTools = this.wrapToolsWithResultLimit(
+        guardedBaseCustomTools,
         session.id,
         effectiveCwd
       );
+      const sdkCustomTools = [...limitedShellTools, ...limitedBaseCustomTools];
+      const activeToolNames = Array.from(new Set(sdkCustomTools.map((tool) => tool.name)));
 
       // Diagnostic: log tools being passed to SDK (helps debug Ollama tool use)
       logCtx(`[ClaudeAgentRunner] Session reuse check: cached=${!!cachedSession}`);
@@ -3696,12 +3872,12 @@ ${hints.join('\n')}
         `[ClaudeAgentRunner] Custom MCP tools (${mcpCustomTools.length}): ${mcpCustomTools.map((t) => t.name).join(', ')}`
       );
       log(
-        `[ClaudeAgentRunner] Shell override tools (${shellOverrideTools.length}): ${shellOverrideTools.map((t) => t.name).join(', ')}`
+        `[ClaudeAgentRunner] SDK active tools (${activeToolNames.length}): ${activeToolNames.join(', ')}`
       );
 
       const toolFingerprintInput = {
         builtIn: limitedShellTools.map((tool) => describeToolForFingerprint(tool)),
-        custom: customTools.map((tool) => describeToolForFingerprint(tool)),
+        custom: limitedBaseCustomTools.map((tool) => describeToolForFingerprint(tool)),
       };
       const cacheDiagnostics: CacheDiagnosticsPayload = {
         version: 1,
@@ -3739,6 +3915,7 @@ ${hints.join('\n')}
       });
 
       let piSession: PiAgentSession;
+      throwIfRunAborted('before pi session setup');
       if (cachedSession) {
         // Reuse existing session — SDK retains full conversation history and handles compaction
         piSession = cachedSession.session;
@@ -3788,7 +3965,7 @@ ${hints.join('\n')}
         if (existingMessages.length > 0) {
           const agent = piSession.agent;
           const compressedMessages = convertToPiAgentMessages(existingMessages);
-          agent.replaceMessages(compressedMessages);
+          agent.state.messages = compressedMessages as typeof agent.state.messages;
           logCtx(
             '[ClaudeAgentRunner] Replaced SDK agent messages with compressed version:',
             compressedMessages.length,
@@ -3803,17 +3980,6 @@ ${hints.join('\n')}
       } else {
         // First query in this session — create new pi-coding-agent session
         // ResourceLoader + ModelRegistry only needed for session creation — skip on reuse
-        const { DefaultResourceLoader } = await import('@mariozechner/pi-coding-agent');
-        const resourceLoader = new DefaultResourceLoader({
-          cwd: effectiveCwd,
-          noSkills: true, // Disable pi's default skill discovery; Open Cowork controls all skill paths
-          additionalSkillPaths: skillPaths,
-          appendSystemPrompt: coworkAppendPrompt,
-        });
-        await resourceLoader.reload();
-
-        const modelRegistry = new ModelRegistry(authStorage);
-
         // Ollama-specific compaction tuning based on actual context window
         const contextWindow = piModel.contextWindow || 128000;
         let compactionSettings: {
@@ -3843,19 +4009,35 @@ ${hints.join('\n')}
         } else {
           compactionSettings = { enabled: true };
         }
+        const piSettingsManager = PiSettingsManager.inMemory({
+          compaction: compactionSettings,
+          retry: { enabled: true, maxRetries: 2 },
+        });
+
+        const { DefaultResourceLoader } = await import('@earendil-works/pi-coding-agent');
+        const piAgentDir = path.join(os.homedir(), '.pi', 'agent');
+        const resourceLoader = new DefaultResourceLoader({
+          cwd: effectiveCwd,
+          agentDir: piAgentDir,
+          settingsManager: piSettingsManager,
+          noSkills: true, // Disable pi's default skill discovery; Open Cowork controls all skill paths
+          additionalSkillPaths: skillPaths,
+          appendSystemPrompt: [coworkAppendPrompt],
+        });
+        await resourceLoader.reload();
+
+        const modelRegistry = ModelRegistry.create(authStorage);
 
         const { session: newPiSession } = await createAgentSession({
           model: piModel,
           thinkingLevel,
+          agentDir: piAgentDir,
           authStorage,
           modelRegistry,
-          tools: limitedShellTools as unknown as ReturnType<typeof createCodingTools>,
-          customTools,
+          tools: activeToolNames,
+          customTools: sdkCustomTools,
           sessionManager: PiSessionManager.inMemory(),
-          settingsManager: PiSettingsManager.inMemory({
-            compaction: compactionSettings,
-            retry: { enabled: true, maxRetries: 2 },
-          }),
+          settingsManager: piSettingsManager,
           resourceLoader,
           cwd: effectiveCwd,
         });
@@ -3883,6 +4065,7 @@ ${hints.join('\n')}
           thinkingLevel,
           runtimeSignature: sessionRuntimeSignature,
         });
+        throwIfRunAborted('after pi session creation');
 
         // Ollama: wrap _onPayload to inject num_ctx into every request
         if (provider === 'ollama') {
@@ -3957,12 +4140,40 @@ ${hints.join('\n')}
             const nextPayload = originalOnPayload
               ? ((await originalOnPayload.call(agent, payload, modelArg)) ?? payload)
               : payload;
+            const shouldLogThinkingPayload =
+              piModel.provider === 'deepseek' ||
+              piModel.baseUrl?.includes('deepseek.com') ||
+              piModel.id.toLowerCase().includes('deepseek') ||
+              process.env.COWORK_LOG_SDK_MESSAGES_FULL === '1';
+            const logThinkingPayload = (
+              phase: string,
+              payloadToLog: Record<string, unknown>
+            ): void => {
+              if (!shouldLogThinkingPayload) return;
+              logCtx(
+                `[ClaudeAgentRunner] Thinking payload ${phase}:`,
+                JSON.stringify({
+                  provider,
+                  modelProvider: piModel.provider,
+                  modelId: piModel.id,
+                  modelApi: piModel.api,
+                  enableThinking,
+                  thinkingLevel,
+                  thinking: payloadToLog.thinking,
+                  reasoning: payloadToLog.reasoning,
+                  reasoning_effort: payloadToLog.reasoning_effort,
+                })
+              );
+            };
+            logThinkingPayload('before Open Cowork patch', nextPayload);
             if (!enableThinking) {
-              return (
+              const disabledPayload = (
                 usesAnthropicMessagesProtocol
                   ? disableThinkingForAnthropicPayload(nextPayload)
                   : disableThinkingForOpenAIPayload(nextPayload)
               ) as Record<string, unknown>;
+              logThinkingPayload('after disable patch', disabledPayload);
+              return disabledPayload;
             }
             let patchedPayload: unknown = nextPayload;
             if (usesAnthropicMessagesProtocol) {
@@ -3977,6 +4188,7 @@ ${hints.join('\n')}
                 agent.state?.messages ?? []
               );
             }
+            logThinkingPayload('after restore patch', patchedPayload as Record<string, unknown>);
             return patchedPayload as Record<string, unknown>;
           };
         }
@@ -3992,6 +4204,70 @@ ${hints.join('\n')}
       const thinkParser = new ThinkTagStreamParser();
       const promptStartedAt = Date.now();
       const streamEventCounts = new Map<string, number>();
+      const partialToolArgSnapshots = new Map<string, string>();
+
+      const isRecord = (value: unknown): value is Record<string, unknown> =>
+        Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+      const collectArgumentText = (value: unknown): string => {
+        if (typeof value === 'string') return value;
+        if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+        if (Array.isArray(value)) return value.map(collectArgumentText).join('\n');
+        if (isRecord(value)) {
+          return Object.keys(value)
+            .sort()
+            .map((key) => `${key}\n${collectArgumentText(value[key])}`)
+            .join('\n');
+        }
+        return '';
+      };
+
+      const getPartialToolContent = (ame: {
+        partial?: { content?: unknown[] };
+        contentIndex?: number;
+      }): { id?: string; name?: string; arguments?: Record<string, unknown> } | null => {
+        const contentIndex = typeof ame.contentIndex === 'number' ? ame.contentIndex : -1;
+        const block = ame.partial?.content?.[contentIndex];
+        if (!isRecord(block) || block.type !== 'toolCall') return null;
+        return {
+          id: typeof block.id === 'string' ? block.id : undefined,
+          name: typeof block.name === 'string' ? block.name : undefined,
+          arguments: isRecord(block.arguments) ? block.arguments : {},
+        };
+      };
+
+      const inferPartialToolArgumentDelta = (
+        key: string,
+        args: Record<string, unknown> | undefined
+      ): string => {
+        if (!args) return '';
+        const current = collectArgumentText(args);
+        const previous = partialToolArgSnapshots.get(key) ?? '';
+        partialToolArgSnapshots.set(key, current);
+        const growth = current.length - previous.length;
+        return growth > 0 ? current.slice(-growth) : '';
+      };
+
+      const getToolTargetPath = (args: Record<string, unknown> | undefined): string => {
+        if (!args) return '';
+        for (const key of ['path', 'file_path', 'filePath', 'relativePath']) {
+          const value = args[key];
+          if (typeof value === 'string' && value.trim()) {
+            return sanitizeOutputPaths(value);
+          }
+        }
+        return '';
+      };
+
+      const formatToolTitle = (
+        action: 'Generating' | 'Executing',
+        toolName: string,
+        args?: Record<string, unknown>
+      ): string => {
+        const targetPath = getToolTargetPath(args);
+        const targetName = targetPath ? path.basename(targetPath) : '';
+        return `${action} ${toolName}${targetName ? ` ${targetName}` : ''}`;
+      };
 
       const FIRST_RESPONSE_WARNING_MS = 90 * 1000;
       const SILENCE_TIMEOUT_MS = 3 * 60 * 1000;
@@ -4182,23 +4458,52 @@ ${hints.join('\n')}
                 });
               } else if (ame.type === 'toolcall_start') {
                 markFirstStreamEvent(ame.type);
-                const partial = ame.partial;
-                const toolContent = partial?.content?.[ame.contentIndex];
-                const toolName = toolContent?.type === 'toolCall' ? toolContent.name : 'unknown';
-                const toolCallId = toolContent?.type === 'toolCall' ? toolContent.id : uuidv4();
+                const toolContent = getPartialToolContent(ame);
+                const toolName = toolContent?.name ?? 'unknown';
+                const toolCallId = toolContent?.id ?? uuidv4();
+                const toolInput = toolContent?.arguments ?? {};
+                partialToolArgSnapshots.set(
+                  `${toolCallId}:${ame.contentIndex}`,
+                  collectArgumentText(toolInput)
+                );
                 runningTraceStepIds.add(toolCallId);
                 this.sendTraceStep(session.id, {
                   id: toolCallId,
                   type: 'tool_call',
                   status: 'running',
-                  title: toolName,
+                  title: formatToolTitle('Generating', toolName, toolInput),
+                  content: 'generating_tool_args',
                   toolName,
-                  toolInput:
-                    toolContent?.type === 'toolCall'
-                      ? (toolContent.arguments as Record<string, unknown>) || {}
-                      : undefined,
+                  toolInput,
                   timestamp: Date.now(),
                 });
+              } else if (ame.type === 'toolcall_delta') {
+                markFirstStreamEvent(ame.type);
+                const toolContent = getPartialToolContent(ame);
+                const toolCallId = toolContent?.id ?? `content-${ame.contentIndex}`;
+                const inferredDelta = inferPartialToolArgumentDelta(
+                  `${toolCallId}:${ame.contentIndex}`,
+                  toolContent?.arguments
+                );
+                const delta = typeof ame.delta === 'string' && ame.delta ? ame.delta : inferredDelta;
+                if (delta) {
+                  this.sendToRenderer({
+                    type: 'stream.toolCallDelta',
+                    payload: { sessionId: session.id, delta },
+                  });
+                }
+                if (toolContent?.id) {
+                  this.sendTraceUpdate(session.id, toolContent.id, {
+                    title: formatToolTitle(
+                      'Generating',
+                      toolContent.name ?? 'unknown',
+                      toolContent.arguments
+                    ),
+                    content: 'generating_tool_args',
+                    toolName: toolContent.name,
+                    toolInput: toolContent.arguments,
+                  });
+                }
               } else if (ame.type === 'done') {
                 // Some providers emit 'done' via message_update — we handle it
                 // in message_end below as a unified path for all providers.
@@ -4373,12 +4678,56 @@ ${hints.join('\n')}
 
             case 'tool_execution_start': {
               logCtx(`[ClaudeAgentRunner] Tool execution start: ${event.toolName}`);
+              const toolCallId = event.toolCallId;
+              const toolArgs = isRecord(event.args) ? event.args : {};
+              if (runningTraceStepIds.has(toolCallId)) {
+                this.sendTraceUpdate(session.id, toolCallId, {
+                  status: 'running',
+                  title: formatToolTitle('Executing', event.toolName, toolArgs),
+                  content: 'executing_tool',
+                  toolName: event.toolName,
+                  toolInput: toolArgs,
+                });
+              } else {
+                runningTraceStepIds.add(toolCallId);
+                this.sendTraceStep(session.id, {
+                  id: toolCallId,
+                  type: 'tool_call',
+                  status: 'running',
+                  title: formatToolTitle('Executing', event.toolName, toolArgs),
+                  content: 'executing_tool',
+                  toolName: event.toolName,
+                  toolInput: toolArgs,
+                  timestamp: Date.now(),
+                });
+              }
+              break;
+            }
+
+            case 'tool_execution_update': {
+              if (controller.signal.aborted) break;
+              const toolCallId = event.toolCallId;
+              const toolArgs = isRecord(event.args) ? event.args : {};
+              const normalizedToolResult = normalizeToolExecutionResultForUi(event.partialResult);
+              this.sendTraceUpdate(session.id, toolCallId, {
+                status: 'running',
+                title: formatToolTitle('Executing', event.toolName, toolArgs),
+                content: 'executing_tool',
+                toolName: event.toolName,
+                toolInput: toolArgs,
+                toolOutput: sanitizeOutputPaths(normalizedToolResult.content).slice(0, 800),
+              });
               break;
             }
 
             case 'tool_execution_end': {
               if (controller.signal.aborted) break;
               const toolCallId = event.toolCallId;
+              for (const key of partialToolArgSnapshots.keys()) {
+                if (key.startsWith(`${toolCallId}:`)) {
+                  partialToolArgSnapshots.delete(key);
+                }
+              }
               const isError = event.isError;
               const normalizedToolResult = normalizeToolExecutionResultForUi(event.result);
               const outputText = normalizedToolResult.content;
@@ -4416,7 +4765,7 @@ ${hints.join('\n')}
               break;
             }
 
-            case 'auto_compaction_start': {
+            case 'compaction_start': {
               log('[ClaudeAgentRunner] Auto-compaction started, reason:', event.reason);
               compactionStepId = `compaction-${Date.now()}`;
               runningTraceStepIds.add(compactionStepId);
@@ -4430,7 +4779,7 @@ ${hints.join('\n')}
               break;
             }
 
-            case 'auto_compaction_end': {
+            case 'compaction_end': {
               const status = event.aborted ? 'error' : event.errorMessage ? 'error' : 'completed';
               const title = event.aborted
                 ? 'Context compaction aborted'
@@ -4485,6 +4834,7 @@ ${hints.join('\n')}
 
       // Execute the prompt — unsubscribe in finally to prevent event listener leak
       try {
+        throwIfRunAborted('before pi prompt');
         startFirstResponseWarningTimer();
         if (provider === 'ollama') {
           log(
@@ -4503,6 +4853,7 @@ ${hints.join('\n')}
         const promptResult = await piSession.prompt(contextualPrompt, {
           images: piImages,
         });
+        throwIfRunAborted('after pi prompt');
         log(
           '[ClaudeAgentRunner] prompt() returned:',
           JSON.stringify(promptResult ?? 'void').substring(0, 1000)
@@ -4677,8 +5028,15 @@ ${hints.join('\n')}
     // because SessionManager.stopSession() is synchronous.
     const cached = this.piSessions.get(sessionId);
     if (cached) {
+      this.piSessions.delete(sessionId);
       cached.session.abort().catch((err) => {
         logWarn('[ClaudeAgentRunner] Error aborting pi session:', err);
+      }).finally(() => {
+        try {
+          cached.session.dispose();
+        } catch (err) {
+          logWarn('[ClaudeAgentRunner] Error disposing aborted pi session:', err);
+        }
       });
     }
   }

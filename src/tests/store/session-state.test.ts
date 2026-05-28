@@ -1,10 +1,14 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { useAppStore } from '../../renderer/store';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { getDisplayStreamRate, useAppStore } from '../../renderer/store';
 import type { MountedPath } from '../../renderer/types';
 
 // Reset store before each test
 beforeEach(() => {
   useAppStore.setState(useAppStore.getInitialState());
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('SessionState unified store', () => {
@@ -327,6 +331,41 @@ describe('SessionState unified store', () => {
       ];
       useAppStore.getState().setTraceSteps('s1', steps);
       expect(useAppStore.getState().sessionStates['s1'].traceSteps).toHaveLength(2);
+    });
+  });
+
+  describe('stream activity', () => {
+    it('records a non-zero five-second average rate for streamed deltas', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1000);
+      useAppStore.getState().addSession(makeSession('s1'));
+
+      useAppStore.getState().recordStreamActivity('s1', 'abcdefgh', 'text');
+      let activity = useAppStore.getState().sessionStates['s1'].streamActivity;
+
+      expect(activity?.totalEstimatedTokens).toBe(2);
+      expect(getDisplayStreamRate(activity, 1000)).toBe(2);
+
+      vi.setSystemTime(1500);
+      useAppStore.getState().recordStreamActivity('s1', 'abcdefgh', 'tool_call');
+      activity = useAppStore.getState().sessionStates['s1'].streamActivity;
+
+      expect(activity?.totalEstimatedTokens).toBe(4);
+      expect(activity?.activeKind).toBe('tool_call');
+      expect(getDisplayStreamRate(activity, 1500)).toBe(4);
+    });
+
+    it('returns zero for the displayed rate after five seconds without tokens', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1000);
+      useAppStore.getState().addSession(makeSession('s1'));
+      useAppStore.getState().recordStreamActivity('s1', 'abcdefgh', 'tool_call');
+
+      const activity = useAppStore.getState().sessionStates['s1'].streamActivity;
+
+      expect(getDisplayStreamRate(activity, 5999)).toBeCloseTo(0.4);
+      expect(getDisplayStreamRate(activity, 6001)).toBe(0);
+      expect(activity?.totalEstimatedTokens).toBe(2);
     });
   });
 

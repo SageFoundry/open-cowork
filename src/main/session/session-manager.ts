@@ -1863,13 +1863,30 @@ export class SessionManager {
         log('[SessionManager] Continuing queue with newly arrived prompts:', session.id);
       }
     } finally {
-      // Only clean up here — no restart logic needed since the outer loop
-      // already handles re-checking. activeSessions is only deleted once
-      // there are truly no pending items remaining.
+      // Only clean up here. The outer loop handles normal re-checking; if a
+      // stop aborts the loop while a new prompt arrives, restart below.
       this.activeSessions.delete(session.id);
       const queue = this.promptQueues.get(session.id);
       if (queue && queue.length === 0) {
         this.promptQueues.delete(session.id);
+      }
+      if (controller.signal.aborted && queue && queue.length > 0) {
+        const latestSession = this.loadSession(session.id);
+        if (latestSession) {
+          log('[SessionManager] Restarting queue after aborted run:', session.id);
+          this.processQueue(latestSession).catch((err) => {
+            logError('[SessionManager] Queue processing error after abort:', err);
+            this.sendToRenderer({
+              type: 'error',
+              payload: {
+                message: `Failed to process message: ${
+                  err instanceof Error ? err.message : String(err)
+                }`,
+              },
+            });
+          });
+          return;
+        }
       }
       this.updateSessionStatus(session.id, 'idle');
     }

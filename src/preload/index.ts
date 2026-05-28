@@ -17,6 +17,7 @@ import type {
   ScheduleCreateInput,
   ScheduleUpdateInput,
   ProviderModelInfo,
+  OpenRouterModelSpecsStatus,
   LocalOllamaDiscoveryResult,
   BackgroundTask,
   BackgroundTaskStartInput,
@@ -223,6 +224,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       apiKey: string;
       baseUrl?: string;
     }): Promise<ProviderModelInfo[]> => ipcRenderer.invoke('config.listModels', payload),
+    getOpenRouterSpecsStatus: (): Promise<OpenRouterModelSpecsStatus> =>
+      ipcRenderer.invoke('config.openrouterSpecsStatus'),
+    refreshOpenRouterSpecs: (): Promise<OpenRouterModelSpecsStatus> =>
+      ipcRenderer.invoke('config.refreshOpenRouterSpecs'),
     diagnose: (input: DiagnosticInput): Promise<DiagnosticResult> =>
       ipcRenderer.invoke('config.diagnose', input),
     discoverLocal: (payload?: { baseUrl?: string }): Promise<LocalOllamaDiscoveryResult> =>
@@ -579,6 +584,8 @@ declare global {
           apiKey: string;
           baseUrl?: string;
         }) => Promise<ProviderModelInfo[]>;
+        getOpenRouterSpecsStatus: () => Promise<OpenRouterModelSpecsStatus>;
+        refreshOpenRouterSpecs: () => Promise<OpenRouterModelSpecsStatus>;
         diagnose: (input: DiagnosticInput) => Promise<DiagnosticResult>;
         discoverLocal: (payload?: { baseUrl?: string }) => Promise<LocalOllamaDiscoveryResult>;
       };

@@ -1,10 +1,11 @@
-import { getModel, type Api, type Model } from '@mariozechner/pi-ai';
+import { getModel, type Api, type Model } from '@earendil-works/pi-ai';
 import { isOfficialOpenAIBaseUrl } from '../config/auth-utils';
 
 const COMMON_FALLBACK_PROVIDERS = ['openai', 'anthropic', 'google'] as const;
 const INVALID_REGISTRY_PROVIDERS = new Set(['', 'custom']);
+const ENABLE_DEEPSEEK_V4_SYNTHETIC_THINKING_COMPAT = false;
 const REASONING_MODEL_PATTERN =
-  /\bthinking\b|\breasoner\b|deepseek-r1|kimi-k2|qwen3(?:\.5)?(?=[:/-]|$)/i;
+  /\bthinking\b|\breasoner\b|deepseek-r1|kimi-k2|qwen3(?:\.\d+)?(?=[:/-]|$)/i;
 type PiRegistryProvider = Parameters<typeof getModel>[0];
 
 export interface PiModelStringInput {
@@ -84,54 +85,79 @@ export function inferPiApi(protocol: string): string {
   }
 }
 
-interface KnownModelSpecs {
+export interface KnownModelSpecs {
   contextWindow: number;
   maxTokens: number;
   /** Input types the model supports. Undefined means text-only by default. */
   input?: ('text' | 'image')[];
 }
 
-interface KnownModelSpecEntry extends KnownModelSpecs {
+export interface KnownModelSpecEntry extends KnownModelSpecs {
   aliases: string[];
 }
 
 /**
- * OpenRouter model specs refreshed from /api/v1/models on 2026-04-25.
- * Scope: text-output language and multimodal models created since 2025-10-25.
+ * OpenRouter model specs refreshed from /api/v1/models on 2026-05-27.
+ * Scope: text-output language and multimodal models created since 2025-11-27.
  */
 const RECENT_OPENROUTER_MODEL_SPECS: KnownModelSpecEntry[] = [
   {
-    aliases: ["inclusionai/ring-2.6-1t:free"],
-    contextWindow: 262144,
+    aliases: ["qwen/qwen3.7-max", "qwen/qwen3.7-max-20260520"],
+    contextWindow: 1000000,
     maxTokens: 65536
   },
   {
-    aliases: ["google/gemini-3.1-flash-lite"],
+    aliases: ["x-ai/grok-build-0.1", "x-ai/grok-build-0.1-20260520"],
+    contextWindow: 256000,
+    maxTokens: 0, input: ["text", "image"]
+  },
+  {
+    aliases: ["google/gemini-3.5-flash", "google/gemini-3.5-flash-20260519"],
     contextWindow: 1048576,
     maxTokens: 65536, input: ["text", "image"]
   },
   {
-    aliases: ["baidu/cobuddy:free"],
+    aliases: ["anthropic/claude-opus-4.7-fast", "anthropic/claude-4.7-opus-fast-20260512"],
+    contextWindow: 1000000,
+    maxTokens: 128000, input: ["text", "image"]
+  },
+  {
+    aliases: ["perceptron/perceptron-mk1", "perceptron/perceptron-mk1-20260512"],
+    contextWindow: 32768,
+    maxTokens: 8192, input: ["text", "image"]
+  },
+  {
+    aliases: ["inclusionai/ring-2.6-1t", "inclusionai/ring-2.6-1t-20260508"],
+    contextWindow: 262144,
+    maxTokens: 65536
+  },
+  {
+    aliases: ["google/gemini-3.1-flash-lite", "google/gemini-3.1-flash-lite-20260507"],
+    contextWindow: 1048576,
+    maxTokens: 65536, input: ["text", "image"]
+  },
+  {
+    aliases: ["baidu/cobuddy:free", "baidu/cobuddy-20260430"],
     contextWindow: 131072,
     maxTokens: 65536
   },
   {
-    aliases: ["openai/gpt-chat-latest"],
+    aliases: ["openai/gpt-chat-latest", "openai/gpt-chat-latest-20260505"],
     contextWindow: 400000,
     maxTokens: 128000, input: ["text", "image"]
   },
   {
-    aliases: ["x-ai/grok-4.3"],
+    aliases: ["x-ai/grok-4.3", "x-ai/grok-4.3-20260430"],
     contextWindow: 1000000,
     maxTokens: 0, input: ["text", "image"]
   },
   {
-    aliases: ["ibm-granite/granite-4.1-8b"],
+    aliases: ["ibm-granite/granite-4.1-8b", "ibm-granite/granite-4.1-8b-20260429"],
     contextWindow: 131072,
     maxTokens: 131072
   },
   {
-    aliases: ["mistralai/mistral-medium-3-5"],
+    aliases: ["mistralai/mistral-medium-3-5", "mistralai/mistral-medium-3.5-20260430"],
     contextWindow: 262144,
     maxTokens: 0, input: ["text", "image"]
   },
@@ -141,57 +167,57 @@ const RECENT_OPENROUTER_MODEL_SPECS: KnownModelSpecEntry[] = [
     maxTokens: 262144
   },
   {
-    aliases: ["nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"],
+    aliases: ["nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning-20260428"],
     contextWindow: 256000,
     maxTokens: 65536, input: ["text", "image"]
   },
   {
-    aliases: ["poolside/laguna-xs.2:free"],
+    aliases: ["poolside/laguna-xs.2:free", "poolside/laguna-xs.2-20260421"],
     contextWindow: 131072,
     maxTokens: 8192
   },
   {
-    aliases: ["poolside/laguna-m.1:free"],
-    contextWindow: 131072,
-    maxTokens: 8192
+    aliases: ["poolside/laguna-m.1:free", "poolside/laguna-m.1-20260312"],
+    contextWindow: 262144,
+    maxTokens: 32768
   },
   {
-    aliases: ["~anthropic/claude-haiku-latest", "anthropic/claude-haiku-latest"],
+    aliases: ["~anthropic/claude-haiku-latest"],
     contextWindow: 200000,
     maxTokens: 64000, input: ["text", "image"]
   },
   {
-    aliases: ["~openai/gpt-mini-latest", "openai/gpt-mini-latest"],
+    aliases: ["~openai/gpt-mini-latest"],
     contextWindow: 400000,
     maxTokens: 128000, input: ["text", "image"]
   },
   {
-    aliases: ["~google/gemini-pro-latest", "google/gemini-pro-latest"],
+    aliases: ["~google/gemini-pro-latest"],
     contextWindow: 1048576,
     maxTokens: 65536, input: ["text", "image"]
   },
   {
-    aliases: ["~moonshotai/kimi-latest", "moonshotai/kimi-latest"],
-    contextWindow: 32768,
-    maxTokens: 32768, input: ["text", "image"]
+    aliases: ["~moonshotai/kimi-latest"],
+    contextWindow: 262142,
+    maxTokens: 262142, input: ["text", "image"]
   },
   {
-    aliases: ["~google/gemini-flash-latest", "google/gemini-flash-latest"],
+    aliases: ["~google/gemini-flash-latest"],
     contextWindow: 1048576,
     maxTokens: 65536, input: ["text", "image"]
   },
   {
-    aliases: ["~anthropic/claude-sonnet-latest", "anthropic/claude-sonnet-latest"],
+    aliases: ["~anthropic/claude-sonnet-latest"],
     contextWindow: 1000000,
     maxTokens: 128000, input: ["text", "image"]
   },
   {
-    aliases: ["~openai/gpt-latest", "openai/gpt-latest"],
+    aliases: ["~openai/gpt-latest"],
     contextWindow: 1050000,
     maxTokens: 128000, input: ["text", "image"]
   },
   {
-    aliases: ["qwen/qwen3.5-plus-20260420", "qwen/qwen3.5-plus"],
+    aliases: ["qwen/qwen3.5-plus-20260420"],
     contextWindow: 1000000,
     maxTokens: 65536, input: ["text", "image"]
   },
@@ -201,72 +227,77 @@ const RECENT_OPENROUTER_MODEL_SPECS: KnownModelSpecEntry[] = [
     maxTokens: 65536, input: ["text", "image"]
   },
   {
-    aliases: ["qwen/qwen3.6-35b-a3b"],
+    aliases: ["qwen/qwen3.6-35b-a3b", "qwen/qwen3.6-35b-a3b-20260415"],
     contextWindow: 262144,
     maxTokens: 262144, input: ["text", "image"]
   },
   {
-    aliases: ["qwen/qwen3.6-max-preview"],
+    aliases: ["qwen/qwen3.6-max-preview", "qwen/qwen3.6-max-preview-20260420"],
     contextWindow: 262144,
     maxTokens: 65536
   },
   {
-    aliases: ["qwen/qwen3.6-27b"],
+    aliases: ["qwen/qwen3.6-27b", "qwen/qwen3.6-27b-20260422"],
     contextWindow: 262144,
-    maxTokens: 81920, input: ["text", "image"]
+    maxTokens: 65536, input: ["text", "image"]
   },
   {
-    aliases: ["openai/gpt-5.5-pro"],
+    aliases: ["openai/gpt-5.5-pro", "openai/gpt-5.5-pro-20260423"],
     contextWindow: 1050000,
     maxTokens: 128000, input: ["text", "image"]
   },
   {
-    aliases: ["openai/gpt-5.5"],
+    aliases: ["openai/gpt-5.5", "openai/gpt-5.5-20260423"],
     contextWindow: 1050000,
     maxTokens: 128000, input: ["text", "image"]
   },
   {
-    aliases: ["deepseek/deepseek-v4-pro"],
+    aliases: ["deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-pro-20260423"],
     contextWindow: 1048576,
     maxTokens: 384000
   },
   {
-    aliases: ["deepseek/deepseek-v4-flash"],
+    aliases: ["deepseek/deepseek-v4-flash:free", "deepseek/deepseek-v4-flash-20260423"],
     contextWindow: 1048576,
     maxTokens: 384000
   },
   {
-    aliases: ["inclusionai/ling-2.6-1t"],
-    contextWindow: 262144,
-    maxTokens: 32768
-  },
-  {
-    aliases: ["tencent/hy3-preview"],
-    contextWindow: 262144,
-    maxTokens: 262144
-  },
-  {
-    aliases: ["xiaomi/mimo-v2.5-pro"],
+    aliases: ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-flash-20260423"],
     contextWindow: 1048576,
     maxTokens: 16384
   },
   {
-    aliases: ["xiaomi/mimo-v2.5"],
-    contextWindow: 1048576,
-    maxTokens: 131072, input: ["text", "image"]
-  },
-  {
-    aliases: ["openai/gpt-5.4-image-2"],
-    contextWindow: 272000,
-    maxTokens: 128000, input: ["text", "image"]
-  },
-  {
-    aliases: ["inclusionai/ling-2.6-flash"],
+    aliases: ["inclusionai/ling-2.6-1t", "inclusionai/ling-2.6-1t-20260423"],
     contextWindow: 262144,
     maxTokens: 32768
   },
   {
-    aliases: ["~anthropic/claude-opus-latest", "anthropic/claude-opus-latest"],
+    aliases: ["tencent/hy3-preview", "tencent/hy3-preview-20260421"],
+    contextWindow: 262144,
+    maxTokens: 262144
+  },
+  {
+    aliases: ["xiaomi/mimo-v2.5-pro", "xiaomi/mimo-v2.5-pro-20260422"],
+    contextWindow: 1048576,
+    maxTokens: 131072
+  },
+  {
+    aliases: ["xiaomi/mimo-v2.5", "xiaomi/mimo-v2.5-20260422"],
+    contextWindow: 1048576,
+    maxTokens: 131072, input: ["text", "image"]
+  },
+  {
+    aliases: ["openai/gpt-5.4-image-2", "openai/gpt-5.4-image-2-20260421"],
+    contextWindow: 272000,
+    maxTokens: 128000, input: ["text", "image"]
+  },
+  {
+    aliases: ["inclusionai/ling-2.6-flash", "inclusionai/ling-2.6-flash-20260421"],
+    contextWindow: 262144,
+    maxTokens: 32768
+  },
+  {
+    aliases: ["~anthropic/claude-opus-latest"],
     contextWindow: 1000000,
     maxTokens: 128000, input: ["text", "image"]
   },
@@ -276,64 +307,59 @@ const RECENT_OPENROUTER_MODEL_SPECS: KnownModelSpecEntry[] = [
     maxTokens: 0
   },
   {
-    aliases: ["baidu/qianfan-ocr-fast:free"],
+    aliases: ["baidu/qianfan-ocr-fast", "baidu/qianfan-ocr-fast-20260420"],
     contextWindow: 65536,
     maxTokens: 28672, input: ["text", "image"]
   },
   {
-    aliases: ["moonshotai/kimi-k2.6"],
-    contextWindow: 256000,
-    maxTokens: 32768, input: ["text", "image"]
+    aliases: ["moonshotai/kimi-k2.6", "moonshotai/kimi-k2.6-20260420"],
+    contextWindow: 262142,
+    maxTokens: 262142, input: ["text", "image"]
   },
   {
-    aliases: ["anthropic/claude-opus-4.7"],
+    aliases: ["anthropic/claude-opus-4.7", "anthropic/claude-4.7-opus-20260416"],
     contextWindow: 1000000,
     maxTokens: 128000, input: ["text", "image"]
   },
   {
-    aliases: ["anthropic/claude-opus-4.6-fast"],
+    aliases: ["anthropic/claude-opus-4.6-fast", "anthropic/claude-4.6-opus-fast-20260407"],
     contextWindow: 1000000,
     maxTokens: 128000, input: ["text", "image"]
   },
   {
-    aliases: ["z-ai/glm-5.1"],
+    aliases: ["z-ai/glm-5.1", "z-ai/glm-5.1-20260406"],
     contextWindow: 202752,
     maxTokens: 0
   },
   {
-    aliases: ["google/gemma-4-26b-a4b-it:free"],
+    aliases: ["google/gemma-4-26b-a4b-it:free", "google/gemma-4-26b-a4b-it-20260403"],
     contextWindow: 262144,
     maxTokens: 32768, input: ["text", "image"]
   },
   {
-    aliases: ["google/gemma-4-26b-a4b-it"],
+    aliases: ["google/gemma-4-26b-a4b-it", "google/gemma-4-26b-a4b-it-20260403"],
     contextWindow: 262144,
     maxTokens: 0, input: ["text", "image"]
   },
   {
-    aliases: ["google/gemma-4-31b-it:free"],
+    aliases: ["google/gemma-4-31b-it:free", "google/gemma-4-31b-it-20260402"],
     contextWindow: 262144,
     maxTokens: 32768, input: ["text", "image"]
   },
   {
-    aliases: ["google/gemma-4-31b-it"],
+    aliases: ["google/gemma-4-31b-it", "google/gemma-4-31b-it-20260402"],
     contextWindow: 262144,
     maxTokens: 16384, input: ["text", "image"]
   },
   {
-    aliases: ["qwen/qwen3.6-plus"],
+    aliases: ["qwen/qwen3.6-plus", "qwen/qwen3.6-plus-04-02"],
     contextWindow: 1000000,
     maxTokens: 65536, input: ["text", "image"]
   },
   {
-    aliases: ["z-ai/glm-5v-turbo"],
+    aliases: ["z-ai/glm-5v-turbo", "z-ai/glm-5v-turbo-20260401"],
     contextWindow: 202752,
     maxTokens: 131072, input: ["text", "image"]
-  },
-  {
-    aliases: ["arcee-ai/trinity-large-thinking:free"],
-    contextWindow: 262144,
-    maxTokens: 80000
   },
   {
     aliases: ["arcee-ai/trinity-large-thinking"],
@@ -341,57 +367,57 @@ const RECENT_OPENROUTER_MODEL_SPECS: KnownModelSpecEntry[] = [
     maxTokens: 262144
   },
   {
-    aliases: ["x-ai/grok-4.20-multi-agent"],
+    aliases: ["x-ai/grok-4.20-multi-agent", "x-ai/grok-4.20-multi-agent-20260309"],
     contextWindow: 2000000,
     maxTokens: 0, input: ["text", "image"]
   },
   {
-    aliases: ["x-ai/grok-4.20"],
+    aliases: ["x-ai/grok-4.20", "x-ai/grok-4.20-20260309"],
     contextWindow: 2000000,
     maxTokens: 0, input: ["text", "image"]
   },
   {
-    aliases: ["google/lyria-3-pro-preview"],
+    aliases: ["google/lyria-3-pro-preview", "google/lyria-3-pro-preview-20260330"],
     contextWindow: 1048576,
     maxTokens: 65536, input: ["text", "image"]
   },
   {
-    aliases: ["google/lyria-3-clip-preview"],
+    aliases: ["google/lyria-3-clip-preview", "google/lyria-3-clip-preview-20260330"],
     contextWindow: 1048576,
     maxTokens: 65536, input: ["text", "image"]
   },
   {
-    aliases: ["kwaipilot/kat-coder-pro-v2"],
+    aliases: ["kwaipilot/kat-coder-pro-v2", "kwaipilot/kat-coder-pro-v2-20260327"],
     contextWindow: 256000,
     maxTokens: 80000
   },
   {
-    aliases: ["rekaai/reka-edge"],
+    aliases: ["rekaai/reka-edge", "rekaai/reka-edge-2603"],
     contextWindow: 16384,
     maxTokens: 16384, input: ["text", "image"]
   },
   {
-    aliases: ["xiaomi/mimo-v2-omni"],
+    aliases: ["xiaomi/mimo-v2-omni", "xiaomi/mimo-v2-omni-20260318"],
     contextWindow: 262144,
     maxTokens: 65536, input: ["text", "image"]
   },
   {
-    aliases: ["xiaomi/mimo-v2-pro"],
+    aliases: ["xiaomi/mimo-v2-pro", "xiaomi/mimo-v2-pro-20260318"],
     contextWindow: 1048576,
     maxTokens: 131072
   },
   {
-    aliases: ["minimax/minimax-m2.7"],
+    aliases: ["minimax/minimax-m2.7", "minimax/minimax-m2.7-20260318"],
     contextWindow: 196608,
-    maxTokens: 0
+    maxTokens: 131072
   },
   {
-    aliases: ["openai/gpt-5.4-nano"],
+    aliases: ["openai/gpt-5.4-nano", "openai/gpt-5.4-nano-20260317"],
     contextWindow: 400000,
     maxTokens: 128000, input: ["text", "image"]
   },
   {
-    aliases: ["openai/gpt-5.4-mini"],
+    aliases: ["openai/gpt-5.4-mini", "openai/gpt-5.4-mini-20260317"],
     contextWindow: 400000,
     maxTokens: 128000, input: ["text", "image"]
   },
@@ -401,152 +427,152 @@ const RECENT_OPENROUTER_MODEL_SPECS: KnownModelSpecEntry[] = [
     maxTokens: 0, input: ["text", "image"]
   },
   {
-    aliases: ["z-ai/glm-5-turbo"],
+    aliases: ["z-ai/glm-5-turbo", "z-ai/glm-5-turbo-20260315"],
     contextWindow: 202752,
     maxTokens: 131072
   },
   {
-    aliases: ["nvidia/nemotron-3-super-120b-a12b:free"],
+    aliases: ["nvidia/nemotron-3-super-120b-a12b:free", "nvidia/nemotron-3-super-120b-a12b-20230311"],
     contextWindow: 262144,
     maxTokens: 262144
   },
   {
-    aliases: ["nvidia/nemotron-3-super-120b-a12b"],
+    aliases: ["nvidia/nemotron-3-super-120b-a12b", "nvidia/nemotron-3-super-120b-a12b-20230311"],
     contextWindow: 262144,
     maxTokens: 0
   },
   {
-    aliases: ["bytedance-seed/seed-2.0-lite"],
+    aliases: ["bytedance-seed/seed-2.0-lite", "bytedance-seed/seed-2.0-lite-20260309"],
     contextWindow: 262144,
     maxTokens: 131072, input: ["text", "image"]
   },
   {
-    aliases: ["qwen/qwen3.5-9b"],
+    aliases: ["qwen/qwen3.5-9b", "qwen/qwen3.5-9b-20260310"],
     contextWindow: 262144,
     maxTokens: 81920, input: ["text", "image"]
   },
   {
-    aliases: ["openai/gpt-5.4-pro"],
+    aliases: ["openai/gpt-5.4-pro", "openai/gpt-5.4-pro-20260305"],
     contextWindow: 1050000,
     maxTokens: 128000, input: ["text", "image"]
   },
   {
-    aliases: ["openai/gpt-5.4"],
+    aliases: ["openai/gpt-5.4", "openai/gpt-5.4-20260305"],
     contextWindow: 1050000,
     maxTokens: 128000, input: ["text", "image"]
   },
   {
-    aliases: ["inception/mercury-2"],
+    aliases: ["inception/mercury-2", "inception/mercury-2-20260304"],
     contextWindow: 128000,
     maxTokens: 50000
   },
   {
-    aliases: ["openai/gpt-5.3-chat"],
+    aliases: ["openai/gpt-5.3-chat", "openai/gpt-5.3-chat-20260303"],
     contextWindow: 128000,
     maxTokens: 16384, input: ["text", "image"]
   },
   {
-    aliases: ["google/gemini-3.1-flash-lite-preview"],
+    aliases: ["google/gemini-3.1-flash-lite-preview", "google/gemini-3.1-flash-lite-preview-20260303"],
     contextWindow: 1048576,
     maxTokens: 65536, input: ["text", "image"]
   },
   {
-    aliases: ["bytedance-seed/seed-2.0-mini"],
+    aliases: ["bytedance-seed/seed-2.0-mini", "bytedance-seed/seed-2.0-mini-20260224"],
     contextWindow: 262144,
     maxTokens: 131072, input: ["text", "image"]
   },
   {
-    aliases: ["google/gemini-3.1-flash-image-preview"],
+    aliases: ["google/gemini-3.1-flash-image-preview", "google/gemini-3.1-flash-image-preview-20260226"],
     contextWindow: 65536,
     maxTokens: 65536, input: ["text", "image"]
   },
   {
-    aliases: ["qwen/qwen3.5-35b-a3b"],
+    aliases: ["qwen/qwen3.5-35b-a3b", "qwen/qwen3.5-35b-a3b-20260224"],
     contextWindow: 262144,
-    maxTokens: 81920, input: ["text", "image"]
+    maxTokens: 0, input: ["text", "image"]
   },
   {
-    aliases: ["qwen/qwen3.5-27b"],
-    contextWindow: 262144,
-    maxTokens: 65536, input: ["text", "image"]
-  },
-  {
-    aliases: ["qwen/qwen3.5-122b-a10b"],
+    aliases: ["qwen/qwen3.5-27b", "qwen/qwen3.5-27b-20260224"],
     contextWindow: 262144,
     maxTokens: 65536, input: ["text", "image"]
   },
   {
-    aliases: ["qwen/qwen3.5-flash-02-23"],
+    aliases: ["qwen/qwen3.5-122b-a10b", "qwen/qwen3.5-122b-a10b-20260224"],
+    contextWindow: 262144,
+    maxTokens: 262144, input: ["text", "image"]
+  },
+  {
+    aliases: ["qwen/qwen3.5-flash-02-23", "qwen/qwen3.5-flash-20260224"],
     contextWindow: 1000000,
     maxTokens: 65536, input: ["text", "image"]
   },
   {
-    aliases: ["liquid/lfm-2-24b-a2b"],
+    aliases: ["liquid/lfm-2-24b-a2b", "liquid/lfm-2-24b-a2b-20260224"],
     contextWindow: 32768,
     maxTokens: 0
   },
   {
-    aliases: ["google/gemini-3.1-pro-preview-customtools"],
+    aliases: ["google/gemini-3.1-pro-preview-customtools", "google/gemini-3.1-pro-preview-customtools-20260219"],
     contextWindow: 1048576,
     maxTokens: 65536, input: ["text", "image"]
   },
   {
-    aliases: ["openai/gpt-5.3-codex"],
+    aliases: ["openai/gpt-5.3-codex", "openai/gpt-5.3-codex-20260224"],
     contextWindow: 400000,
     maxTokens: 128000, input: ["text", "image"]
   },
   {
-    aliases: ["aion-labs/aion-2.0"],
+    aliases: ["aion-labs/aion-2.0", "aion-labs/aion-2.0-20260223"],
     contextWindow: 131072,
     maxTokens: 32768
   },
   {
-    aliases: ["google/gemini-3.1-pro-preview"],
+    aliases: ["google/gemini-3.1-pro-preview", "google/gemini-3.1-pro-preview-20260219"],
     contextWindow: 1048576,
     maxTokens: 65536, input: ["text", "image"]
   },
   {
-    aliases: ["anthropic/claude-sonnet-4.6"],
+    aliases: ["anthropic/claude-sonnet-4.6", "anthropic/claude-4.6-sonnet-20260217"],
     contextWindow: 1000000,
     maxTokens: 128000, input: ["text", "image"]
   },
   {
-    aliases: ["qwen/qwen3.5-plus-02-15"],
+    aliases: ["qwen/qwen3.5-plus-02-15", "qwen/qwen3.5-plus-20260216"],
     contextWindow: 1000000,
     maxTokens: 65536, input: ["text", "image"]
   },
   {
-    aliases: ["qwen/qwen3.5-397b-a17b"],
+    aliases: ["qwen/qwen3.5-397b-a17b", "qwen/qwen3.5-397b-a17b-20260216"],
     contextWindow: 262144,
     maxTokens: 65536, input: ["text", "image"]
   },
   {
-    aliases: ["minimax/minimax-m2.5:free"],
+    aliases: ["minimax/minimax-m2.5:free", "minimax/minimax-m2.5-20260211"],
     contextWindow: 196608,
     maxTokens: 8192
   },
   {
-    aliases: ["minimax/minimax-m2.5"],
+    aliases: ["minimax/minimax-m2.5", "minimax/minimax-m2.5-20260211"],
     contextWindow: 196608,
     maxTokens: 196608
   },
   {
-    aliases: ["z-ai/glm-5"],
+    aliases: ["z-ai/glm-5", "z-ai/glm-5-20260211"],
     contextWindow: 202752,
     maxTokens: 0
   },
   {
-    aliases: ["qwen/qwen3-max-thinking"],
+    aliases: ["qwen/qwen3-max-thinking", "qwen/qwen3-max-thinking-20260123"],
     contextWindow: 262144,
     maxTokens: 32768
   },
   {
-    aliases: ["anthropic/claude-opus-4.6"],
+    aliases: ["anthropic/claude-opus-4.6", "anthropic/claude-4.6-opus-20260205"],
     contextWindow: 1000000,
     maxTokens: 128000, input: ["text", "image"]
   },
   {
-    aliases: ["qwen/qwen3-coder-next"],
+    aliases: ["qwen/qwen3-coder-next", "qwen/qwen3-coder-next-2025-02-03"],
     contextWindow: 262144,
     maxTokens: 262144
   },
@@ -558,15 +584,10 @@ const RECENT_OPENROUTER_MODEL_SPECS: KnownModelSpecEntry[] = [
   {
     aliases: ["stepfun/step-3.5-flash"],
     contextWindow: 262144,
-    maxTokens: 65536
+    maxTokens: 16384
   },
   {
-    aliases: ["arcee-ai/trinity-large-preview"],
-    contextWindow: 131000,
-    maxTokens: 0
-  },
-  {
-    aliases: ["moonshotai/kimi-k2.5"],
+    aliases: ["moonshotai/kimi-k2.5", "moonshotai/kimi-k2.5-0127"],
     contextWindow: 262144,
     maxTokens: 262144, input: ["text", "image"]
   },
@@ -576,22 +597,22 @@ const RECENT_OPENROUTER_MODEL_SPECS: KnownModelSpecEntry[] = [
     maxTokens: 0
   },
   {
-    aliases: ["minimax/minimax-m2-her"],
+    aliases: ["minimax/minimax-m2-her", "minimax/minimax-m2-her-20260123"],
     contextWindow: 65536,
     maxTokens: 2048
   },
   {
-    aliases: ["writer/palmyra-x5"],
+    aliases: ["writer/palmyra-x5", "writer/palmyra-x5-20250428"],
     contextWindow: 1040000,
     maxTokens: 8192
   },
   {
-    aliases: ["liquid/lfm-2.5-1.2b-thinking:free"],
+    aliases: ["liquid/lfm-2.5-1.2b-thinking:free", "liquid/lfm-2.5-1.2b-thinking-20260120"],
     contextWindow: 32768,
     maxTokens: 0
   },
   {
-    aliases: ["liquid/lfm-2.5-1.2b-instruct:free"],
+    aliases: ["liquid/lfm-2.5-1.2b-instruct:free", "liquid/lfm-2.5-1.2b-instruct-20260120"],
     contextWindow: 32768,
     maxTokens: 0
   },
@@ -606,22 +627,22 @@ const RECENT_OPENROUTER_MODEL_SPECS: KnownModelSpecEntry[] = [
     maxTokens: 16384
   },
   {
-    aliases: ["z-ai/glm-4.7-flash"],
+    aliases: ["z-ai/glm-4.7-flash", "z-ai/glm-4.7-flash-20260119"],
     contextWindow: 202752,
     maxTokens: 16384
   },
   {
-    aliases: ["openai/gpt-5.2-codex"],
+    aliases: ["openai/gpt-5.2-codex", "openai/gpt-5.2-codex-20260114"],
     contextWindow: 400000,
     maxTokens: 128000, input: ["text", "image"]
   },
   {
-    aliases: ["bytedance-seed/seed-1.6-flash"],
+    aliases: ["bytedance-seed/seed-1.6-flash", "bytedance-seed/seed-1.6-flash-20250625"],
     contextWindow: 262144,
     maxTokens: 32768, input: ["text", "image"]
   },
   {
-    aliases: ["bytedance-seed/seed-1.6"],
+    aliases: ["bytedance-seed/seed-1.6", "bytedance-seed/seed-1.6-20250625"],
     contextWindow: 262144,
     maxTokens: 32768, input: ["text", "image"]
   },
@@ -631,22 +652,22 @@ const RECENT_OPENROUTER_MODEL_SPECS: KnownModelSpecEntry[] = [
     maxTokens: 196608
   },
   {
-    aliases: ["z-ai/glm-4.7"],
+    aliases: ["z-ai/glm-4.7", "z-ai/glm-4.7-20251222"],
     contextWindow: 202752,
     maxTokens: 131072
   },
   {
-    aliases: ["google/gemini-3-flash-preview"],
+    aliases: ["google/gemini-3-flash-preview", "google/gemini-3-flash-preview-20251217"],
     contextWindow: 1048576,
     maxTokens: 65536, input: ["text", "image"]
   },
   {
-    aliases: ["xiaomi/mimo-v2-flash"],
+    aliases: ["xiaomi/mimo-v2-flash", "xiaomi/mimo-v2-flash-20251210"],
     contextWindow: 262144,
     maxTokens: 65536
   },
   {
-    aliases: ["nvidia/nemotron-3-nano-30b-a3b:free"],
+    aliases: ["nvidia/nemotron-3-nano-30b-a3b:free", "nvidia/nemotron-3-nano-30b-a3b"],
     contextWindow: 256000,
     maxTokens: 0
   },
@@ -656,17 +677,17 @@ const RECENT_OPENROUTER_MODEL_SPECS: KnownModelSpecEntry[] = [
     maxTokens: 228000
   },
   {
-    aliases: ["openai/gpt-5.2-chat"],
+    aliases: ["openai/gpt-5.2-chat", "openai/gpt-5.2-chat-20251211"],
     contextWindow: 128000,
     maxTokens: 32000, input: ["text", "image"]
   },
   {
-    aliases: ["openai/gpt-5.2-pro"],
+    aliases: ["openai/gpt-5.2-pro", "openai/gpt-5.2-pro-20251211"],
     contextWindow: 400000,
     maxTokens: 128000, input: ["text", "image"]
   },
   {
-    aliases: ["openai/gpt-5.2"],
+    aliases: ["openai/gpt-5.2", "openai/gpt-5.2-20251211"],
     contextWindow: 400000,
     maxTokens: 128000, input: ["text", "image"]
   },
@@ -676,19 +697,19 @@ const RECENT_OPENROUTER_MODEL_SPECS: KnownModelSpecEntry[] = [
     maxTokens: 0
   },
   {
-    aliases: ["relace/relace-search"],
+    aliases: ["relace/relace-search", "relace/relace-search-20251208"],
     contextWindow: 256000,
     maxTokens: 128000
   },
   {
-    aliases: ["z-ai/glm-4.6v"],
+    aliases: ["z-ai/glm-4.6v", "z-ai/glm-4.6-20251208"],
     contextWindow: 131072,
     maxTokens: 24000, input: ["text", "image"]
   },
   {
     aliases: ["nex-agi/deepseek-v3.1-nex-n1"],
     contextWindow: 131072,
-    maxTokens: 131072
+    maxTokens: 163840
   },
   {
     aliases: ["essentialai/rnj-1-instruct"],
@@ -701,7 +722,7 @@ const RECENT_OPENROUTER_MODEL_SPECS: KnownModelSpecEntry[] = [
     maxTokens: 0
   },
   {
-    aliases: ["openai/gpt-5.1-codex-max"],
+    aliases: ["openai/gpt-5.1-codex-max", "openai/gpt-5.1-codex-max-20251204"],
     contextWindow: 400000,
     maxTokens: 128000, input: ["text", "image"]
   },
@@ -731,100 +752,25 @@ const RECENT_OPENROUTER_MODEL_SPECS: KnownModelSpecEntry[] = [
     maxTokens: 0, input: ["text", "image"]
   },
   {
-    aliases: ["arcee-ai/trinity-mini"],
+    aliases: ["arcee-ai/trinity-mini", "arcee-ai/trinity-mini-20251201"],
     contextWindow: 131072,
     maxTokens: 131072
   },
   {
-    aliases: ["deepseek/deepseek-v3.2-speciale"],
+    aliases: ["deepseek/deepseek-v3.2-speciale", "deepseek/deepseek-v3.2-speciale-20251201"],
     contextWindow: 163840,
     maxTokens: 163840
   },
   {
-    aliases: ["deepseek/deepseek-v3.2"],
+    aliases: ["deepseek/deepseek-v3.2", "deepseek/deepseek-v3.2-20251201"],
     contextWindow: 131072,
     maxTokens: 65536
   },
   {
-    aliases: ["prime-intellect/intellect-3"],
+    aliases: ["prime-intellect/intellect-3", "prime-intellect/intellect-3-20251126"],
     contextWindow: 131072,
     maxTokens: 131072
-  },
-  {
-    aliases: ["anthropic/claude-opus-4.5"],
-    contextWindow: 200000,
-    maxTokens: 64000, input: ["text", "image"]
-  },
-  {
-    aliases: ["allenai/olmo-3-32b-think"],
-    contextWindow: 65536,
-    maxTokens: 65536
-  },
-  {
-    aliases: ["google/gemini-3-pro-image-preview"],
-    contextWindow: 65536,
-    maxTokens: 32768, input: ["text", "image"]
-  },
-  {
-    aliases: ["x-ai/grok-4.1-fast"],
-    contextWindow: 2000000,
-    maxTokens: 30000, input: ["text", "image"]
-  },
-  {
-    aliases: ["deepcogito/cogito-v2.1-671b"],
-    contextWindow: 128000,
-    maxTokens: 0
-  },
-  {
-    aliases: ["openai/gpt-5.1"],
-    contextWindow: 400000,
-    maxTokens: 128000, input: ["text", "image"]
-  },
-  {
-    aliases: ["openai/gpt-5.1-chat"],
-    contextWindow: 128000,
-    maxTokens: 16384, input: ["text", "image"]
-  },
-  {
-    aliases: ["openai/gpt-5.1-codex"],
-    contextWindow: 400000,
-    maxTokens: 128000, input: ["text", "image"]
-  },
-  {
-    aliases: ["openai/gpt-5.1-codex-mini"],
-    contextWindow: 400000,
-    maxTokens: 128000, input: ["text", "image"]
-  },
-  {
-    aliases: ["moonshotai/kimi-k2-thinking"],
-    contextWindow: 262144,
-    maxTokens: 262144
-  },
-  {
-    aliases: ["amazon/nova-premier-v1"],
-    contextWindow: 1000000,
-    maxTokens: 32000, input: ["text", "image"]
-  },
-  {
-    aliases: ["perplexity/sonar-pro-search"],
-    contextWindow: 200000,
-    maxTokens: 8000, input: ["text", "image"]
-  },
-  {
-    aliases: ["mistralai/voxtral-small-24b-2507"],
-    contextWindow: 32000,
-    maxTokens: 0
-  },
-  {
-    aliases: ["openai/gpt-oss-safeguard-20b"],
-    contextWindow: 131072,
-    maxTokens: 65536
-  },
-  {
-    aliases: ["nvidia/nemotron-nano-12b-v2-vl:free"],
-    contextWindow: 128000,
-    maxTokens: 128000, input: ["text", "image"]
-  },
+  }
 ];
 
 /**
@@ -841,6 +787,8 @@ const KNOWN_FAMILY_MODEL_SPECS: Record<string, KnownModelSpecs> = {
   'llama3.3': { contextWindow: 131072, maxTokens: 4096 },
   'deepseek-r1': { contextWindow: 65536, maxTokens: 8192 },
   'deepseek-v3': { contextWindow: 65536, maxTokens: 8192 },
+  // Keep disabled while testing pi-ai's native deepseek-v4-flash/pro registry entries.
+  // 'deepseek-v4': { contextWindow: 1048576, maxTokens: 384000 },
   gemma2: { contextWindow: 8192, maxTokens: 4096 },
   gemma3: { contextWindow: 131072, maxTokens: 8192 },
   phi3: { contextWindow: 131072, maxTokens: 4096 },
@@ -893,9 +841,9 @@ function addModelLookupVariants(keys: Set<string>, value: string): void {
   }
 }
 
-function buildKnownModelSpecMap(): Map<string, KnownModelSpecs> {
+function buildKnownModelSpecMap(entries: KnownModelSpecEntry[]): Map<string, KnownModelSpecs> {
   const specsByKey = new Map<string, KnownModelSpecs>();
-  for (const entry of RECENT_OPENROUTER_MODEL_SPECS) {
+  for (const entry of entries) {
     for (const alias of entry.aliases) {
       const keys = new Set<string>();
       addModelLookupVariants(keys, alias);
@@ -911,13 +859,29 @@ function buildKnownModelSpecMap(): Map<string, KnownModelSpecs> {
   return specsByKey;
 }
 
-const KNOWN_MODEL_SPEC_MAP = buildKnownModelSpecMap();
+const BUILTIN_MODEL_SPEC_MAP = buildKnownModelSpecMap(RECENT_OPENROUTER_MODEL_SPECS);
+let runtimeOpenRouterModelSpecEntries: KnownModelSpecEntry[] = [];
+let runtimeOpenRouterModelSpecMap = new Map<string, KnownModelSpecs>();
+
+export function setRuntimeOpenRouterModelSpecs(entries: KnownModelSpecEntry[]): void {
+  runtimeOpenRouterModelSpecEntries = entries;
+  runtimeOpenRouterModelSpecMap = buildKnownModelSpecMap(entries);
+}
+
+export function clearRuntimeOpenRouterModelSpecsForTests(): void {
+  runtimeOpenRouterModelSpecEntries = [];
+  runtimeOpenRouterModelSpecMap = new Map<string, KnownModelSpecs>();
+}
+
+export function getRuntimeOpenRouterModelSpecCount(): number {
+  return runtimeOpenRouterModelSpecEntries.length;
+}
 
 function lookupModelSpecs(modelId: string): KnownModelSpecs | undefined {
   const exactKeys = new Set<string>();
   addModelLookupVariants(exactKeys, modelId);
   for (const key of exactKeys) {
-    const specs = KNOWN_MODEL_SPEC_MAP.get(key);
+    const specs = runtimeOpenRouterModelSpecMap.get(key) || BUILTIN_MODEL_SPEC_MAP.get(key);
     if (specs) return specs;
   }
 
@@ -1056,6 +1020,47 @@ function addLookupCandidate(
   candidates.push({ provider: normalizedProvider, model: normalizedModel });
 }
 
+function normalizedModelId(modelId: string | undefined): string {
+  return modelId?.trim() || '';
+}
+
+function isXiaomiMiMoModelId(modelId: string | undefined): boolean {
+  return /^mimo-v2(?:[.-]|$)/i.test(normalizedModelId(modelId));
+}
+
+function isQwenReasoningModelId(modelId: string | undefined): boolean {
+  return /^qwen3(?:\.\d+)?(?=[.:-]|$)/i.test(normalizedModelId(modelId));
+}
+
+function isKimiK2ModelId(modelId: string | undefined): boolean {
+  return /^kimi-k2(?:[.:-]|$)/i.test(normalizedModelId(modelId));
+}
+
+function isDeepSeekV4ModelId(modelId: string | undefined): boolean {
+  return /^deepseek-v4(?:[.:-]|$)/i.test(normalizedModelId(modelId));
+}
+
+function addNativeOpenAICompatibleLookupCandidates(
+  candidates: PiModelLookupCandidate[],
+  seen: Set<string>,
+  providerOrModelId: string | undefined,
+  modelId: string | undefined
+): void {
+  if (isXiaomiMiMoModelId(modelId) || isXiaomiMiMoModelId(providerOrModelId)) {
+    addLookupCandidate(candidates, seen, 'xiaomi', modelId);
+  }
+  if (isDeepSeekV4ModelId(modelId) || isDeepSeekV4ModelId(providerOrModelId)) {
+    addLookupCandidate(candidates, seen, 'deepseek', modelId);
+  }
+  if (isQwenReasoningModelId(modelId) || isQwenReasoningModelId(providerOrModelId)) {
+    addLookupCandidate(candidates, seen, 'opencode-go', modelId);
+  }
+  if (isKimiK2ModelId(modelId) || isKimiK2ModelId(providerOrModelId)) {
+    addLookupCandidate(candidates, seen, 'moonshotai', modelId);
+    addLookupCandidate(candidates, seen, 'moonshotai-cn', modelId);
+  }
+}
+
 export function buildPiModelLookupCandidates(
   modelString: string,
   options: Pick<PiModelLookupOptions, 'configProvider' | 'rawProvider'> = {}
@@ -1073,11 +1078,17 @@ export function buildPiModelLookupCandidates(
     const parsedModelId = parts.slice(1).join('/');
 
     if (rawProvider && rawProvider !== keyProvider && rawProvider !== parsedProvider) {
-      addLookupCandidate(candidates, seen, rawProvider, trimmedModel);
+      if (rawProvider === 'openrouter') {
+        addLookupCandidate(candidates, seen, rawProvider, trimmedModel);
+      } else {
+        addLookupCandidate(candidates, seen, rawProvider, parsedModelId);
+        addLookupCandidate(candidates, seen, rawProvider, trimmedModel);
+      }
     }
     if (keyProvider !== parsedProvider) {
       addLookupCandidate(candidates, seen, keyProvider, trimmedModel);
     }
+    addNativeOpenAICompatibleLookupCandidates(candidates, seen, parsedProvider, parsedModelId);
     addLookupCandidate(candidates, seen, parsedProvider, parsedModelId);
     for (const fallbackProvider of COMMON_FALLBACK_PROVIDERS) {
       addLookupCandidate(candidates, seen, fallbackProvider, parsedModelId);
@@ -1085,6 +1096,10 @@ export function buildPiModelLookupCandidates(
     return candidates;
   }
 
+  if (rawProvider && rawProvider !== keyProvider) {
+    addLookupCandidate(candidates, seen, rawProvider, trimmedModel);
+  }
+  addNativeOpenAICompatibleLookupCandidates(candidates, seen, trimmedModel, trimmedModel);
   addLookupCandidate(candidates, seen, keyProvider, trimmedModel);
   for (const fallbackProvider of COMMON_FALLBACK_PROVIDERS) {
     addLookupCandidate(candidates, seen, fallbackProvider, trimmedModel);
@@ -1139,26 +1154,51 @@ export function applyPiModelRuntimeOverrides(
     } as typeof nextModel;
   }
 
+  const endpoint = options.customBaseUrl?.trim() || nextModel.baseUrl?.trim() || '';
+  const isDeepSeekEndpoint = options.rawProvider === 'deepseek' || endpoint.includes('deepseek.com');
+  if (
+    ENABLE_DEEPSEEK_V4_SYNTHETIC_THINKING_COMPAT &&
+    isDeepSeekEndpoint &&
+    nextModel.api === 'openai-completions' &&
+    /deepseek-v4/i.test(nextModel.id)
+  ) {
+    nextModel = {
+      ...nextModel,
+      reasoning: true,
+      thinkingLevelMap: {
+        ...(nextModel.thinkingLevelMap || {}),
+        high: nextModel.thinkingLevelMap?.high ?? 'high',
+        xhigh: nextModel.thinkingLevelMap?.xhigh ?? 'max',
+      },
+      compat: {
+        ...(nextModel.compat || {}),
+        requiresReasoningContentOnAssistantMessages: true,
+        thinkingFormat: 'deepseek',
+      },
+    } as typeof nextModel;
+  }
+
   if (
     options.rawProvider === 'ollama' &&
     nextModel.reasoning &&
     nextModel.api === 'openai-completions'
   ) {
     const currentCompat = (nextModel.compat || {}) as Record<string, unknown>;
-    const currentReasoningEffortMap = (
-      currentCompat.reasoningEffortMap && typeof currentCompat.reasoningEffortMap === 'object'
-        ? currentCompat.reasoningEffortMap
+    const currentThinkingLevelMap = (
+      currentCompat.thinkingLevelMap && typeof currentCompat.thinkingLevelMap === 'object'
+        ? currentCompat.thinkingLevelMap
         : {}
-    ) as Record<string, string>;
+    ) as Record<string, string | null>;
     nextModel = {
       ...nextModel,
+      thinkingLevelMap: {
+        ...(nextModel.thinkingLevelMap || {}),
+        ...currentThinkingLevelMap,
+        off: 'none',
+      },
       compat: {
         ...currentCompat,
         supportsReasoningEffort: true,
-        reasoningEffortMap: {
-          ...currentReasoningEffortMap,
-          off: 'none',
-        },
       },
     } as typeof nextModel;
   }

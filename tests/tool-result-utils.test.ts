@@ -93,20 +93,20 @@ describe('tool result utils', () => {
   });
 
   it('limits oversized tool text before saving it for ui history', () => {
-    const hugeOutput = `HEAD-${'A'.repeat(30_000)}-TAIL`;
+    const hugeOutput = `HEAD-${'A'.repeat(120_000)}-TAIL`;
 
     const normalized = normalizeToolExecutionResultForUi({
       content: [{ type: 'text', text: hugeOutput }],
     });
 
-    expect(normalized.content.length).toBeLessThanOrEqual(20_000);
+    expect(normalized.content.length).toBeLessThanOrEqual(80_000);
     expect(normalized.content).toContain('HEAD-');
     expect(normalized.content).toContain('-TAIL');
     expect(normalized.content).toContain('[Tool output truncated: omitted');
   });
 
   it('limits MCP text before returning it to the model', () => {
-    const hugeOutput = `BEGIN\n${Array.from({ length: 900 }, (_, index) => `line-${index}`).join('\n')}\nEND`;
+    const hugeOutput = `BEGIN\n${Array.from({ length: 2500 }, (_, index) => `line-${index}`).join('\n')}\nEND`;
 
     const normalized = normalizeMcpToolResultForModel({
       content: [{ type: 'text', text: hugeOutput }],
@@ -115,14 +115,14 @@ describe('tool result utils', () => {
     expect(normalized.text).toContain('BEGIN');
     expect(normalized.text).toContain('END');
     expect(normalized.text).toContain('[Tool output truncated: omitted');
-    expect(normalized.text.split(/\r?\n/).length).toBeLessThanOrEqual(604);
+    expect(normalized.text.split(/\r?\n/).length).toBeLessThanOrEqual(2004);
   });
 
   it('limits structured tool execution results while preserving non-text payloads', () => {
     const base64Image = 'D'.repeat(1024);
     const result = limitToolExecutionResultForModel({
       content: [
-        { type: 'text', text: `HEAD-${'B'.repeat(30_000)}-TAIL` },
+        { type: 'text', text: `HEAD-${'B'.repeat(120_000)}-TAIL` },
         { type: 'image', data: base64Image, mimeType: 'image/png' },
       ],
       details: {
@@ -132,7 +132,7 @@ describe('tool result utils', () => {
 
     const textPart = result.content[0];
     expect(textPart.type).toBe('text');
-    expect(textPart.text.length).toBeLessThanOrEqual(20_000);
+    expect(textPart.text.length).toBeLessThanOrEqual(80_000);
     expect(textPart.text).toContain('[Tool output truncated: omitted');
     expect(result.content[1]).toEqual({ type: 'image', data: base64Image, mimeType: 'image/png' });
     expect(result.details.openCoworkImages[0].data).toBe(base64Image);

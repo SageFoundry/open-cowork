@@ -58,6 +58,7 @@ import { registerTasksHandlers } from './ipc/tasks-handlers';
 import { registerMemoryHandlers } from './ipc/memory-handlers';
 import { registerToolCompressionHandlers } from './ipc/tool-compression-handlers';
 import { BackgroundTaskService } from './background/background-task-service';
+import { initializeOpenRouterModelSpecsCache } from './config/openrouter-model-specs-cache';
 
 // Current working directory used for new sessions and relative path resolution.
 let currentWorkingDir: string | null = null;
@@ -799,6 +800,8 @@ app
     log('Working directory:', currentWorkingDir);
     // 远程会话默认使用全局工作目录
     remoteManager.setDefaultWorkingDirectory(currentWorkingDir || undefined);
+
+    await initializeOpenRouterModelSpecsCache();
 
     // Initialize database
     const db = initDatabase();

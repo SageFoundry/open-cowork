@@ -117,6 +117,21 @@ export interface TokenUsage {
   cacheHit?: boolean;
 }
 
+export type StreamActivityKind = 'text' | 'thinking' | 'tool_call';
+
+export interface StreamActivitySample {
+  at: number;
+  tokens: number;
+}
+
+export interface SessionStreamActivity {
+  startedAt: number;
+  updatedAt: number;
+  totalEstimatedTokens: number;
+  activeKind: StreamActivityKind;
+  samples: StreamActivitySample[];
+}
+
 export type MemoryStrategy = 'auto' | 'manual' | 'rolling';
 export type TokenWarningState = 'normal' | 'warning' | 'error' | 'blocking';
 export type CompactionType = 'micro' | 'full';
@@ -513,6 +528,10 @@ export type ServerEvent =
   | { type: 'stream.partial'; payload: { sessionId: string; delta: string } }
   | { type: 'stream.thinking'; payload: { sessionId: string; delta: string } }
   | {
+      type: 'stream.toolCallDelta';
+      payload: { sessionId: string; delta: string };
+    }
+  | {
       type: 'stream.executionTime';
       payload: { sessionId: string; messageId: string; executionTimeMs: number };
     }
@@ -719,6 +738,16 @@ export interface ProviderPresets {
 export interface ProviderModelInfo {
   id: string;
   name: string;
+}
+
+export interface OpenRouterModelSpecsStatus {
+  updatedAt?: string;
+  sourceUrl: string;
+  since?: string;
+  count: number;
+  imageCapable: number;
+  textOnly: number;
+  cachePath: string;
 }
 
 export interface ApiTestInput {

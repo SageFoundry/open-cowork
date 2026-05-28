@@ -11,6 +11,8 @@ import type {
   SandboxSyncStatus,
   SessionCompactionInfo,
   SessionCompactionState,
+  SessionStreamActivity,
+  StreamActivityKind,
   TokenBudgetSnapshot,
   BackgroundTask,
   ProviderPresets,
@@ -43,6 +45,33 @@ export interface SessionMessagePagination {
   loadingOlder: boolean;
 }
 
+function estimateStreamTokens(text: string): number {
+  if (!text) return 0;
+  const cjkMatches = text.match(/[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/g);
+  const cjkChars = cjkMatches?.length ?? 0;
+  const otherChars = Math.max(0, text.length - cjkChars);
+  return cjkChars * 0.75 + otherChars / 4;
+}
+
+export const STREAM_RATE_WINDOW_MS = 5000;
+
+export function getDisplayStreamRate(
+  activity: SessionStreamActivity | null | undefined,
+  now = Date.now()
+): number {
+  if (!activity || now - activity.updatedAt > STREAM_RATE_WINDOW_MS) {
+    return 0;
+  }
+  const samples = activity.samples.filter((sample) => now - sample.at <= STREAM_RATE_WINDOW_MS);
+  if (samples.length === 0) {
+    return 0;
+  }
+  const tokenCount = samples.reduce((sum, sample) => sum + sample.tokens, 0);
+  const firstSampleAt = samples[0]?.at ?? now;
+  const spanSeconds = Math.max(1, (now - firstSampleAt) / 1000);
+  return tokenCount / spanSeconds;
+}
+
 // Unified per-session state that replaces 8 parallel xxxBySession Maps
 export interface SessionState {
   messages: Message[];
@@ -58,6 +87,7 @@ export interface SessionState {
   latestCompaction: SessionCompactionInfo | null;
   compactionHistory: SessionCompactionInfo[];
   compactionState: SessionCompactionState | null;
+  streamActivity: SessionStreamActivity | null;
   planMode: boolean;
   inputDraft: string;
 }
@@ -81,6 +111,7 @@ const DEFAULT_SESSION_STATE: SessionState = {
   latestCompaction: null,
   compactionHistory: [],
   compactionState: null,
+  streamActivity: null,
   planMode: false,
   inputDraft: '',
 };
@@ -180,6 +211,8 @@ interface AppState {
   clearPartialMessage: (sessionId: string) => void;
   setPartialThinking: (sessionId: string, delta: string) => void;
   clearPartialThinking: (sessionId: string) => void;
+  recordStreamActivity: (sessionId: string, delta: string, kind: StreamActivityKind) => void;
+  finishStreamActivity: (sessionId: string) => void;
   activateNextTurn: (sessionId: string, stepId: string) => void;
   updateActiveTurnStep: (sessionId: string, stepId: string) => void;
   clearActiveTurn: (sessionId: string, stepId?: string) => void;
@@ -418,6 +451,7 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) => ({
       sessionStates: patchSession(state.sessionStates, sessionId, {
         executionClock: { startAt, endAt: null },
+        streamActivity: null,
       }),
     })),
 
@@ -500,6 +534,47 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) => ({
       sessionStates: patchSession(state.sessionStates, sessionId, { partialThinking: '' }),
     })),
+
+  recordStreamActivity: (sessionId, delta, kind) =>
+    set((state) => {
+      const tokenDelta = estimateStreamTokens(delta);
+      if (tokenDelta <= 0) return {};
+
+      const now = Date.now();
+      const ss = getSession(state.sessionStates, sessionId);
+      const current = ss.streamActivity;
+      const samples = [
+        ...(current?.samples ?? []),
+        { at: now, tokens: tokenDelta },
+      ].filter((sample) => now - sample.at <= STREAM_RATE_WINDOW_MS);
+
+      return {
+        sessionStates: patchSession(state.sessionStates, sessionId, {
+          streamActivity: {
+            startedAt: current?.startedAt ?? now,
+            updatedAt: now,
+            totalEstimatedTokens: (current?.totalEstimatedTokens ?? 0) + tokenDelta,
+            activeKind: kind,
+            samples,
+          },
+        }),
+      };
+    }),
+
+  finishStreamActivity: (sessionId) =>
+    set((state) => {
+      const ss = getSession(state.sessionStates, sessionId);
+      if (!ss.streamActivity) return {};
+      return {
+        sessionStates: patchSession(state.sessionStates, sessionId, {
+          streamActivity: {
+            ...ss.streamActivity,
+            updatedAt: Date.now(),
+            samples: [],
+          },
+        }),
+      };
+    }),
 
   activateNextTurn: (sessionId, stepId) =>
     set((state) => {

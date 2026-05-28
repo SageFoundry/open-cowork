@@ -39,6 +39,8 @@ export function SettingsAPI() {
     error,
     successMessage,
     isRefreshingModels,
+    isRefreshingOpenRouterSpecs,
+    openRouterSpecsStatus,
     isDiscoveringLocalOllama,
     enableThinking,
     isOllamaMode,
@@ -75,6 +77,7 @@ export function SettingsAPI() {
     deleteConfigSet,
     handleSave,
     refreshModelOptions,
+    refreshOpenRouterSpecs,
     discoverLocalOllama,
     diagnosticResult,
     isDiagnosing,
@@ -269,6 +272,25 @@ export function SettingsAPI() {
             {t('api.model')}
           </label>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                void refreshOpenRouterSpecs();
+              }}
+              disabled={isRefreshingOpenRouterSpecs}
+              className="flex items-center gap-1 text-xs px-2 py-1 rounded-md transition-colors active:scale-95 bg-surface-hover text-text-secondary hover:bg-surface-active disabled:opacity-50"
+              title={t(
+                'api.refreshOpenRouterSpecsHint',
+                '从 OpenRouter 更新上下文窗口和多模态支持信息'
+              )}
+            >
+              <RefreshCw
+                className={`w-3 h-3 ${isRefreshingOpenRouterSpecs ? 'animate-spin' : ''}`}
+              />
+              {isRefreshingOpenRouterSpecs
+                ? t('api.refreshingOpenRouterSpecs', '更新中')
+                : t('api.refreshOpenRouterSpecs', '更新规格')}
+            </button>
             {isOllamaMode && (
               <button
                 type="button"
@@ -368,6 +390,19 @@ export function SettingsAPI() {
           </button>
         </div>
         <p className="text-xs text-text-muted">{t('api.addCustomModelHint')}</p>
+        {openRouterSpecsStatus && (
+          <p className="text-xs text-text-muted">
+            {t('api.openRouterSpecsStatus', {
+              count: openRouterSpecsStatus.count,
+              image: openRouterSpecsStatus.imageCapable,
+              updatedAt: openRouterSpecsStatus.updatedAt
+                ? new Date(openRouterSpecsStatus.updatedAt).toLocaleString()
+                : t('api.openRouterSpecsBuiltIn', '内置'),
+              defaultValue:
+                '模型规格缓存：{{count}} 个模型，{{image}} 个支持多模态，更新时间 {{updatedAt}}',
+            })}
+          </p>
+        )}
 
         {/* Context Window & Max Tokens — only for non-registry providers */}
         {(provider === 'ollama' || provider === 'custom') && (

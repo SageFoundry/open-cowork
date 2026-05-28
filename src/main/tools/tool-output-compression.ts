@@ -522,6 +522,13 @@ function compressPlainText(
     };
   }
 
+  if (info.family === 'read_full') {
+    return {
+      text,
+      event: buildEvent(info, context.toolName, context.level, text, text, false, 'semantic_sensitive'),
+    };
+  }
+
   if (text.length < MIN_CHARS[context.level]) {
     return {
       text,

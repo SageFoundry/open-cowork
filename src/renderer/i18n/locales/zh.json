@@ -672,7 +672,19 @@
     "thinkingOff": "关闭",
     "plan": "计划",
     "planModeActive": "当前处于计划模式（只读）",
-    "planModeOff": "切换到计划模式"
+    "planModeOff": "切换到计划模式",
+    "running": "运行中",
+    "outputActive": "输出中",
+    "waitingOutput": "等待输出",
+    "waitingTool": "等待工具完成",
+    "tokenRate": "近5秒 ≈ {{rate}} tok/s",
+    "streamReceived": "已接收 ≈ {{tokens}} tokens",
+    "toolArgsGenerating": "生成 {{tool}} 参数 {{file}}",
+    "toolRunning": "执行 {{tool}} {{file}}",
+    "tool": "工具",
+    "streamText": "回复",
+    "streamThinking": "思考",
+    "streamToolCall": "工具参数"
   },
   "context": {
     "progress": "进度",

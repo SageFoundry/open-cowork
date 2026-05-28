@@ -7,6 +7,7 @@ import type {
   ApiTestResult,
   CustomProtocolType,
   DiagnosticResult,
+  OpenRouterModelSpecsStatus,
   ProviderModelInfo,
   ProviderPreset,
   ProviderProfile,
@@ -593,6 +594,8 @@ interface ApiConfigState {
   isSaving: boolean;
   isTesting: boolean;
   isRefreshingModels: boolean;
+  isRefreshingOpenRouterSpecs: boolean;
+  openRouterSpecsStatus: OpenRouterModelSpecsStatus | null;
   isDiscoveringLocalOllama: boolean;
   isMutatingConfigSet: boolean;
   isDiagnosing: boolean;
@@ -658,6 +661,8 @@ type ApiConfigAction =
   | { type: 'SET_IS_SAVING'; payload: boolean }
   | { type: 'SET_IS_TESTING'; payload: boolean }
   | { type: 'SET_IS_REFRESHING_MODELS'; payload: boolean }
+  | { type: 'SET_IS_REFRESHING_OPENROUTER_SPECS'; payload: boolean }
+  | { type: 'SET_OPENROUTER_SPECS_STATUS'; payload: OpenRouterModelSpecsStatus | null }
   | { type: 'SET_IS_DISCOVERING_LOCAL_OLLAMA'; payload: boolean }
   | { type: 'SET_IS_MUTATING_CONFIG_SET'; payload: boolean }
   | { type: 'SET_IS_DIAGNOSING'; payload: boolean }
@@ -768,6 +773,12 @@ function apiConfigReducer(state: ApiConfigState, action: ApiConfigAction): ApiCo
     case 'SET_IS_REFRESHING_MODELS':
       return { ...state, isRefreshingModels: action.payload };
 
+    case 'SET_IS_REFRESHING_OPENROUTER_SPECS':
+      return { ...state, isRefreshingOpenRouterSpecs: action.payload };
+
+    case 'SET_OPENROUTER_SPECS_STATUS':
+      return { ...state, openRouterSpecsStatus: action.payload };
+
     case 'SET_IS_DISCOVERING_LOCAL_OLLAMA':
       return { ...state, isDiscoveringLocalOllama: action.payload };
 
@@ -852,6 +863,8 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
     isSaving: false,
     isTesting: false,
     isRefreshingModels: false,
+    isRefreshingOpenRouterSpecs: false,
+    openRouterSpecsStatus: null,
     isDiscoveringLocalOllama: false,
     errorText: '',
     errorKey: null,
@@ -882,6 +895,8 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
     isSaving,
     isTesting,
     isRefreshingModels,
+    isRefreshingOpenRouterSpecs,
+    openRouterSpecsStatus,
     isDiscoveringLocalOllama,
     errorText,
     errorKey,
@@ -1308,6 +1323,18 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
           return;
         }
         applyLoadedState(config, loadedPresets);
+        if (isElectron) {
+          window.electronAPI.config
+            .getOpenRouterSpecsStatus()
+            .then((status) => {
+              if (!cancelled) {
+                dispatch({ type: 'SET_OPENROUTER_SPECS_STATUS', payload: status });
+              }
+            })
+            .catch((statusError) => {
+              console.warn('Failed to load OpenRouter model specs status:', statusError);
+            });
+        }
       } catch (loadError) {
         if (!cancelled) {
           console.error('Failed to load API config:', loadError);
@@ -1566,6 +1593,35 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
     showErrorKey,
     showErrorText,
   ]);
+
+  const refreshOpenRouterSpecs = useCallback(async () => {
+    if (!isElectron) {
+      return null;
+    }
+    dispatch({ type: 'SET_IS_REFRESHING_OPENROUTER_SPECS', payload: true });
+    clearError();
+    try {
+      const status = await window.electronAPI.config.refreshOpenRouterSpecs();
+      dispatch({ type: 'SET_OPENROUTER_SPECS_STATUS', payload: status });
+      showSuccessText(
+        t('api.openRouterSpecsRefreshSuccess', {
+          count: status.count,
+          image: status.imageCapable,
+          defaultValue: `已更新 ${status.count} 个模型规格，其中 ${status.imageCapable} 个支持多模态`,
+        })
+      );
+      return status;
+    } catch (refreshError) {
+      if (refreshError instanceof Error) {
+        showErrorText(refreshError.message);
+      } else {
+        showErrorText(t('api.openRouterSpecsRefreshFailed', '更新 OpenRouter 模型规格失败'));
+      }
+      return null;
+    } finally {
+      dispatch({ type: 'SET_IS_REFRESHING_OPENROUTER_SPECS', payload: false });
+    }
+  }, [clearError, showErrorText, showSuccessText, t]);
 
   const applyDiscoveredOllamaState = useCallback(
     (
@@ -2062,6 +2118,8 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
     isSaving,
     isTesting,
     isRefreshingModels,
+    isRefreshingOpenRouterSpecs,
+    openRouterSpecsStatus,
     isDiscoveringLocalOllama,
     error,
     successMessage,
@@ -2111,6 +2169,7 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
     handleSave,
     handleTest,
     refreshModelOptions,
+    refreshOpenRouterSpecs,
     discoverLocalOllama,
     setError: showErrorText,
     setSuccessMessage: showSuccessText,

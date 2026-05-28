@@ -43,6 +43,50 @@ describe('tool output recall', () => {
     expect(recalled.text).toContain('abcde');
   });
 
+  it('returns explicit next-page instructions for long range recalls', () => {
+    const db = makeDb();
+    const handle = createToolOutputSnapshot(db, {
+      sessionId: 'session-1',
+      projectPath: 'E:/workspace/project',
+      toolName: 'bash',
+      reason: 'truncated',
+      content: 'A'.repeat(120_000),
+    });
+
+    const recalled = recallToolOutput(db, {
+      handle: handle!,
+      maxChars: 100_000,
+    });
+
+    expect(recalled.found).toBe(true);
+    expect(recalled.text).toContain('"start":100000');
+    expect(recalled.text).toContain('"maxChars":100000');
+  });
+
+  it('recalls saved output by line range', () => {
+    const db = makeDb();
+    const handle = createToolOutputSnapshot(db, {
+      sessionId: 'session-1',
+      projectPath: null,
+      toolName: 'read',
+      reason: 'truncated',
+      content: ['line-1', 'line-2', 'line-3', 'line-4'].join('\n'),
+    });
+
+    const recalled = recallToolOutput(db, {
+      handle: handle!,
+      startLine: 2,
+      endLine: 3,
+    });
+
+    expect(recalled.found).toBe(true);
+    expect(recalled.text).toContain('lines 2-3 of 4');
+    expect(recalled.text).toContain('line-2');
+    expect(recalled.text).toContain('line-3');
+    expect(recalled.text).not.toContain('line-1');
+    expect(recalled.text).not.toContain('line-4');
+  });
+
   it('recalls matching excerpts by keyword', () => {
     const db = makeDb();
     const handle = createToolOutputSnapshot(db, {
@@ -73,5 +117,7 @@ describe('tool output recall', () => {
 
     expect(notice).toContain('tool-output://abc');
     expect(notice).toContain('recall_tool_output');
+    expect(notice).toContain('"start":2000');
+    expect(notice).toContain('startLine/endLine');
   });
 });

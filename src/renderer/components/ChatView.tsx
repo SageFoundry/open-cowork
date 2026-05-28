@@ -8,15 +8,29 @@ import {
   useActiveTurn,
   usePendingTurns,
   useActiveExecutionClock,
+  useActiveTraceSteps,
   useAppConfig,
 } from '../store/selectors';
-import { useAppStore } from '../store';
+import { getDisplayStreamRate, useAppStore } from '../store';
 import { useIPC } from '../hooks/useIPC';
 import { groupMessagesByTurn } from '../utils/conversation-turns';
 import { AssistantTurnGroup } from './AssistantTurnGroup';
 import { MessageCard } from './MessageCard';
 import type { Message, ContentBlock } from '../types';
-import { Send, Square, Plus, Loader2, Plug, X, Clock, ChevronUp, Settings, Brain, ClipboardList } from 'lucide-react';
+import {
+  Send,
+  Square,
+  Plus,
+  Loader2,
+  Plug,
+  X,
+  Clock,
+  ChevronUp,
+  Settings,
+  Brain,
+  ClipboardList,
+  Activity,
+} from 'lucide-react';
 import { API_PROVIDER_PRESETS } from '../../shared/api-model-presets';
 
 const CHAT_INPUT_MIN_ROWS = 2;
@@ -47,6 +61,7 @@ export function ChatView() {
   const activeTurn = useActiveTurn();
   const pendingTurns = usePendingTurns();
   const executionClock = useActiveExecutionClock();
+  const traceSteps = useActiveTraceSteps();
   const appConfig = useAppConfig();
   const configSets = useMemo(() => {
     if (!appConfig) return [];
@@ -129,6 +144,9 @@ export function ChatView() {
   );
   const tokenBudget = useAppStore((s) =>
     activeSessionId ? s.sessionStates[activeSessionId]?.tokenBudget ?? null : null
+  );
+  const streamActivity = useAppStore((s) =>
+    activeSessionId ? s.sessionStates[activeSessionId]?.streamActivity ?? null : null
   );
   const { continueSession, stopSession, getSessionMessages, isElectron } = useIPC();
 
@@ -427,6 +445,62 @@ export function ChatView() {
       ? 0
       : Math.max(0, (executionClock.endAt ?? clockNow) - executionClock.startAt);
   const timerActive = Boolean(executionClock?.startAt && executionClock.endAt === null);
+  const streamRate = getDisplayStreamRate(streamActivity, clockNow);
+  const streamTokenTotal = Math.round(streamActivity?.totalEstimatedTokens ?? 0);
+  const streamRecentlyActive = streamRate > 0;
+  const streamKindLabel =
+    streamActivity?.activeKind === 'thinking'
+      ? t('chat.streamThinking')
+      : streamActivity?.activeKind === 'tool_call'
+        ? t('chat.streamToolCall')
+        : t('chat.streamText');
+  const runningToolStep = useMemo(() => {
+    for (let index = traceSteps.length - 1; index >= 0; index -= 1) {
+      const step = traceSteps[index];
+      if (step.type === 'tool_call' && step.status === 'running') {
+        return step;
+      }
+    }
+    return null;
+  }, [traceSteps]);
+  const runningToolInput = runningToolStep?.toolInput ?? {};
+  const runningToolTarget =
+    typeof runningToolInput.path === 'string'
+      ? runningToolInput.path
+      : typeof runningToolInput.file_path === 'string'
+        ? runningToolInput.file_path
+        : typeof runningToolInput.filePath === 'string'
+          ? runningToolInput.filePath
+          : '';
+  const runningToolName = runningToolStep?.toolName || runningToolStep?.title || t('chat.tool');
+  const isGeneratingToolArgs = runningToolStep?.content === 'generating_tool_args';
+  const isExecutingTool = runningToolStep?.content === 'executing_tool';
+  const displayStreamRate = isExecutingTool ? 0 : streamRate;
+  const streamIsVisible = !isExecutingTool && streamRecentlyActive;
+  const activityLabel = streamIsVisible
+    ? t('chat.outputActive')
+    : runningToolStep
+      ? isGeneratingToolArgs
+        ? t('chat.toolArgsGenerating', {
+            tool: runningToolName,
+            file: runningToolTarget,
+          })
+        : t('chat.toolRunning', {
+            tool: runningToolName,
+            file: runningToolTarget,
+          })
+      : t('chat.running');
+  const idleDetailLabel = runningToolStep ? t('chat.waitingTool') : t('chat.waitingOutput');
+
+  const formatTokenRate = useCallback((tokensPerSecond: number): string => {
+    if (tokensPerSecond >= 100) return Math.round(tokensPerSecond).toString();
+    if (tokensPerSecond >= 10) return tokensPerSecond.toFixed(1);
+    return tokensPerSecond.toFixed(2);
+  }, []);
+
+  const formatTokenCount = useCallback((tokens: number): string => {
+    return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(tokens);
+  }, []);
 
   // Debounced scroll function to prevent scroll conflicts
   const scrollToBottom = useRef((behavior: ScrollBehavior = 'auto', immediate: boolean = false) => {
@@ -1100,6 +1174,44 @@ export function ChatView() {
       {/* Input */}
       <div className="border-t border-border-muted bg-background/92 backdrop-blur-md">
         <div className="max-w-[920px] mx-auto px-5 lg:px-8 py-5">
+          {canStop && (
+            <div className="mb-2 flex items-center justify-between gap-2 px-1">
+              <div className="inline-flex min-w-0 items-center gap-2 rounded-full border border-border-subtle bg-background/75 px-3 py-1.5 text-[11px] text-text-muted shadow-sm">
+                <span className="relative flex h-2 w-2 flex-shrink-0">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-40" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-accent" />
+                </span>
+                <Activity className="h-3.5 w-3.5 flex-shrink-0 text-accent" />
+                <span className="max-w-[14rem] truncate font-medium text-text-secondary">
+                  {activityLabel}
+                </span>
+                <span className="hidden h-3 w-px bg-border-subtle sm:block" />
+                <span className="truncate">
+                  {t('chat.tokenRate', { rate: formatTokenRate(displayStreamRate) })}
+                </span>
+                {!streamIsVisible && (
+                  <>
+                    <span className="hidden h-3 w-px bg-border-subtle md:block" />
+                    <span className="hidden md:inline">{idleDetailLabel}</span>
+                  </>
+                )}
+                {streamTokenTotal > 0 && (
+                  <>
+                    <span className="hidden h-3 w-px bg-border-subtle sm:block" />
+                    <span className="hidden sm:inline">
+                      {t('chat.streamReceived', { tokens: formatTokenCount(streamTokenTotal) })}
+                    </span>
+                  </>
+                )}
+                {streamIsVisible && (
+                  <>
+                    <span className="hidden h-3 w-px bg-border-subtle md:block" />
+                    <span className="hidden md:inline">{streamKindLabel}</span>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
           <form
             onSubmit={handleSubmit}
             onDragOver={handleDragOver}

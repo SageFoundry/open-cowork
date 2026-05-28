@@ -135,6 +135,7 @@ export function useIPC() {
             });
             if (event.payload.status !== 'running') {
               store.finishExecutionClock(event.payload.sessionId);
+              store.finishStreamActivity(event.payload.sessionId);
               store.setLoading(false);
               store.clearActiveTurn(event.payload.sessionId);
               store.clearPendingTurns(event.payload.sessionId);
@@ -161,11 +162,17 @@ export function useIPC() {
             break;
 
           case 'stream.partial':
+            store.recordStreamActivity(event.payload.sessionId, event.payload.delta, 'text');
             bufferPartial(event.payload.sessionId, event.payload.delta);
             break;
 
           case 'stream.thinking':
+            store.recordStreamActivity(event.payload.sessionId, event.payload.delta, 'thinking');
             bufferThinking(event.payload.sessionId, event.payload.delta);
+            break;
+
+          case 'stream.toolCallDelta':
+            store.recordStreamActivity(event.payload.sessionId, event.payload.delta, 'tool_call');
             break;
 
           case 'trace.step': {

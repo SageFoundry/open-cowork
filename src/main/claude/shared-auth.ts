@@ -1,4 +1,4 @@
-import { AuthStorage, ModelRegistry } from '@mariozechner/pi-coding-agent';
+import { AuthStorage, ModelRegistry } from '@earendil-works/pi-coding-agent';
 
 // Singleton — safe because Electron main process is single-threaded.
 // AuthStorage.create() is synchronous, so no async race possible.
