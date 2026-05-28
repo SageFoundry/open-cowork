@@ -1558,6 +1558,46 @@ ${hints.join('\n')}
       return [];
     }
 
+    const isActiveBackgroundTask = (status: string): boolean =>
+      status === 'queued' || status === 'starting' || status === 'running' || status === 'stopping';
+
+    const filterTasksForScope = (
+      scope: 'current_session' | 'current_project' | 'all' | undefined,
+      includeCompleted: boolean | undefined
+    ) => {
+      const selectedScope = scope || 'current_session';
+      return this.backgroundTaskService!
+        .listTasks()
+        .filter((task) => {
+          if (!includeCompleted && !isActiveBackgroundTask(task.status)) {
+            return false;
+          }
+          if (selectedScope === 'all') {
+            return true;
+          }
+          if (selectedScope === 'current_project') {
+            return path.resolve(task.cwd) === path.resolve(effectiveCwd);
+          }
+          return task.sourceSessionId === sessionId;
+        })
+        .sort((a, b) => b.updatedAt - a.updatedAt);
+    };
+
+    const formatTaskForModel = (task: ReturnType<BackgroundTaskService['listTasks']>[number]) =>
+      [
+        `- id: ${task.id}`,
+        `  title: ${task.title}`,
+        `  status: ${task.status}`,
+        `  pid: ${task.pid ?? 'unknown'}`,
+        `  cwd: ${task.cwd}`,
+        `  command: ${task.command}`,
+        task.detectedUrl ? `  detectedUrl: ${task.detectedUrl}` : null,
+        `  logPath: ${task.logPath}`,
+        task.sourceSessionId ? `  sourceSessionId: ${task.sourceSessionId}` : null,
+      ]
+        .filter(Boolean)
+        .join('\n');
+
     return [
       {
         name: 'execute_background_command',
@@ -1645,6 +1685,127 @@ ${hints.join('\n')}
 
           return {
             content: [{ type: 'text' as const, text: lines.join('\n') }],
+            details: undefined as unknown,
+          };
+        },
+      } as ToolDefinition<TSchema, unknown>,
+      {
+        name: 'list_background_tasks',
+        label: 'List Background Tasks',
+        description:
+          'List background processes managed by Open Cowork. Use this before starting a duplicate dev server, checking whether a service is already running, or deciding what to stop. Defaults to tasks started by the current conversation session.',
+        parameters: Type.Object({
+          scope: Type.Optional(
+            Type.String({
+              description:
+                'Filter scope: current_session, current_project, or all. Defaults to current_session.',
+            })
+          ),
+          includeCompleted: Type.Optional(
+            Type.Boolean({
+              description: 'Include completed/failed/lost tasks. Defaults to false.',
+            })
+          ),
+        }),
+        execute: async (
+          _toolCallId,
+          params: { scope?: 'current_session' | 'current_project' | 'all'; includeCompleted?: boolean }
+        ) => {
+          const tasks = filterTasksForScope(params.scope, params.includeCompleted);
+          const scope = params.scope || 'current_session';
+          const header = `Background tasks (${scope}, includeCompleted=${Boolean(params.includeCompleted)}): ${tasks.length}`;
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text:
+                  tasks.length > 0
+                    ? `${header}\n\n${tasks.map(formatTaskForModel).join('\n\n')}`
+                    : `${header}\nNo matching Open Cowork-managed background tasks.`,
+              },
+            ],
+            details: undefined as unknown,
+          };
+        },
+      } as ToolDefinition<TSchema, unknown>,
+      {
+        name: 'read_background_task_log',
+        label: 'Read Background Task Log',
+        description:
+          'Read the tail of an Open Cowork-managed background task log. Use this to inspect dev server output, errors, URLs, or readiness messages without manually reading log files.',
+        parameters: Type.Object({
+          taskId: Type.String({
+            description: 'Background task id from list_background_tasks or execute_background_command.',
+          }),
+          maxChars: Type.Optional(
+            Type.Number({
+              description: 'Maximum characters from the log tail. Defaults to 12000, capped by the app.',
+            })
+          ),
+        }),
+        execute: async (_toolCallId, params: { taskId: string; maxChars?: number }) => {
+          const task = this.backgroundTaskService!.getTask(params.taskId);
+          if (!task) {
+            return {
+              content: [{ type: 'text' as const, text: `No background task found: ${params.taskId}` }],
+              details: undefined as unknown,
+            };
+          }
+          const maxChars = Math.max(1000, Math.min(50_000, Math.floor(params.maxChars ?? 12_000)));
+          const tail = this.backgroundTaskService!.getLogTail(params.taskId, maxChars);
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: [
+                  `Background task log: ${task.title}`,
+                  `id: ${task.id}`,
+                  `status: ${task.status}`,
+                  `pid: ${task.pid ?? 'unknown'}`,
+                  `logPath: ${task.logPath}`,
+                  '',
+                  tail || '(log is empty)',
+                ].join('\n'),
+              },
+            ],
+            details: undefined as unknown,
+          };
+        },
+      } as ToolDefinition<TSchema, unknown>,
+      {
+        name: 'stop_background_task',
+        label: 'Stop Background Task',
+        description:
+          'Stop an Open Cowork-managed background task by id. Use this instead of manually killing pids whenever the task was started through execute_background_command or captured by the background command guard.',
+        parameters: Type.Object({
+          taskId: Type.String({
+            description: 'Background task id from list_background_tasks or execute_background_command.',
+          }),
+        }),
+        execute: async (_toolCallId, params: { taskId: string }) => {
+          const existing = this.backgroundTaskService!.getTask(params.taskId);
+          if (!existing) {
+            return {
+              content: [{ type: 'text' as const, text: `No background task found: ${params.taskId}` }],
+              details: undefined as unknown,
+            };
+          }
+          const stopped = await this.backgroundTaskService!.stopTask(params.taskId);
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: stopped
+                  ? [
+                      `Background task stopped: ${stopped.title}`,
+                      `id: ${stopped.id}`,
+                      `status: ${stopped.status}`,
+                      `pid: ${stopped.pid ?? 'unknown'}`,
+                      `logPath: ${stopped.logPath}`,
+                    ].join('\n')
+                  : `No background task found: ${params.taskId}`,
+              },
+            ],
             details: undefined as unknown,
           };
         },

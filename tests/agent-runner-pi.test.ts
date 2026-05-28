@@ -155,11 +155,24 @@ describe('ClaudeAgentRunner pi-coding-agent integration', () => {
   it('provides an explicit background command tool with readiness waiting', () => {
     expect(agentRunnerContent).toContain("name: 'execute_background_command'");
     expect(agentRunnerContent).toContain('waitForPort');
+    expect(agentRunnerContent).toContain("name: 'list_background_tasks'");
+    expect(agentRunnerContent).toContain("name: 'read_background_task_log'");
+    expect(agentRunnerContent).toContain("name: 'stop_background_task'");
+    expect(agentRunnerContent).toContain('filterTasksForScope');
     expect(agentRunnerContent).toContain('waitTimeoutMs');
     expect(agentRunnerContent).toContain('timed out waiting for port');
     expect(agentRunnerContent).toContain(
       'port ${typedParams.waitForPort} is accepting connections'
     );
+  });
+
+  it('teaches the model to manage Open Cowork background resources through tools', () => {
+    const promptContractPath = path.resolve(process.cwd(), 'src/main/claude/prompt-contract.ts');
+    const promptContractContent = readFileSync(promptContractPath, 'utf8');
+    expect(promptContractContent).toContain('list_background_tasks');
+    expect(promptContractContent).toContain('read_background_task_log');
+    expect(promptContractContent).toContain('stop_background_task');
+    expect(promptContractContent).toContain('Prefer these tools over manually finding or killing pids');
   });
 
   it('blocks background shell syntax in the normal bash tool', () => {

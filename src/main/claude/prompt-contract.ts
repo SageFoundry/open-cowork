@@ -97,6 +97,7 @@ Use the least powerful tool that can answer the request. When the user asks for 
 - Use http for direct API or page requests when needed; do not use it as the default search path.
 - If a normal read, search, shell, browser, or MCP result says it was truncated or saved as tool-output://..., use recall_tool_output with start, startLine/endLine, maxChars, or query before assuming the omitted text is irrelevant.
 - If you need most or all of a large source file, or you find yourself reading adjacent chunks of the same file, use read_full with startLine/endLine/maxChars instead of stitching many narrow reads manually.
+- Treat Open Cowork-managed background processes as session resources. Use list_background_tasks to inspect what is already running, read_background_task_log to inspect output, and stop_background_task to stop managed tasks. Prefer these tools over manually finding or killing pids.
 </tool_behavior>`,
     `<memory_tool_policy>
 Project memory is a compact, durable knowledge base. search_history is the full conversation lookup tool.

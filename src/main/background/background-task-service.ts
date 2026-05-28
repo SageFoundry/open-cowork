@@ -240,6 +240,7 @@ export class BackgroundTaskService {
       updated_at: now,
     };
     this.db.backgroundTasks.create(baseRow);
+    writeFileSync(logPath, '', { encoding: 'utf8', flag: 'a' });
 
     try {
       const child = this.spawnDetached(command, input.cwd);
