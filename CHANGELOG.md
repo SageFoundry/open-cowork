@@ -5,16 +5,76 @@ All notable changes to the Open Cowork AI agent desktop app will be documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.5.6] - 2026-05-27
+## [3.5.6] - 2026-05-28
 
-### Added
+### 🚀 重大更新
 
-- **后台任务管理工具**：新增 3 个 AI 可调用工具 `list_background_tasks`、`read_background_task_log`、`stop_background_task`，让 Agent 能直接管理后台进程，无需手动 shell 操作
-- **日志文件保证创建**：后台任务启动时确保日志文件存在
+#### Pi SDK 升级 & 包迁移
+- **Pi Coding Agent SDK**：`@mariozechner/pi-ai@0.60` / `@mariozechner/pi-coding-agent@0.60` → **`@earendil-works/pi-ai@0.75.5` / `@earendil-works/pi-coding-agent@0.75.5`**
+- **TypeBox 迁移**：`@sinclair/typebox` → `typebox@1.1.38`
+- 新增 runtime 依赖 `typebox`
+- Node.js 最低版本要求提升至 `>=22.19.0`
 
-### Changed
+#### 新工具（AI Agent 可用）
+- **`read_full` 工具**：带路径安全检查的大文件分页读取（支持 startLine/endLine/maxChars），压缩策略跳过（semantic_sensitive）
+- **`list_background_tasks` 工具**：列出后台任务，支持 scope 过滤（`current_session` / `current_project` / `all`）和 `includeCompleted` 标志
+- **`read_background_task_log` 工具**：按 taskId 读取后台任务日志尾部（默认 12000 字符）
+- **`stop_background_task` 工具**：按 taskId 停止后台任务
+- **AnySearch Extract 工具**：`anySearchExtractTool` 现正式注册到工具列表
 
-- **提示词优化**：prompt-contract 新增指令，引导 LLM 优先使用后台任务管理工具代替手动 PID 操作
+#### 后端 & 基础设施
+- **OpenRouter 模型规格缓存**：新增 `openrouter-model-specs-cache.ts`，应用启动时自动缓存，提供 IPC 查询和刷新接口
+- **PiSettingsManager 集成**：使用 `PiSettingsManager.inMemory()` 管理压缩和重试配置
+- **ResourceLoader 重构**：使用新的 SDK DefaultResourceLoader，指定 `piAgentDir = ~/.pi/agent`
+- **Session 队列重启**：会话队列被中止时若有待处理项则自动重启处理
+- **run-aborted 安全检查**：在模型解析、Session 创建/销毁、Prompt 前后等关键阶段增加 `throwIfRunAborted()` 兜底
+- **数据库扩展**：`compaction_snapshots` 表新增 `compacted_message_count`、`preserved_tail_count`、`summary_preview`、`compacted_context_preview` 字段
+
+#### 前端 & 用户体验
+- **上下文面板增强**：ContextPanel 展开时自动加载压缩历史 + Token 预算信息
+- **流式速率显示**：ChatView 新增 tokens/秒 速率、thinking/tool_call 流标签显示
+- **分页优化**：`MESSAGES_PAGE_SIZE` 从 5 提升至 **20**
+- **Prepend 滚动修复**：加载更早消息时使用 `requestAnimationFrame` 恢复滚动位置，`isRestoringPrependRef` 防止重复触发
+- **配置自动填充**：切换模型时自动从 `resolveKnownModelSpecs` 填入 `contextWindow`
+- **设置页面新增**：SettingsAPI 新增相关设置页面
+
+### 🔧 改进
+
+#### Agent 上下文 & 工具
+- **工具输出 Recall 扩展**：
+  - 最大字符上限从 20K → 100K，默认从 8K → 20K
+  - 新增 `startLine`/`endLine` 行范围读取
+  - 提示信息更智能：标注续读格式 (`recall_tool_output({"handle":"...","start":...,"maxChars":...})`)
+  - 新增 `query` 参数提示
+- **Partial Tool Arguments**：新增 `partialToolArgSnapshots` 映射，记录工具调用的实时参数
+- **Tool 参数签名字段**：`read_full` 和 `recall_tool_output` 增加 `startLine`/`endLine` 字段
+- **Shell 工具重构**：工具限制包装逻辑重构，分离 shell 工具和基础工具
+
+#### Session 管理
+- 会话队列中止时若栈不为空则自动重启处理
+- 模型切换时 `contextWindow` 自动填充
+- 配置变更监听 OpenRouter 规格缓存
+
+#### SDK 适配
+- 迁移所有导入路径：agent-runner、pi-model-resolution、claude-sdk-one-shot、config-store、anysearch-tool、agent-runner-message-end
+- 事件名称更新：`auto_compaction_start` → `compaction_start`、`auto_compaction_end` → `compaction_end`
+- `agent.replaceMessages()` → `agent.state.messages = ...`
+- DeepSeek thinking 日志增强：payload 日志开关（`COWORK_LOG_SDK_MESSAGES_FULL`）
+
+### 🧪 测试
+- 新增 `tool-output-compression.test.ts`（read_full 敏感压缩测试）
+- 新增 `tool-output-recall.test.ts`（line-range 召回测试）
+- 新增 `tool-result-utils.test.ts`
+- 新增 `session-compaction-history.test.ts`（压缩历史 + Token 预算测试）
+- 新增 `chat-view-pagination.test.ts`（分页测试）
+- 新增 `context-panel-recent-files.test.ts`（Token 预算调用断言）
+- 新增 `use-ipc-session-list.test.ts`
+- 新增 `agent-runner-pi.test.ts`（后台任务管理工具测试 + 原有扩展现有测试）
+- 更新 `pi-model-resolution.test.ts`、`claude-sdk-one-shot.test.ts`
+
+### 📝 文档
+- `AGENTS.md`：增加 `tmp/` 子目录组织规范
+- `prompt-contract.ts`：新增两条工具使用指令（recall_tool_output 续读 / read_full 替代细碎读取）
 
 ## [3.5.5] - 2026-05-25
 
