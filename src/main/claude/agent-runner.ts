@@ -4446,6 +4446,7 @@ ${hints.join('\n')}
       let firstResponseWarningTimerId: ReturnType<typeof setTimeout> | undefined;
       let silenceTimeoutId: ReturnType<typeof setTimeout> | undefined;
       let receivedFirstSdkEvent = false;
+      const activeToolExecutions = new Set<string>();
 
       // Ollama cold-start feedback: if provider is 'ollama' and no stream event arrives
       // within 10 seconds, show a "model loading" trace update so users know what's happening.
@@ -4522,6 +4523,14 @@ ${hints.join('\n')}
         if (silenceTimeoutId) clearTimeout(silenceTimeoutId);
         silenceTimeoutId = setTimeout(() => {
           if (!receivedFirstSdkEvent || controller.signal.aborted) {
+            return;
+          }
+          if (activeToolExecutions.size > 0) {
+            log(
+              '[ClaudeAgentRunner] SDK silence timeout deferred while tools are running:',
+              Array.from(activeToolExecutions).join(', ')
+            );
+            resetSilenceTimeout();
             return;
           }
           abortPromptForTimeout('Prompt timed out (no SDK activity for 3 min after first event)');
@@ -4851,6 +4860,7 @@ ${hints.join('\n')}
             case 'tool_execution_start': {
               logCtx(`[ClaudeAgentRunner] Tool execution start: ${event.toolName}`);
               const toolCallId = event.toolCallId;
+              activeToolExecutions.add(toolCallId);
               const toolArgs = isRecord(event.args) ? event.args : {};
               if (runningTraceStepIds.has(toolCallId)) {
                 this.sendTraceUpdate(session.id, toolCallId, {
@@ -4895,6 +4905,8 @@ ${hints.join('\n')}
             case 'tool_execution_end': {
               if (controller.signal.aborted) break;
               const toolCallId = event.toolCallId;
+              activeToolExecutions.delete(toolCallId);
+              resetSilenceTimeout();
               for (const key of partialToolArgSnapshots.keys()) {
                 if (key.startsWith(`${toolCallId}:`)) {
                   partialToolArgSnapshots.delete(key);

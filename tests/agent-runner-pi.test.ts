@@ -181,6 +181,13 @@ describe('ClaudeAgentRunner pi-coding-agent integration', () => {
     expect(agentRunnerContent).toContain('Use execute_background_command instead');
   });
 
+  it('does not abort a turn for SDK silence while a tool is still executing', () => {
+    expect(agentRunnerContent).toContain('const activeToolExecutions = new Set<string>();');
+    expect(agentRunnerContent).toContain('activeToolExecutions.add(toolCallId);');
+    expect(agentRunnerContent).toContain('activeToolExecutions.delete(toolCallId);');
+    expect(agentRunnerContent).toContain('SDK silence timeout deferred while tools are running');
+  });
+
   it('auto-splits mixed background shell commands into background plus follow-up execution', () => {
     expect(agentRunnerContent).toContain('splitBackgroundCommand');
     expect(agentRunnerContent).toContain('findShellBackgroundOperator');
