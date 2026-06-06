@@ -1,10 +1,16 @@
-import { homedir } from 'os';
-import path from 'path';
 import type { Message, Session, TraceStep } from '../../renderer/types';
 import type { EnvironmentDoctorReport } from '../runtime/environment-doctor';
+import {
+  DIAGNOSTIC_REDACTION_VERSION,
+  redactDiagnosticText,
+  redactDiagnosticValue,
+  redactFileSystemPath,
+} from './diagnostic-redaction';
 
-const MAX_DIAGNOSTIC_SESSIONS = 8;
 const MAX_DIAGNOSTIC_ERROR_STEPS = 20;
+const MAX_RECENT_AGENT_ERRORS = 12;
+const MAX_AGENT_ERROR_MESSAGE_LENGTH = 500;
+const DIAGNOSTICS_BUNDLE_SCHEMA_VERSION = 2;
 
 export interface DiagnosticLogFile {
   name: string;
@@ -15,9 +21,13 @@ export interface DiagnosticLogFile {
 
 export interface DiagnosticsSummarySessionItem {
   id: string;
+  title: string | null;
   status: Session['status'];
   cwd: string | null;
   model: string | null;
+  configSetId: string | null;
+  thinkingLevel: Session['thinkingLevel'] | null;
+  planMode: boolean;
   createdAt: string | null;
   updatedAt: string | null;
   messageCount: number;
@@ -51,8 +61,67 @@ export interface TraceStepMetaSummary {
   isError: boolean;
 }
 
+export interface PiRouteDiagnosticSummary {
+  sessionId: string;
+  configSetId: string | null;
+  requested: {
+    provider: string;
+    protocol: string;
+    model: string;
+    thinkingLevel: string | null;
+  };
+  resolved: {
+    provider: string | null;
+    model: string | null;
+    api: string | null;
+    baseUrl: string | null;
+    contextWindow: number | null;
+    maxTokens: number | null;
+  };
+  thinking: {
+    requestedLevel: string | null;
+    effectiveLevel: string | null;
+    mappedForCompatibility: boolean;
+    supportsReasoningEffort: boolean;
+    thinkingFormat: string | null;
+    thinkingLevelMapKeys: string[];
+  };
+  usedSyntheticModel: boolean;
+  error: string | null;
+}
+
+export interface RecentAgentErrorSummary {
+  sessionId: string;
+  source: 'trace_step' | 'assistant_error_message';
+  stage: string | null;
+  timestamp: string | null;
+  httpStatus: number | null;
+  providerErrorCode: string | null;
+  providerErrorMessage: string | null;
+  piErrorMessage: string | null;
+  toolName: string | null;
+  requestShape: Record<string, string> | null;
+  route: {
+    provider: string | null;
+    protocol: string | null;
+    model: string | null;
+    api: string | null;
+    baseUrl: string | null;
+    thinkingLevel: string | null;
+  } | null;
+}
+
 export interface DiagnosticsSummary {
+  schemaVersion: number;
   exportedAt: string;
+  targetSessionId: string | null;
+  redaction: {
+    version: number;
+    defaultIncludesMessageBodies: false;
+    defaultIncludesToolInputs: false;
+    defaultIncludesToolOutputs: false;
+    notes: string[];
+  };
   app: {
     version: string;
     isPackaged: boolean;
@@ -74,8 +143,15 @@ export interface DiagnosticsSummary {
     model: string;
     baseUrl: string | null;
     customProtocol: string | null;
+    activeConfigSetId?: string;
+    activeProfileKey?: string;
+    contextWindow?: number;
+    maxTokens?: number;
+    memoryStrategy?: string;
+    toolOutputCompressionLevel?: string;
     sandboxEnabled: boolean;
     thinkingEnabled: boolean;
+    thinkingLevel?: string;
     apiKeyConfigured: boolean;
     claudeCodePathConfigured: boolean;
     defaultWorkdir: string | null;
@@ -91,6 +167,8 @@ export interface DiagnosticsSummary {
     included: number;
     items: DiagnosticsSummarySessionItem[];
   };
+  piRouteDiagnostics: PiRouteDiagnosticSummary[];
+  recentAgentErrors: RecentAgentErrorSummary[];
   recentErrorSteps: Array<
     TraceStepMetaSummary & {
       sessionId: string;
@@ -106,10 +184,12 @@ export interface DiagnosticsSummary {
 export interface DiagnosticsSummaryDependencies {
   getMessages(sessionId: string): Message[];
   getTraceSteps(sessionId: string): TraceStep[];
+  getPiRouteDiagnostic?(session: Session): PiRouteDiagnosticSummary;
 }
 
 export interface BuildDiagnosticsSummaryInput {
   exportedAt?: Date;
+  targetSessionId?: string | null;
   app: DiagnosticsSummary['app'];
   runtime: DiagnosticsSummary['runtime'];
   config: DiagnosticsSummary['config'];
@@ -120,93 +200,6 @@ export interface BuildDiagnosticsSummaryInput {
   deps: DiagnosticsSummaryDependencies;
 }
 
-function normalizePathSeparators(value: string): string {
-  return value.replace(/\\/g, '/');
-}
-
-function getPathTail(value: string, maxSegments = 2): string {
-  const normalized = normalizePathSeparators(value).replace(/\/+$/, '');
-  const segments = normalized.split('/').filter(Boolean);
-  if (segments.length === 0) {
-    return '';
-  }
-  return segments.slice(-maxSegments).join('/');
-}
-
-function getRelativeTail(value: string, basePath: string, maxSegments = 2): string {
-  const normalizedValue = normalizePathSeparators(value).replace(/\/+$/, '');
-  const normalizedBase = normalizePathSeparators(basePath).replace(/\/+$/, '');
-  if (!normalizedBase || !normalizedValue.startsWith(normalizedBase)) {
-    return getPathTail(normalizedValue, maxSegments);
-  }
-
-  const suffix = normalizedValue.slice(normalizedBase.length).replace(/^\/+/, '');
-  if (!suffix) {
-    return '';
-  }
-  return getPathTail(suffix, maxSegments);
-}
-
-export function redactFileSystemPath(value?: string | null): string | null {
-  if (!value?.trim()) {
-    return null;
-  }
-
-  const trimmed = value.trim();
-  const normalized = normalizePathSeparators(trimmed);
-  const normalizedHome = normalizePathSeparators(homedir());
-
-  if (normalizedHome && normalized.startsWith(normalizedHome)) {
-    const tail = getRelativeTail(normalized, normalizedHome);
-    return tail ? `<home>/${tail}` : '<home>';
-  }
-
-  const winTempDirs = [process.env.TEMP, process.env.TMP]
-    .filter(Boolean)
-    .map((d) => normalizePathSeparators(path.normalize(d!)));
-  const normalizedForTmpCheck = normalizePathSeparators(path.normalize(trimmed));
-
-  for (const winTmp of winTempDirs) {
-    if (normalizedForTmpCheck.startsWith(winTmp)) {
-      const tail = getRelativeTail(normalizedForTmpCheck, winTmp);
-      return tail ? `<tmp>/${tail}` : '<tmp>';
-    }
-  }
-
-  if (/AppData[/\\]Local[/\\]Temp/i.test(trimmed)) {
-    const appDataTempIdx = normalizedForTmpCheck.search(/appdata\/local\/temp/i);
-    if (appDataTempIdx >= 0) {
-      const tmpBase = normalizedForTmpCheck.slice(
-        0,
-        appDataTempIdx + 'AppData/Local/Temp'.length
-      );
-      const tail = getRelativeTail(normalizedForTmpCheck, tmpBase);
-      return tail ? `<tmp>/${tail}` : '<tmp>';
-    }
-  }
-
-  if (
-    normalized.startsWith('/tmp') ||
-    normalized.startsWith('/private/tmp') ||
-    normalized.startsWith('/var/folders/')
-  ) {
-    const tmpBase = normalized.startsWith('/private/tmp')
-      ? '/private/tmp'
-      : normalized.startsWith('/var/folders/')
-        ? '/var/folders'
-        : '/tmp';
-    const tail = getRelativeTail(normalized, tmpBase);
-    return tail ? `<tmp>/${tail}` : '<tmp>';
-  }
-
-  if (/^[A-Za-z]:\//.test(normalized) || normalized.startsWith('//') || path.isAbsolute(trimmed)) {
-    const tail = getPathTail(normalized);
-    return tail ? `<abs>/${tail}` : '<abs>';
-  }
-
-  return trimmed;
-}
-
 function toIsoTimestamp(value?: number | Date | null): string | null {
   if (value === undefined || value === null) {
     return null;
@@ -215,6 +208,126 @@ function toIsoTimestamp(value?: number | Date | null): string | null {
     return value.toISOString();
   }
   return new Date(value).toISOString();
+}
+
+function truncateDiagnosticMessage(value: string): string {
+  const trimmed = redactDiagnosticText(value).replace(/\s+/g, ' ').trim();
+  if (trimmed.length <= MAX_AGENT_ERROR_MESSAGE_LENGTH) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, MAX_AGENT_ERROR_MESSAGE_LENGTH)}...`;
+}
+
+function extractHttpStatus(value: string): number | null {
+  const explicit = value.match(/\b(?:status|http status|statusCode|status code)\D{0,12}([1-5]\d{2})\b/i);
+  if (explicit) {
+    return Number(explicit[1]);
+  }
+  const generic = value.match(/\b([1-5]\d{2})\b/);
+  return generic ? Number(generic[1]) : null;
+}
+
+function extractProviderErrorCode(value: string): string | null {
+  const codeMatch = value.match(
+    /\b(?:error[_\s-]?code|code|type)\s*[:=]\s*["']?([A-Za-z0-9_.:-]{2,80})/i
+  );
+  if (codeMatch) {
+    return codeMatch[1];
+  }
+  const namedCode = value.match(/\b(Param Incorrect|Bad Request|Invalid Request|Unauthorized|Forbidden|Rate Limit|Too Many Requests)\b/i);
+  return namedCode ? namedCode[1] : null;
+}
+
+function extractStage(step?: TraceStep): string | null {
+  if (!step) {
+    return null;
+  }
+  if (step.toolName) {
+    return `tool:${step.toolName}`;
+  }
+  if (step.type === 'thinking') {
+    return 'agent_response';
+  }
+  if (step.type === 'tool_call' || step.type === 'tool_result') {
+    return step.type;
+  }
+  return step.type || null;
+}
+
+function summarizeRequestShape(input?: Record<string, unknown>): Record<string, string> | null {
+  if (!input || typeof input !== 'object') {
+    return null;
+  }
+  const redacted = redactDiagnosticValue(input) as Record<string, unknown>;
+  const entries = Object.entries(redacted)
+    .slice(0, 20)
+    .map(([key, value]) => [
+      key,
+      Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value,
+    ]);
+  return Object.fromEntries(entries);
+}
+
+function routeForSession(
+  routeBySessionId: Map<string, PiRouteDiagnosticSummary>,
+  sessionId: string
+): RecentAgentErrorSummary['route'] {
+  const route = routeBySessionId.get(sessionId);
+  if (!route) {
+    return null;
+  }
+  return {
+    provider: route.requested.provider || route.resolved.provider,
+    protocol: route.requested.protocol,
+    model: route.requested.model || route.resolved.model,
+    api: route.resolved.api,
+    baseUrl: route.resolved.baseUrl,
+    thinkingLevel: route.thinking.effectiveLevel || route.requested.thinkingLevel,
+  };
+}
+
+function buildAgentErrorFromText(input: {
+  sessionId: string;
+  source: RecentAgentErrorSummary['source'];
+  text: string;
+  timestamp: number;
+  step?: TraceStep;
+  route: RecentAgentErrorSummary['route'];
+}): RecentAgentErrorSummary {
+  const message = truncateDiagnosticMessage(input.text);
+  return {
+    sessionId: input.sessionId,
+    source: input.source,
+    stage: extractStage(input.step),
+    timestamp: toIsoTimestamp(input.timestamp),
+    httpStatus: extractHttpStatus(message),
+    providerErrorCode: extractProviderErrorCode(message),
+    providerErrorMessage: message || null,
+    piErrorMessage: message || null,
+    toolName: input.step?.toolName || null,
+    requestShape: summarizeRequestShape(input.step?.toolInput),
+    route: input.route,
+  };
+}
+
+function getTextFromMessage(message: Message): string {
+  return message.content
+    .filter((block) => block.type === 'text')
+    .map((block) => block.text)
+    .join('\n');
+}
+
+function isAssistantErrorText(text: string): boolean {
+  const trimmed = text.trim();
+  return (
+    /^\*\*Error\*\*/i.test(trimmed) ||
+    /^Error[:：]/i.test(trimmed) ||
+    trimmed.includes('原始错误:') ||
+    trimmed.includes('请求被上游拒绝') ||
+    trimmed.includes('认证失败') ||
+    trimmed.includes('请求被限流') ||
+    trimmed.includes('上游服务异常')
+  );
 }
 
 function summarizeMessageMeta(message?: Message): MessageMetaSummary | null {
@@ -243,7 +356,10 @@ export function summarizeTraceStepMeta(step: TraceStep): TraceStepMetaSummary {
     durationMs: step.duration ?? null,
     contentLength: step.content?.length ?? 0,
     toolOutputLength: step.toolOutput?.length ?? 0,
-    toolInputKeys: step.toolInput ? Object.keys(step.toolInput).slice(0, 12) : [],
+    toolInputKeys:
+      step.toolInput && typeof step.toolInput === 'object'
+        ? Object.keys(redactDiagnosticValue(step.toolInput) as Record<string, unknown>).slice(0, 12)
+        : [],
     isError: !!step.isError || step.status === 'error',
   };
 }
@@ -265,9 +381,13 @@ function buildSessionDiagnosticSummary(
 
   return {
     id: session.id,
+    title: session.title || null,
     status: session.status,
     cwd: redactFileSystemPath(session.cwd),
     model: session.model || null,
+    configSetId: session.configSetId || null,
+    thinkingLevel: session.thinkingLevel || null,
+    planMode: !!session.planMode,
     createdAt: toIsoTimestamp(session.createdAt),
     updatedAt: toIsoTimestamp(session.updatedAt),
     messageCount: messages.length,
@@ -281,12 +401,22 @@ function buildSessionDiagnosticSummary(
 
 export function buildDiagnosticsSummary(input: BuildDiagnosticsSummaryInput): DiagnosticsSummary {
   const sessions = [...input.sessions].sort((a, b) => b.updatedAt - a.updatedAt);
-  const selectedSessions = sessions.slice(0, MAX_DIAGNOSTIC_SESSIONS);
+  const targetSessionId = input.targetSessionId?.trim() || null;
+  const targetSession = targetSessionId
+    ? sessions.find((session) => session.id === targetSessionId)
+    : undefined;
+  const selectedSessions = targetSession
+    ? [targetSession]
+    : sessions.slice(0, targetSessionId ? 0 : 1);
   const sessionSummaries = selectedSessions.map((session) =>
     buildSessionDiagnosticSummary(session, input.deps)
   );
+  const piRouteDiagnostics = input.deps.getPiRouteDiagnostic
+    ? selectedSessions.map((session) => input.deps.getPiRouteDiagnostic!(session))
+    : [];
+  const routeBySessionId = new Map(piRouteDiagnostics.map((route) => [route.sessionId, route]));
 
-  const recentErrorSteps = selectedSessions
+  const recentErrorStepPairs = selectedSessions
     .flatMap((session) =>
       input.deps
         .getTraceSteps(session.id)
@@ -297,14 +427,60 @@ export function buildDiagnosticsSummary(input: BuildDiagnosticsSummaryInput): Di
         }))
     )
     .sort((a, b) => b.step.timestamp - a.step.timestamp)
-    .slice(0, MAX_DIAGNOSTIC_ERROR_STEPS)
+    .slice(0, MAX_DIAGNOSTIC_ERROR_STEPS);
+  const recentErrorSteps = recentErrorStepPairs
     .map(({ sessionId, step }) => ({
       sessionId,
       ...summarizeTraceStepMeta(step),
     }));
+  const traceAgentErrors = recentErrorStepPairs.map(({ sessionId, step }) =>
+    buildAgentErrorFromText({
+      sessionId,
+      source: 'trace_step',
+      text: [step.title, step.content].filter(Boolean).join('\n'),
+      timestamp: step.timestamp,
+      step,
+      route: routeForSession(routeBySessionId, sessionId),
+    })
+  );
+  const messageAgentErrors = selectedSessions.flatMap((session) =>
+    input.deps
+      .getMessages(session.id)
+      .filter((message) => message.role === 'assistant')
+      .map((message) => ({ message, text: getTextFromMessage(message) }))
+      .filter(({ text }) => isAssistantErrorText(text))
+      .map(({ message, text }) =>
+        buildAgentErrorFromText({
+          sessionId: session.id,
+          source: 'assistant_error_message',
+          text,
+          timestamp: message.timestamp,
+          route: routeForSession(routeBySessionId, session.id),
+        })
+      )
+  );
+  const recentAgentErrors = [...traceAgentErrors, ...messageAgentErrors]
+    .sort((a, b) => {
+      const at = a.timestamp ? Date.parse(a.timestamp) : 0;
+      const bt = b.timestamp ? Date.parse(b.timestamp) : 0;
+      return bt - at;
+    })
+    .slice(0, MAX_RECENT_AGENT_ERRORS);
 
   return {
+    schemaVersion: DIAGNOSTICS_BUNDLE_SCHEMA_VERSION,
     exportedAt: (input.exportedAt || new Date()).toISOString(),
+    targetSessionId,
+    redaction: {
+      version: DIAGNOSTIC_REDACTION_VERSION,
+      defaultIncludesMessageBodies: false,
+      defaultIncludesToolInputs: false,
+      defaultIncludesToolOutputs: false,
+      notes: [
+        'Message bodies, full tool inputs, and full tool outputs are excluded by default.',
+        'Secrets and local filesystem paths are redacted or summarized before entering JSON diagnostics.',
+      ],
+    },
     app: input.app,
     runtime: {
       ...input.runtime,
@@ -323,6 +499,8 @@ export function buildDiagnosticsSummary(input: BuildDiagnosticsSummaryInput): Di
       included: sessionSummaries.length,
       items: sessionSummaries,
     },
+    piRouteDiagnostics,
+    recentAgentErrors,
     recentErrorSteps,
     logFiles: input.logFiles.map((file) => ({
       name: file.name,

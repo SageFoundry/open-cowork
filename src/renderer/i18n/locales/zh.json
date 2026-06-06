@@ -578,7 +578,7 @@
     "inventoryDescription": "当前日志清单与占用空间。",
     "recentDescription": "最近生成的应用日志，可用于检查；即使当前没有日志文件，也可以单独导出诊断摘要。",
     "directoryDescription": "应用日志当前在磁盘上的存储位置。",
-    "actionsDescription": "导出诊断包、打开日志目录或清理日志文件。",
+    "actionsDescription": "为当前会话生成支持诊断包、打开日志目录或清理日志文件。",
     "enableDevLogs": "启用开发者日志",
     "enableDevLogsDesc": "记录详细的调试日志。关闭可减少磁盘占用。",
     "devLogsEnabled": "开发者日志已启用",
@@ -588,13 +588,13 @@
     "totalSize": "总大小",
     "noLogFiles": "未找到日志文件",
     "logsDirectory": "日志目录：",
-    "exportZip": "导出诊断包",
+    "exportZip": "生成当前会话支持包",
     "openFolder": "打开文件夹",
     "clearAll": "清除所有",
     "clearConfirm": "确定要清除所有日志文件吗？此操作无法撤销。",
-    "exportSuccess": "诊断包已成功导出到 {{path}}",
+    "exportSuccess": "支持诊断包已生成到 {{path}}，请手动发送给支持或开发人员。",
     "clearSuccess": "已清除 {{count}} 个日志文件",
-    "exportFailed": "导出日志失败",
+    "exportFailed": "生成支持诊断包失败",
     "clearFailed": "清除日志失败",
     "environmentDoctorTitle": "环境体检",
     "environmentDoctorDescription": "当前机器的运行时检测结果与执行能力快照。",
@@ -607,8 +607,8 @@
       "warning": "警告",
       "missing": "缺失"
     },
-    "helpText1": "导出的诊断包会包含应用日志、脱敏后的运行环境信息，以及最近会话/错误的元数据摘要，不会默认附带消息正文。",
-    "helpText2": "把诊断包发给我们后，通常可以更快定位到是前端异常、工具调用失败，还是配置/环境问题。"
+    "helpText1": "支持诊断包围绕当前会话生成，包含脱敏日志、运行环境信息、本会话模型配置和本会话错误摘要，不会默认附带消息正文或完整工具输出。",
+    "helpText2": "不会收集全部会话；如果没有当前会话，只会用最近一个会话的元数据兜底。第一版只在本地生成 ZIP，需要手动发给我们。"
   },
   "sidebar": {
     "recents": "最近",

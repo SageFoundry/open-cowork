@@ -13,6 +13,7 @@ export function eventRequiresSessionManager(event: ClientEvent): boolean {
     case 'session.getCompactionHistory':
     case 'session.getTokenBudget':
     case 'session.getTraceSteps':
+    case 'session.updateRuntime':
     case 'permission.response':
       return true;
     default:

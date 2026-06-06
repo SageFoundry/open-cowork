@@ -88,6 +88,8 @@ export interface SessionRow {
   allowed_tools: string; // JSON string
   memory_enabled: number;
   model: string | null;
+  config_set_id: string | null;
+  thinking_level: string | null;
   plan_mode: number;
   created_at: number;
   updated_at: number;
@@ -371,6 +373,8 @@ function initializeSchema(database: Database.Database): void {
 
     ensureColumn(database, 'sessions', 'openai_thread_id', 'openai_thread_id TEXT');
     ensureColumn(database, 'sessions', 'model', 'model TEXT');
+    ensureColumn(database, 'sessions', 'config_set_id', 'config_set_id TEXT');
+    ensureColumn(database, 'sessions', 'thinking_level', 'thinking_level TEXT');
     ensureColumn(database, 'sessions', 'plan_mode', 'plan_mode INTEGER NOT NULL DEFAULT 0');
 
     // Create messages table
@@ -757,8 +761,8 @@ export function initDatabase(): DatabaseInstance {
   // Prepare statements for better performance
   const insertSession = rawDb.prepare(`
     INSERT OR REPLACE INTO sessions
-    (id, title, claude_session_id, openai_thread_id, status, cwd, mounted_paths, allowed_tools, memory_enabled, model, plan_mode, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (id, title, claude_session_id, openai_thread_id, status, cwd, mounted_paths, allowed_tools, memory_enabled, model, config_set_id, thinking_level, plan_mode, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   // Note: Dynamic update queries are built in sessions.update() for flexibility
@@ -917,6 +921,8 @@ export function initDatabase(): DatabaseInstance {
           session.allowed_tools,
           session.memory_enabled,
           session.model,
+          session.config_set_id,
+          session.thinking_level,
           session.plan_mode ?? 0,
           session.created_at,
           session.updated_at

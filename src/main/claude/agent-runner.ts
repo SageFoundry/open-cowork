@@ -127,6 +127,47 @@ const DEFAULT_COLD_START_HISTORY_BUDGET_RATIO = 0.15; // Use 15% of context wind
 const SMALL_CONTEXT_HISTORY_BUDGET_RATIO = 0.08;
 const MAX_COLD_START_HISTORY_TURNS = 32; // Fewer turns to keep preamble lean
 
+type PiThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
+function mapThinkingLevelForPiModel(
+  level: PiThinkingLevel,
+  model: {
+    api?: string;
+    thinkingLevelMap?: Record<string, string | null | undefined>;
+    compat?: unknown;
+  }
+): PiThinkingLevel {
+  if (level === 'off') {
+    return 'off';
+  }
+
+  if (
+    model.thinkingLevelMap &&
+    Object.prototype.hasOwnProperty.call(model.thinkingLevelMap, level)
+  ) {
+    return level;
+  }
+
+  const compat =
+    model.compat && typeof model.compat === 'object'
+      ? (model.compat as Record<string, unknown>)
+      : {};
+  const thinkingFormat = typeof compat.thinkingFormat === 'string' ? compat.thinkingFormat : '';
+  const usesReasoningEffort =
+    model.api === 'openai-completions' ||
+    model.api === 'openai-responses' ||
+    compat.supportsReasoningEffort === true ||
+    ['openai', 'openrouter', 'deepseek', 'together', 'zai', 'qwen'].includes(thinkingFormat);
+
+  if (!usesReasoningEffort) {
+    return level;
+  }
+
+  if (level === 'minimal') return 'low';
+  if (level === 'xhigh') return 'high';
+  return level;
+}
+
 interface StableHistoryEntry {
   role: 'user' | 'assistant';
   text: string;
@@ -1131,10 +1172,45 @@ ${hints.join('\n')}
   }
 
   /**
-   * Check if a command contains sudo
+   * Check whether a shell command invokes sudo as a command token.
+   * Avoid matching words inside quoted strings, such as git commit messages.
    */
   private static isSudoCommand(command: string): boolean {
-    return /\bsudo\b/.test(command);
+    let unquoted = '';
+    let quote: "'" | '"' | null = null;
+    let escaped = false;
+
+    for (const char of command) {
+      if (escaped) {
+        escaped = false;
+        unquoted += quote ? ' ' : char;
+        continue;
+      }
+
+      if (char === '\\') {
+        escaped = true;
+        unquoted += quote ? ' ' : char;
+        continue;
+      }
+
+      if (quote) {
+        if (char === quote) {
+          quote = null;
+        }
+        unquoted += ' ';
+        continue;
+      }
+
+      if (char === "'" || char === '"') {
+        quote = char;
+        unquoted += ' ';
+        continue;
+      }
+
+      unquoted += char;
+    }
+
+    return /(?:^|[;&|(\n]\s*)sudo(?:\s|$)/.test(unquoted);
   }
 
   private static shellEscapeSingleQuoted(value: string): string {
@@ -2752,7 +2828,10 @@ ${hints.join('\n')}
       logTiming('before pi-ai model resolution', runStartTime);
 
       // Resolve model via pi-ai
-      const runtimeConfig = configStore.getAll();
+      const runtimeConfig = configStore.getForConfigSet(session.configSetId, {
+        model: session.model,
+        thinkingLevel: session.thinkingLevel,
+      });
       throwIfRunAborted('before model resolution');
       const modelString = this.getCurrentModelString(runtimeConfig.model);
       const configProtocol = resolvePiRouteProtocol(
@@ -2931,18 +3010,26 @@ ${hints.join('\n')}
       const turnLanguagePrompt = buildVisibleLanguageRuntimePrompt({ visibleLanguage });
 
       // Resolve thinking level early — needed for session reuse check below
-      type PiThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
-      const configuredThinkingLevel = configStore.get('thinkingLevel') as PiThinkingLevel | undefined;
+      const configuredThinkingLevel = runtimeConfig.thinkingLevel as PiThinkingLevel | undefined;
       const enableThinking =
-        (configStore.get('enableThinking') ?? false) ||
+        (runtimeConfig.enableThinking ?? false) ||
         Boolean(configuredThinkingLevel && configuredThinkingLevel !== 'off');
-      const thinkingLevel: PiThinkingLevel =
+      const requestedThinkingLevel: PiThinkingLevel =
         configuredThinkingLevel && configuredThinkingLevel !== 'off'
           ? configuredThinkingLevel
           : enableThinking
             ? 'medium'
             : 'off';
+      const thinkingLevel = mapThinkingLevelForPiModel(requestedThinkingLevel, piModel);
       logCtx('[ClaudeAgentRunner] Thinking level:', thinkingLevel);
+      if (thinkingLevel !== requestedThinkingLevel) {
+        logCtx(
+          '[ClaudeAgentRunner] Mapped thinking level for provider compatibility:',
+          requestedThinkingLevel,
+          '→',
+          thinkingLevel
+        );
+      }
       const sessionRuntimeSignature = buildPiSessionRuntimeSignature({
         configProvider: runtimeConfig.provider,
         customProtocol: runtimeConfig.customProtocol,

@@ -17,7 +17,7 @@ import { groupMessagesByTurn, type ConversationTurn } from '../utils/conversatio
 import { formatChatTurnTime } from '../utils/i18n-format';
 import { AssistantTurnGroup } from './AssistantTurnGroup';
 import { MessageCard } from './MessageCard';
-import type { Message, ContentBlock, ThinkingLevel } from '../types';
+import type { Message, ContentBlock, ThinkingLevel, Session } from '../types';
 import {
   Send,
   Square,
@@ -143,28 +143,42 @@ export function ChatView() {
   }, [appConfig]);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(() =>
-    appConfig?.thinkingLevel || (appConfig?.enableThinking ? 'medium' : 'off')
+    activeSession?.thinkingLevel ||
+    appConfig?.thinkingLevel ||
+    (appConfig?.enableThinking ? 'medium' : 'off')
   );
   const isSavingThinking = useRef(false);
+  const currentSessionModel = activeSession?.model || appConfig?.model || '';
+  const currentSessionConfigSetId = activeSession?.configSetId || appConfig?.activeConfigSetId || '';
 
-  // Sync thinking level from appConfig whenever it changes
+  // Sync thinking level from the active session snapshot, falling back to app defaults.
   useEffect(() => {
     if (!isSavingThinking.current) {
-      setThinkingLevel(appConfig?.thinkingLevel || (appConfig?.enableThinking ? 'medium' : 'off'));
+      setThinkingLevel(
+        activeSession?.thinkingLevel ||
+          appConfig?.thinkingLevel ||
+          (appConfig?.enableThinking ? 'medium' : 'off')
+      );
     }
-  }, [appConfig?.enableThinking, appConfig?.thinkingLevel]);
+  }, [activeSession?.id, activeSession?.thinkingLevel, appConfig?.enableThinking, appConfig?.thinkingLevel]);
 
   const updateThinkingLevel = useCallback(async (next: ThinkingLevel) => {
     const previous = thinkingLevel;
+    if (!activeSessionId) return;
     setThinkingLevel(next);
     isSavingThinking.current = true;
     try {
-      const result = await window.electronAPI.config.save({
-        thinkingLevel: next,
-        enableThinking: next !== 'off',
+      const session = await window.electronAPI.invoke<Session>({
+        type: 'session.updateRuntime',
+        payload: {
+          sessionId: activeSessionId,
+          thinkingLevel: next,
+        },
       });
-      if (result.success) {
-        useAppStore.getState().setAppConfig(result.config);
+      if (session) {
+        useAppStore.getState().updateSession(activeSessionId, {
+          thinkingLevel: session.thinkingLevel,
+        });
       } else {
         setThinkingLevel(previous);
       }
@@ -173,7 +187,7 @@ export function ChatView() {
     } finally {
       isSavingThinking.current = false;
     }
-  }, [thinkingLevel]);
+  }, [activeSessionId, thinkingLevel]);
 
   const messagePagination = useAppStore((s) =>
     activeSessionId
@@ -261,6 +275,8 @@ export function ChatView() {
   const initialScrollDoneRef = useRef(false);
   const loadingOlderRef = useRef(false);
   const isRestoringPrependRef = useRef(false);
+  const wasTurnActiveRef = useRef(false);
+  const shouldStickToBottomAfterTurnRef = useRef(false);
 
   const adjustTextareaHeight = useCallback(() => {
     const textarea = textareaRef.current;
@@ -710,6 +726,45 @@ export function ChatView() {
     prevMessageCountRef.current = messageCount;
     prevPartialLengthRef.current = partialLength;
   }, [messages.length, partialMessage.length, partialThinking.length]);
+
+  useEffect(() => {
+    const turnActive =
+      isSessionRunning ||
+      hasActiveTurn ||
+      pendingCount > 0 ||
+      Boolean(partialMessage || partialThinking);
+
+    if (turnActive) {
+      wasTurnActiveRef.current = true;
+      shouldStickToBottomAfterTurnRef.current =
+        shouldStickToBottomAfterTurnRef.current || isUserAtBottomRef.current;
+      return;
+    }
+
+    if (!wasTurnActiveRef.current) {
+      return;
+    }
+
+    wasTurnActiveRef.current = false;
+    const shouldStick = shouldStickToBottomAfterTurnRef.current || isUserAtBottomRef.current;
+    shouldStickToBottomAfterTurnRef.current = false;
+    if (!shouldStick) {
+      return;
+    }
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        forceScrollToBottom('auto');
+      });
+    });
+  }, [
+    forceScrollToBottom,
+    hasActiveTurn,
+    isSessionRunning,
+    partialMessage,
+    partialThinking,
+    pendingCount,
+  ]);
 
   useEffect(() => {
     if (!activeSessionId || !messagePagination.initialLoaded || initialScrollDoneRef.current) {
@@ -1457,10 +1512,10 @@ export function ChatView() {
                       type="button"
                       onClick={() => setModelPickerOpen(!modelPickerOpen)}
                       className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-border-subtle bg-background/60 text-xs text-text-muted hover:bg-surface-hover hover:text-text-secondary transition-colors"
-                      title={appConfig?.model || t('chat.noModel')}
+                      title={currentSessionModel || t('chat.noModel')}
                     >
                       <span className="max-w-[120px] truncate">
-                        {appConfig?.model || t('chat.noModel')}
+                        {currentSessionModel || t('chat.noModel')}
                       </span>
                       <ChevronUp className={`w-3 h-3 transition-transform ${modelPickerOpen ? 'rotate-0' : 'rotate-180'}`} />
                     </button>
@@ -1487,80 +1542,44 @@ export function ChatView() {
                                 key={option.id}
                                 type="button"
                                 onClick={() => {
-                                  if (option.id !== appConfig?.model || !cs.isActive) {
+                                  if (
+                                    (option.id !== currentSessionModel ||
+                                      cs.id !== currentSessionConfigSetId) &&
+                                    activeSessionId
+                                  ) {
                                     setModelPickerOpen(false);
-                                    const id = cs.id;
-                                    if (cs.isActive) {
-                                      // Same config set, just switch model
-                                      window.electronAPI.config
-                                        .save({ model: option.id })
+                                    const sessionId = activeSessionId;
+                                    const store = useAppStore.getState();
+                                    store.updateSession(sessionId, {
+                                      model: option.id,
+                                      configSetId: cs.id,
+                                    });
+                                    window.electronAPI
+                                      .invoke<Session>({
+                                        type: 'session.updateRuntime',
+                                        payload: { sessionId, model: option.id, configSetId: cs.id },
+                                      })
                                         .then((result) => {
-                                          if (result.success) {
-                                            const store = useAppStore.getState();
-                                            store.setAppConfig(result.config);
-                                            // Update context window for the active session immediately
-                                            if (result.modelContextWindow && activeSessionId) {
-                                              const cw = result.modelContextWindow;
-                                              store.setSessionContextWindow(activeSessionId, cw);
-                                              // Also update tokenBudget maxContextTokens to match
-                                              const ss = store.sessionStates[activeSessionId];
-                                              if (ss?.tokenBudget) {
-                                                store.setSessionTokenBudget(activeSessionId, {
-                                                  ...ss.tokenBudget,
-                                                  maxContextTokens: cw,
-                                                });
-                                              }
-                                            }
-                                            // Update model name on the active session
-                                            if (activeSessionId) {
-                                              store.updateSession(activeSessionId, { model: option.id });
-                                            }
+                                          if (result) {
+                                            useAppStore.getState().updateSession(sessionId, {
+                                              model: result.model,
+                                              configSetId: result.configSetId,
+                                              thinkingLevel: result.thinkingLevel,
+                                              planMode: result.planMode,
+                                            });
                                           }
                                         })
                                         .catch((err) => console.error('[ChatView] Failed to switch model:', err));
-                                    } else {
-                                      // Different config set: switch set, then switch model
-                                      window.electronAPI.config
-                                        .switchSet({ id })
-                                        .then((switchResult) => {
-                                          if (!switchResult.success) return;
-                                          return window.electronAPI.config.save({ model: option.id });
-                                        })
-                                        .then((saveResult) => {
-                                          if (saveResult?.success) {
-                                            const store = useAppStore.getState();
-                                            store.setAppConfig(saveResult.config);
-                                            // Update context window for the active session immediately
-                                            if (saveResult.modelContextWindow && activeSessionId) {
-                                              const cw = saveResult.modelContextWindow;
-                                              store.setSessionContextWindow(activeSessionId, cw);
-                                              // Also update tokenBudget maxContextTokens to match
-                                              const ss = store.sessionStates[activeSessionId];
-                                              if (ss?.tokenBudget) {
-                                                store.setSessionTokenBudget(activeSessionId, {
-                                                  ...ss.tokenBudget,
-                                                  maxContextTokens: cw,
-                                                });
-                                              }
-                                            }
-                                            // Update model name on the active session
-                                            if (activeSessionId) {
-                                              store.updateSession(activeSessionId, { model: option.id });
-                                            }
-                                          }
-                                        })
-                                        .catch((err) => console.error('[ChatView] Failed to switch:', err));
-                                    }
                                   }
                                 }}
                                 className={`w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors ${
-                                  option.id === appConfig?.model && cs.isActive
+                                  option.id === currentSessionModel && cs.id === currentSessionConfigSetId
                                     ? 'bg-accent/10 text-accent'
                                     : 'text-text-primary hover:bg-surface-hover'
                                 }`}
                               >
                                 <span className="flex-1 truncate">{option.name}</span>
-                                {option.id === appConfig?.model && cs.isActive && (
+                                {option.id === currentSessionModel && cs.id === currentSessionConfigSetId && (
                                   <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
                                 )}
                               </button>

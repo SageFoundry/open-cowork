@@ -10,6 +10,8 @@ export interface Session {
   allowedTools: string[];
   memoryEnabled: boolean;
   model?: string;
+  configSetId?: string;
+  thinkingLevel?: ThinkingLevel;
   planMode?: boolean; // When true, agent is in read-only plan/write mode
   createdAt: number;
   updatedAt: number;
@@ -476,6 +478,16 @@ export type ClientEvent =
   | { type: 'session.getCompactionHistory'; payload: { sessionId: string; limit?: number } }
   | { type: 'session.getTokenBudget'; payload: { sessionId: string; model?: string } }
   | { type: 'session.getTraceSteps'; payload: { sessionId: string } }
+  | {
+      type: 'session.updateRuntime';
+      payload: {
+        sessionId: string;
+        model?: string;
+        configSetId?: string;
+        thinkingLevel?: ThinkingLevel;
+        planMode?: boolean;
+      };
+    }
   | { type: 'permission.response'; payload: { toolUseId: string; result: PermissionResult } }
   | { type: 'sudo.password.response'; payload: { toolUseId: string; password: string | null } }
   | { type: 'settings.update'; payload: Record<string, unknown> }

@@ -128,6 +128,7 @@ const HISTORY_SEARCH_STOP_WORDS = new Set([
   '前面',
   '关于',
 ]);
+const SESSION_THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh']);
 const COMPACTION_SUMMARY_SYSTEM_PROMPT = `CRITICAL: Respond with TEXT ONLY. Do not call tools, do not browse files, do not ask the user questions, and do not include code fences unless a tiny snippet is essential.
 
 Create a structured continuation summary for a coding agent that must resume the same session after context compaction.
@@ -410,6 +411,12 @@ function resolveRuntimeContextWindow(runtimeConfig: {
   return knownSpecs?.contextWindow || 180000;
 }
 
+function normalizeSessionThinkingLevel(value: unknown): Session['thinkingLevel'] | undefined {
+  return typeof value === 'string' && SESSION_THINKING_LEVELS.has(value)
+    ? (value as Session['thinkingLevel'])
+    : undefined;
+}
+
 export class SessionManager {
   private db: DatabaseInstance;
   private sendToRenderer: (event: ServerEvent) => void;
@@ -633,6 +640,7 @@ export class SessionManager {
     // Prefer frontend-provided cwd; fallback to env vars if provided
     const envCwd = process.env.COWORK_WORKDIR || process.env.WORKDIR || process.env.DEFAULT_CWD;
     const effectiveCwd = cwd || envCwd;
+    const runtimeConfig = configStore.getAll();
     return {
       id: uuidv4(),
       title,
@@ -652,7 +660,9 @@ export class SessionManager {
         'grep',
       ],
       memoryEnabled: false,
-      model: configStore.get('model') || undefined,
+      model: runtimeConfig.model || undefined,
+      configSetId: runtimeConfig.activeConfigSetId || undefined,
+      thinkingLevel: runtimeConfig.thinkingLevel || undefined,
       planMode: planMode ?? false,
       createdAt: now,
       updatedAt: now,
@@ -672,6 +682,8 @@ export class SessionManager {
       allowed_tools: JSON.stringify(session.allowedTools),
       memory_enabled: session.memoryEnabled ? 1 : 0,
       model: session.model || null,
+      config_set_id: session.configSetId || null,
+      thinking_level: session.thinkingLevel || null,
       plan_mode: session.planMode ? 1 : 0,
       created_at: session.createdAt,
       updated_at: session.updatedAt,
@@ -710,7 +722,9 @@ export class SessionManager {
       allowedTools,
       memoryEnabled: row.memory_enabled === 1,
       model: row.model || undefined,
-      planMode: (row as any).plan_mode === 1,
+      configSetId: row.config_set_id || undefined,
+      thinkingLevel: normalizeSessionThinkingLevel(row.thinking_level),
+      planMode: row.plan_mode === 1,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -748,6 +762,9 @@ export class SessionManager {
         allowedTools,
         memoryEnabled: row.memory_enabled === 1,
         model: row.model || undefined,
+        configSetId: row.config_set_id || undefined,
+        thinkingLevel: normalizeSessionThinkingLevel(row.thinking_level),
+        planMode: row.plan_mode === 1,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       };
@@ -790,7 +807,7 @@ export class SessionManager {
     }
 
     const resolvedConfig = this.resolveContextConfig(contextConfig);
-    const runtimeConfig = configStore.getAll();
+    const runtimeConfig = this.getSessionRuntimeConfig(session);
     const contextWindow = resolveRuntimeContextWindow(runtimeConfig);
     const systemPromptTokens = this.estimateSystemPromptTokens(session, '');
     const beforeBudget = buildTokenBudgetSnapshot({
@@ -1013,6 +1030,13 @@ export class SessionManager {
     };
   }
 
+  private getSessionRuntimeConfig(session: Session): ReturnType<typeof configStore.getAll> {
+    return configStore.getForConfigSet(session.configSetId, {
+      model: session.model,
+      thinkingLevel: session.thinkingLevel,
+    });
+  }
+
   private estimateSystemPromptTokens(session: Session, userPrompt: string): number {
     const allConfig = configStore.getAll();
     const promptMaterial = session.cwd
@@ -1095,7 +1119,7 @@ export class SessionManager {
     const runtime = this.getRuntimeMessages(sessionId);
     this.maybeNotifyRestoredFromBoundary(sessionId, runtime.snapshot);
     const contextConfig = this.resolveContextConfig();
-    const runtimeConfig = configStore.getAll();
+    const runtimeConfig = this.getSessionRuntimeConfig(session);
     const modelForBudget = modelOverride || session.model || runtimeConfig.model;
     const modelSpecs = modelForBudget ? resolveKnownModelSpecs(modelForBudget) : undefined;
     const contextWindow =
@@ -1261,6 +1285,7 @@ export class SessionManager {
   }
 
   private async generateCompactionSummary(
+    session: Session,
     messages: Message[],
     options: { trigger: CompactionTrigger }
   ): Promise<CompactionSummaryResult> {
@@ -1280,7 +1305,7 @@ export class SessionManager {
       const result = await completeWithClaudeSdk(
         prompt,
         buildCompactionSummarySystemPrompt(language),
-        configStore.getAll()
+        this.getSessionRuntimeConfig(session)
       );
       const text = result.text.trim();
       if (text) {
@@ -1435,7 +1460,7 @@ export class SessionManager {
         );
       }
 
-      const summaryResult = await this.generateCompactionSummary(olderMessages, { trigger });
+      const summaryResult = await this.generateCompactionSummary(session, olderMessages, { trigger });
       const summaryText = summaryResult.text;
       if (isAutomaticCompaction) {
         if (summaryResult.usedFallback) {
@@ -1587,7 +1612,7 @@ export class SessionManager {
         this.maybeNotifyRestoredFromBoundary(session.id, latestBoundary);
 
         const contextConfig = this.resolveContextConfig(contextConfigOverride);
-        const runtimeConfig = configStore.getAll();
+        const runtimeConfig = this.getSessionRuntimeConfig(session);
         const systemPromptTokens = this.estimateSystemPromptTokens(session, enhancedPrompt);
         const contextWindow = resolveRuntimeContextWindow(runtimeConfig);
         let budgetSnapshot = buildTokenBudgetSnapshot({
@@ -1674,17 +1699,6 @@ export class SessionManager {
               : '当前上下文已达到阻塞阈值，自动压缩未能释放足够空间。';
           this.emitCompactionNotice(session.id, 'error', blockingMessage);
           throw new Error(blockingMessage);
-        }
-
-        // Update session model to match current config (may have changed since session creation)
-        const currentModel = runtimeConfig.model;
-        if (currentModel && currentModel !== session.model) {
-          session.model = currentModel;
-          this.db.sessions.update(session.id, { model: currentModel });
-          this.sendToRenderer({
-            type: 'session.update',
-            payload: { sessionId: session.id, updates: { model: currentModel } },
-          });
         }
 
         if (sdkSessionNeedsReset && this.agentRunner.clearSdkSession) {
@@ -2063,6 +2077,80 @@ export class SessionManager {
       type: 'session.planMode',
       payload: { sessionId, planMode },
     });
+  }
+
+  updateSessionRuntime(
+    sessionId: string,
+    updates: {
+      model?: string;
+      configSetId?: string;
+      thinkingLevel?: Session['thinkingLevel'];
+      planMode?: boolean;
+    }
+  ): Session | null {
+    const existing = this.loadSession(sessionId);
+    if (!existing) {
+      logWarn('[SessionManager] Cannot update runtime; session not found:', sessionId);
+      return null;
+    }
+
+    const normalizedModel =
+      typeof updates.model === 'string' ? updates.model.trim() || null : undefined;
+    const normalizedConfigSetId =
+      typeof updates.configSetId === 'string' ? updates.configSetId.trim() || null : undefined;
+    const normalizedThinkingLevel =
+      updates.thinkingLevel !== undefined
+        ? normalizeSessionThinkingLevel(updates.thinkingLevel) || 'off'
+        : undefined;
+
+    const rowUpdates: Partial<{
+      model: string | null;
+      config_set_id: string | null;
+      thinking_level: string;
+    }> = {};
+    const sessionUpdates: Partial<Session> = {};
+    let shouldClearSdkSession = false;
+
+    if (normalizedModel !== undefined && normalizedModel !== (existing.model || null)) {
+      rowUpdates.model = normalizedModel;
+      sessionUpdates.model = normalizedModel || undefined;
+      shouldClearSdkSession = true;
+    }
+
+    if (
+      normalizedConfigSetId !== undefined &&
+      normalizedConfigSetId !== (existing.configSetId || null)
+    ) {
+      rowUpdates.config_set_id = normalizedConfigSetId;
+      sessionUpdates.configSetId = normalizedConfigSetId || undefined;
+      shouldClearSdkSession = true;
+    }
+
+    if (
+      normalizedThinkingLevel !== undefined &&
+      normalizedThinkingLevel !== (existing.thinkingLevel || undefined)
+    ) {
+      rowUpdates.thinking_level = normalizedThinkingLevel;
+      sessionUpdates.thinkingLevel = normalizedThinkingLevel;
+      shouldClearSdkSession = true;
+    }
+
+    if (Object.keys(rowUpdates).length > 0) {
+      this.db.sessions.update(sessionId, rowUpdates);
+      if (shouldClearSdkSession && this.agentRunner?.clearSdkSession) {
+        this.agentRunner.clearSdkSession(sessionId);
+      }
+      this.sendToRenderer({
+        type: 'session.update',
+        payload: { sessionId, updates: sessionUpdates },
+      });
+    }
+
+    if (typeof updates.planMode === 'boolean') {
+      this.updateSessionPlanMode(sessionId, updates.planMode);
+    }
+
+    return this.loadSession(sessionId);
   }
 
   renameSession(sessionId: string, title: string): boolean {

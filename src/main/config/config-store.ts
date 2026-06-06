@@ -1175,6 +1175,25 @@ export class ConfigStore {
     return this.normalizeConfig(this.store.store as Partial<AppConfig>);
   }
 
+  getForConfigSet(
+    configSetId?: string,
+    overrides?: { model?: string; thinkingLevel?: ThinkingLevel }
+  ): AppConfig {
+    const current = this.getAll();
+    const activeConfigSetId =
+      configSetId && current.configSets.some((set) => set.id === configSetId)
+        ? configSetId
+        : current.activeConfigSetId;
+    const projected = this.composeProjectedConfig(current, current.configSets, activeConfigSetId);
+    const thinkingLevel = overrides?.thinkingLevel ?? projected.thinkingLevel;
+    return {
+      ...projected,
+      model: overrides?.model || projected.model,
+      thinkingLevel,
+      enableThinking: thinkingLevel !== 'off',
+    };
+  }
+
   /**
    * Get a specific config value
    */

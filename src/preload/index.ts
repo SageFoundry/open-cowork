@@ -56,6 +56,7 @@ const ALLOWED_CLIENT_EVENTS: ReadonlySet<string> = new Set<ClientEvent['type']>(
   'session.getCompactionHistory',
   'session.getTokenBudget',
   'session.getTraceSteps',
+  'session.updateRuntime',
   'permission.response',
   'sudo.password.response',
   'settings.update',
@@ -366,8 +367,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getDirectory: (): Promise<string> => ipcRenderer.invoke('logs.getDirectory'),
     getAll: (): Promise<Array<{ name: string; path: string; size: number; mtime: Date }>> =>
       ipcRenderer.invoke('logs.getAll'),
-    export: (): Promise<{ success: boolean; path?: string; size?: number; error?: string }> =>
-      ipcRenderer.invoke('logs.export'),
+    export: (options?: {
+      sessionId?: string | null;
+    }): Promise<{ success: boolean; path?: string; size?: number; error?: string }> =>
+      ipcRenderer.invoke('logs.export', options),
     open: (): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke('logs.open'),
     clear: (): Promise<{ success: boolean; deletedCount?: number; error?: string }> =>
       ipcRenderer.invoke('logs.clear'),
@@ -692,7 +695,9 @@ declare global {
         getPath: () => Promise<string | null>;
         getDirectory: () => Promise<string>;
         getAll: () => Promise<Array<{ name: string; path: string; size: number; mtime: Date }>>;
-        export: () => Promise<{ success: boolean; path?: string; size?: number; error?: string }>;
+        export: (options?: {
+          sessionId?: string | null;
+        }) => Promise<{ success: boolean; path?: string; size?: number; error?: string }>;
         open: () => Promise<{ success: boolean; error?: string }>;
         clear: () => Promise<{ success: boolean; deletedCount?: number; error?: string }>;
         setEnabled: (

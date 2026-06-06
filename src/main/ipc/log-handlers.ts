@@ -16,12 +16,192 @@ import {
 } from '../utils/logger';
 import { buildDiagnosticsSummary } from '../utils/diagnostics-summary';
 import { collectEnvironmentDoctorReport } from '../runtime/environment-doctor';
+import { normalizeOpenAICompatibleBaseUrl } from '../config/auth-utils';
+import {
+  applyPiModelRuntimeOverrides,
+  buildSyntheticPiModel,
+  resolvePiModelString,
+  resolvePiRegistryModel,
+  resolvePiRouteProtocol,
+  resolveSyntheticPiModelFallback,
+} from '../claude/pi-model-resolution';
+import { redactDiagnosticText, sanitizeDiagnosticUrl } from '../utils/diagnostic-redaction';
+import type { Session } from '../../renderer/types';
 
 export interface RegisterLogHandlersDeps {
   getMainWindow: () => BrowserWindow | null;
   getCurrentWorkingDir: () => string | null;
   sanitizeDiagnosticBaseUrl: (value: string | undefined) => string | null;
   getSessionManager: () => SessionManager | null;
+}
+
+type DiagnosticThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
+function mapThinkingLevelForDiagnostics(
+  level: DiagnosticThinkingLevel,
+  model: {
+    api?: string;
+    thinkingLevelMap?: Record<string, string | null | undefined>;
+    compat?: unknown;
+  }
+): DiagnosticThinkingLevel {
+  if (level === 'off') {
+    return 'off';
+  }
+
+  if (
+    model.thinkingLevelMap &&
+    Object.prototype.hasOwnProperty.call(model.thinkingLevelMap, level)
+  ) {
+    return level;
+  }
+
+  const compat =
+    model.compat && typeof model.compat === 'object'
+      ? (model.compat as Record<string, unknown>)
+      : {};
+  const thinkingFormat = typeof compat.thinkingFormat === 'string' ? compat.thinkingFormat : '';
+  const usesReasoningEffort =
+    model.api === 'openai-completions' ||
+    model.api === 'openai-responses' ||
+    compat.supportsReasoningEffort === true ||
+    ['openai', 'openrouter', 'deepseek', 'together', 'zai', 'qwen'].includes(thinkingFormat);
+
+  if (!usesReasoningEffort) {
+    return level;
+  }
+
+  if (level === 'minimal') {
+    return 'low';
+  }
+  if (level === 'xhigh') {
+    return 'high';
+  }
+  return level;
+}
+
+function buildPiRouteDiagnostic(session: Session) {
+  try {
+    const runtimeConfig = configStore.getForConfigSet(session.configSetId, {
+      model: session.model,
+      thinkingLevel: session.thinkingLevel,
+    });
+    const routeProtocol = resolvePiRouteProtocol(
+      runtimeConfig.provider,
+      runtimeConfig.customProtocol
+    );
+    const modelString = resolvePiModelString({
+      provider: routeProtocol,
+      customProtocol: runtimeConfig.customProtocol,
+      model: runtimeConfig.model,
+    });
+    const rawBaseUrl = runtimeConfig.baseUrl?.trim() || undefined;
+    const effectiveBaseUrl =
+      routeProtocol === 'openai' && runtimeConfig.provider !== 'ollama'
+        ? normalizeOpenAICompatibleBaseUrl(rawBaseUrl) || rawBaseUrl
+        : rawBaseUrl;
+
+    let usedSyntheticModel = false;
+    let piModel = resolvePiRegistryModel(modelString, {
+      configProvider: routeProtocol,
+      customBaseUrl: effectiveBaseUrl,
+      rawProvider: runtimeConfig.provider,
+      customProtocol: runtimeConfig.customProtocol,
+    });
+
+    if (!piModel) {
+      usedSyntheticModel = true;
+      const synthetic = resolveSyntheticPiModelFallback({
+        rawModel: runtimeConfig.model,
+        resolvedModelString: modelString,
+        rawProvider: runtimeConfig.provider,
+        routeProtocol,
+        baseUrl: effectiveBaseUrl,
+      });
+      piModel = buildSyntheticPiModel(
+        synthetic.modelId,
+        synthetic.provider,
+        routeProtocol,
+        effectiveBaseUrl,
+        undefined,
+        undefined,
+        runtimeConfig.contextWindow,
+        runtimeConfig.maxTokens
+      );
+      piModel = applyPiModelRuntimeOverrides(piModel, {
+        configProvider: routeProtocol,
+        customBaseUrl: effectiveBaseUrl,
+        rawProvider: runtimeConfig.provider,
+        customProtocol: runtimeConfig.customProtocol,
+      });
+    }
+
+    const requestedThinkingLevel = (runtimeConfig.thinkingLevel || 'off') as DiagnosticThinkingLevel;
+    const effectiveThinkingLevel = mapThinkingLevelForDiagnostics(requestedThinkingLevel, piModel);
+    const compat =
+      piModel.compat && typeof piModel.compat === 'object'
+        ? (piModel.compat as Record<string, unknown>)
+        : {};
+    const thinkingFormat = typeof compat.thinkingFormat === 'string' ? compat.thinkingFormat : null;
+
+    return {
+      sessionId: session.id,
+      configSetId: session.configSetId || runtimeConfig.activeConfigSetId || null,
+      requested: {
+        provider: runtimeConfig.provider,
+        protocol: routeProtocol,
+        model: runtimeConfig.model,
+        thinkingLevel: runtimeConfig.thinkingLevel || null,
+      },
+      resolved: {
+        provider: piModel.provider || null,
+        model: piModel.id || null,
+        api: piModel.api || null,
+        baseUrl: sanitizeDiagnosticUrl(piModel.baseUrl || effectiveBaseUrl || null),
+        contextWindow: piModel.contextWindow ?? runtimeConfig.contextWindow ?? null,
+        maxTokens: piModel.maxTokens ?? runtimeConfig.maxTokens ?? null,
+      },
+      thinking: {
+        requestedLevel: requestedThinkingLevel,
+        effectiveLevel: effectiveThinkingLevel,
+        mappedForCompatibility: requestedThinkingLevel !== effectiveThinkingLevel,
+        supportsReasoningEffort: compat.supportsReasoningEffort === true,
+        thinkingFormat,
+        thinkingLevelMapKeys: Object.keys(piModel.thinkingLevelMap || {}).slice(0, 12),
+      },
+      usedSyntheticModel,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      sessionId: session.id,
+      configSetId: session.configSetId || null,
+      requested: {
+        provider: '',
+        protocol: '',
+        model: session.model || '',
+        thinkingLevel: session.thinkingLevel || null,
+      },
+      resolved: {
+        provider: null,
+        model: null,
+        api: null,
+        baseUrl: null,
+        contextWindow: null,
+        maxTokens: null,
+      },
+      thinking: {
+        requestedLevel: session.thinkingLevel || null,
+        effectiveLevel: null,
+        mappedForCompatibility: false,
+        supportsReasoningEffort: false,
+        thinkingFormat: null,
+        thinkingLevelMapKeys: [],
+      },
+      usedSyntheticModel: false,
+      error: error instanceof Error ? error.message : 'Unknown route diagnostic error',
+    };
+  }
 }
 
 export function registerLogHandlers({
@@ -66,11 +246,14 @@ export function registerLogHandlers({
     }
   });
 
-  ipcMain.handle('logs.export', async () => {
+  ipcMain.handle('logs.export', async (_event, options?: { sessionId?: string | null }) => {
     try {
       const logFiles = getAllLogFiles();
       const sessionManager = getSessionManager();
+      const targetSessionId =
+        typeof options?.sessionId === 'string' ? options.sessionId.trim() || null : null;
       const diagnosticsSummary = buildDiagnosticsSummary({
+        targetSessionId,
         app: {
           version: app.getVersion(),
           isPackaged: app.isPackaged,
@@ -90,10 +273,19 @@ export function registerLogHandlers({
         config: {
           provider: configStore.get('provider'),
           model: configStore.get('model'),
-          baseUrl: sanitizeDiagnosticBaseUrl(configStore.get('baseUrl') || undefined),
+          baseUrl:
+            sanitizeDiagnosticBaseUrl(configStore.get('baseUrl') || undefined) ||
+            sanitizeDiagnosticUrl(configStore.get('baseUrl') || undefined),
           customProtocol: configStore.get('customProtocol') || null,
+          activeConfigSetId: configStore.get('activeConfigSetId'),
+          activeProfileKey: configStore.get('activeProfileKey'),
+          contextWindow: configStore.get('contextWindow'),
+          maxTokens: configStore.get('maxTokens'),
+          memoryStrategy: configStore.get('memoryStrategy'),
+          toolOutputCompressionLevel: configStore.get('toolOutputCompressionLevel'),
           sandboxEnabled: !!configStore.get('sandboxEnabled'),
           thinkingEnabled: !!configStore.get('enableThinking'),
+          thinkingLevel: configStore.get('thinkingLevel'),
           apiKeyConfigured: !!configStore.get('apiKey'),
           claudeCodePathConfigured: !!configStore.get('claudeCodePath'),
           defaultWorkdir: configStore.get('defaultWorkdir') || null,
@@ -111,12 +303,13 @@ export function registerLogHandlers({
             sessionManager ? sessionManager.getMessages(sessionId) : [],
           getTraceSteps: (sessionId: string) =>
             sessionManager ? sessionManager.getTraceSteps(sessionId) : [],
+          getPiRouteDiagnostic: buildPiRouteDiagnostic,
         },
       });
 
       const result = await dialog.showSaveDialog(getMainWindow()!, {
-        title: 'Export Logs',
-        defaultPath: `opencowork-logs-${new Date().toISOString().split('T')[0]}.zip`,
+        title: 'Generate Support Bundle',
+        defaultPath: `opencowork-support-bundle-${new Date().toISOString().split('T')[0]}.zip`,
         filters: [
           { name: 'ZIP Archive', extensions: ['zip'] },
           { name: 'All Files', extensions: ['*'] },
@@ -168,7 +361,18 @@ export function registerLogHandlers({
         archive.pipe(output);
 
         for (const logFile of logFiles) {
-          archive.file(logFile.path, { name: logFile.name });
+          try {
+            const logContent = fs.readFileSync(logFile.path, 'utf8');
+            archive.append(redactDiagnosticText(logContent), { name: `logs/${logFile.name}` });
+          } catch (err) {
+            logWarn('[Logs] Failed to read log file for redacted archive:', logFile.name, err);
+            archive.append(
+              `Log file could not be included: ${
+                err instanceof Error ? err.message : 'Unknown read error'
+              }\n`,
+              { name: `logs/${logFile.name}.omitted.txt` }
+            );
+          }
         }
 
         const systemInfo = {
@@ -183,6 +387,11 @@ export function registerLogHandlers({
             size: f.size,
             modified: f.mtime,
           })),
+          privacy: {
+            messageBodiesIncluded: false,
+            toolInputsIncluded: false,
+            toolOutputsIncluded: false,
+          },
         };
         archive.append(JSON.stringify(systemInfo, null, 2), { name: 'system-info.json' });
         archive.append(JSON.stringify(diagnosticsSummary, null, 2), {
@@ -192,14 +401,20 @@ export function registerLogHandlers({
           [
             'Open Cowork diagnostic bundle',
             `Exported at: ${diagnosticsSummary.exportedAt}`,
+            `Target session: ${diagnosticsSummary.targetSessionId || 'latest session metadata fallback'}`,
             '',
             'Included files:',
-            '- Application log files (*.log)',
+            '- logs/*.log (redacted copies)',
             '- system-info.json',
             '- diagnostics-summary.json',
             '',
             'diagnostics-summary.json contains a redacted runtime/config snapshot,',
-            'plus metadata-only session summaries and recent error traces to speed up debugging.',
+            'plus metadata-only session summaries, recent error traces, and redacted agent error summaries.',
+            '',
+            'Privacy defaults:',
+            '- Message bodies are not included.',
+            '- Full tool inputs and outputs are not included.',
+            '- API keys, tokens, URL credentials, and local filesystem paths are redacted where detected.',
           ].join('\n'),
           { name: 'README.txt' }
         );

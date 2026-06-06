@@ -578,7 +578,7 @@
     "inventoryDescription": "Current log inventory and storage footprint.",
     "recentDescription": "Recent application logs available for inspection. You can still export a diagnostics bundle even when no log file exists yet.",
     "directoryDescription": "Current on-disk location for application logs.",
-    "actionsDescription": "Export a diagnostics bundle, reveal the log directory, or clear log files.",
+    "actionsDescription": "Generate a support diagnostics bundle for the current session, reveal the log directory, or clear log files.",
     "enableDevLogs": "Enable Developer Logs",
     "enableDevLogsDesc": "Record detailed logs for debugging. Disable to reduce disk usage.",
     "devLogsEnabled": "Developer logs enabled",
@@ -588,13 +588,13 @@
     "totalSize": "Total Size",
     "noLogFiles": "No log files found",
     "logsDirectory": "Logs Directory:",
-    "exportZip": "Export Diagnostics",
+    "exportZip": "Generate Session Bundle",
     "openFolder": "Open Folder",
     "clearAll": "Clear All",
     "clearConfirm": "Are you sure you want to clear all log files? This action cannot be undone.",
-    "exportSuccess": "Diagnostics exported successfully to {{path}}",
+    "exportSuccess": "Support diagnostics bundle generated at {{path}}. Please send it manually to support or the development team.",
     "clearSuccess": "Cleared {{count}} log file(s)",
-    "exportFailed": "Failed to export logs",
+    "exportFailed": "Failed to generate support diagnostics bundle",
     "clearFailed": "Failed to clear logs",
     "environmentDoctorTitle": "Environment Doctor",
     "environmentDoctorDescription": "Current runtime detection and execution capability snapshot for this machine.",
@@ -607,8 +607,8 @@
       "warning": "Warning",
       "missing": "Missing"
     },
-    "helpText1": "The exported diagnostics bundle includes app logs, a redacted runtime snapshot, and metadata-only session/error summaries without message bodies by default.",
-    "helpText2": "Sharing that bundle usually lets us narrow issues down much faster, whether they come from the UI, tool execution, or local environment."
+    "helpText1": "The support bundle is scoped to the current session and includes redacted logs, runtime info, this session's model configuration, and this session's error summaries without message bodies or full tool outputs by default.",
+    "helpText2": "It does not collect all sessions. If no current session exists, it falls back to metadata for the latest session only. This first version creates a local ZIP for manual sharing."
   },
   "sidebar": {
     "recents": "Recents",

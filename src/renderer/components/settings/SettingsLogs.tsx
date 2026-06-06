@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { formatAppDateTime } from '../../utils/i18n-format';
 import { SettingsContentSection } from './shared';
+import { useAppStore } from '../../store';
 
 const isElectron = typeof window !== 'undefined' && window.electronAPI !== undefined;
 
@@ -32,6 +33,7 @@ export function SettingsLogs({ isActive }: { isActive: boolean }) {
   const [logsDirectory, setLogsDirectory] = useState('');
   const [devLogsEnabled, setDevLogsEnabled] = useState(true);
   const [environmentDoctor, setEnvironmentDoctor] = useState<EnvironmentDoctorReport | null>(null);
+  const activeSessionId = useAppStore((state) => state.activeSessionId);
 
   const loadLogs = useCallback(async () => {
     try {
@@ -109,7 +111,7 @@ export function SettingsLogs({ isActive }: { isActive: boolean }) {
     setError('');
     setSuccess('');
     try {
-      const result = await window.electronAPI.logs.export();
+      const result = await window.electronAPI.logs.export({ sessionId: activeSessionId });
       if (result.success) {
         setSuccess(t('logs.exportSuccess', { path: result.path }));
         setTimeout(() => setSuccess(''), 5000);

@@ -1580,6 +1580,14 @@ async function handleClientEvent(event: ClientEvent): Promise<unknown> {
     case 'session.getTraceSteps':
       return sm.getTraceSteps(event.payload.sessionId);
 
+    case 'session.updateRuntime':
+      return sm.updateSessionRuntime(event.payload.sessionId, {
+        model: event.payload.model,
+        configSetId: event.payload.configSetId,
+        thinkingLevel: event.payload.thinkingLevel,
+        planMode: event.payload.planMode,
+      });
+
     case 'permission.response':
       return sm.handlePermissionResponse(event.payload.toolUseId, event.payload.result);
 

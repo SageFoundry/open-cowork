@@ -20,6 +20,10 @@ High-value areas:
 - `src/main/ipc/` - focused IPC handler modules
 - `src/main/sandbox/` - WSL2/Lima sandbox integration
 
+Support diagnostics:
+
+- `docs/support-diagnostics.md` - how to inspect `opencowork-support-bundle-*.zip` files from users, verify privacy boundaries, and triage model/config/pi-agent routing issues.
+
 ## Runtime Modes
 
 Open Cowork has two runtime modes:
@@ -79,3 +83,4 @@ Important implementation details:
 - Custom model context windows flow through `src/main/claude/pi-model-resolution.ts`, `src/main/config/config-store.ts`, and context tests.
 - Model selection combines provider presets from `src/shared/api-model-presets.ts` with user-added `ProviderProfile.models`.
 - `lingerai` and `deepseek` are first-class OpenAI-compatible providers; treat them like `openai` for routing, diagnostics, and auth checks.
+- When a user shares an `opencowork-support-bundle-*.zip`, follow `docs/support-diagnostics.md` before drawing conclusions from logs or diagnostics.
