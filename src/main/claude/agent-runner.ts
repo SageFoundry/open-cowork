@@ -757,6 +757,8 @@ interface CacheDiagnosticsPayload {
   historyMessagesOmitted: number;
   excludedCurrentTurnUser: boolean;
   historyCharBudget: number;
+  sdkStateMessagesInjected?: number;
+  sdkStateExcludedCurrentUser?: boolean;
   historyPreambleFingerprint?: string;
   systemPromptFingerprint: string;
   toolsFingerprint: string;
@@ -1133,6 +1135,61 @@ ${hints.join('\n')}
    */
   private static isSudoCommand(command: string): boolean {
     return /\bsudo\b/.test(command);
+  }
+
+  private static shellEscapeSingleQuoted(value: string): string {
+    return `'${value.replace(/'/g, `'"'"'`)}'`;
+  }
+
+  private static createAbortError(message = 'Request was aborted'): Error {
+    const abortError = new Error(message);
+    abortError.name = 'AbortError';
+    return abortError;
+  }
+
+  private static throwIfSignalAborted(signal: AbortSignal | undefined): void {
+    if (!signal?.aborted) return;
+    throw ClaudeAgentRunner.createAbortError();
+  }
+
+  private static awaitSudoPassword(
+    requestSudoPassword: (sessionId: string, toolUseId: string, command: string) => Promise<string | null>,
+    sessionId: string,
+    toolCallId: string,
+    command: string,
+    signal: AbortSignal | undefined
+  ): Promise<string | null> {
+    if (!signal) {
+      return requestSudoPassword(sessionId, toolCallId, command);
+    }
+
+    if (signal.aborted) {
+      return Promise.reject(ClaudeAgentRunner.createAbortError());
+    }
+
+    return new Promise<string | null>((resolve, reject) => {
+      const cleanup = () => signal.removeEventListener('abort', handleAbort);
+      const handleAbort = () => {
+        cleanup();
+        reject(ClaudeAgentRunner.createAbortError());
+      };
+
+      signal.addEventListener('abort', handleAbort, { once: true });
+      requestSudoPassword(sessionId, toolCallId, command).then(
+        (password) => {
+          cleanup();
+          if (signal.aborted) {
+            reject(ClaudeAgentRunner.createAbortError());
+            return;
+          }
+          resolve(password);
+        },
+        (error) => {
+          cleanup();
+          reject(error);
+        }
+      );
+    });
   }
 
   /**
@@ -1991,7 +2048,14 @@ ${hints.join('\n')}
 
           if (ClaudeAgentRunner.isSudoCommand(command)) {
             log('[ClaudeAgentRunner] Sudo command detected, requesting password');
-            const password = await requestSudoPassword(sessionId, toolCallId, command);
+            const password = await ClaudeAgentRunner.awaitSudoPassword(
+              requestSudoPassword,
+              sessionId,
+              toolCallId,
+              command,
+              signal
+            );
+            ClaudeAgentRunner.throwIfSignalAborted(signal);
 
             if (!password) {
               log('[ClaudeAgentRunner] Sudo password cancelled by user');
@@ -2005,19 +2069,21 @@ ${hints.join('\n')}
 
             // Add -S flag to sudo invocations that don't already have it
             const rewrittenCommand = command.replace(/\bsudo\b(?!\s+-S)/g, 'sudo -S');
+            ClaudeAgentRunner.throwIfSignalAborted(signal);
 
             log(
               '[ClaudeAgentRunner] Executing sudo command with password injection (via stdin pipe)'
             );
             try {
               if (process.platform === 'win32') {
+                const passwordInput = ClaudeAgentRunner.shellEscapeSingleQuoted(`${password}\n`);
+                const commandWithPasswordPipe = `printf %s ${passwordInput} | (${rewrittenCommand})`;
                 const result = await executeWindowsBash({
                   sessionId,
-                  command: rewrittenCommand,
+                  command: commandWithPasswordPipe,
                   cwd: effectiveCwd,
                   timeout: params.timeout,
                   signal,
-                  stdin: `${password}\n`,
                 });
                 return {
                   content: [
@@ -2036,29 +2102,49 @@ ${hints.join('\n')}
                   stdio: ['pipe', 'pipe', 'pipe'],
                   cwd: effectiveCwd,
                 });
-                let stdout = '';
-                let stderr = '';
-                const timer = setTimeout(() => {
-                  child.kill('SIGKILL');
-                  reject(new Error(`Sudo command timed out after ${timeoutMs}ms`));
-                }, timeoutMs);
-                child.stdout.on('data', (chunk: Buffer) => {
-                  stdout += chunk.toString();
+                  let stdout = '';
+                  let stderr = '';
+                  let settled = false;
+                  const cleanup = () => {
+                    clearTimeout(timer);
+                    signal?.removeEventListener('abort', handleAbort);
+                  };
+                  const rejectOnce = (error: Error) => {
+                    if (settled) return;
+                    settled = true;
+                    cleanup();
+                    reject(error);
+                  };
+                  const resolveOnce = (output: string) => {
+                    if (settled) return;
+                    settled = true;
+                    cleanup();
+                    resolve(output);
+                  };
+                  const handleAbort = () => {
+                    child.kill('SIGKILL');
+                    rejectOnce(ClaudeAgentRunner.createAbortError());
+                  };
+                  const timer = setTimeout(() => {
+                    child.kill('SIGKILL');
+                    rejectOnce(new Error(`Sudo command timed out after ${timeoutMs}ms`));
+                  }, timeoutMs);
+                  signal?.addEventListener('abort', handleAbort, { once: true });
+                  child.stdout.on('data', (chunk: Buffer) => {
+                    stdout += chunk.toString();
+                  });
+                  child.stderr.on('data', (chunk: Buffer) => {
+                    stderr += chunk.toString();
+                  });
+                  child.on('error', (err) => {
+                    rejectOnce(err);
+                  });
+                  child.on('close', () => {
+                    resolveOnce(stdout + stderr);
+                  });
+                  child.stdin.write(password + '\n');
+                  child.stdin.end();
                 });
-                child.stderr.on('data', (chunk: Buffer) => {
-                  stderr += chunk.toString();
-                });
-                child.on('error', (err) => {
-                  clearTimeout(timer);
-                  reject(err);
-                });
-                child.on('close', () => {
-                  clearTimeout(timer);
-                  resolve(stdout + stderr);
-                });
-                child.stdin.write(password + '\n');
-                child.stdin.end();
-              });
               return {
                 content: [{ type: 'text' as const, text: output || '(no output)' }],
                 details: undefined as unknown,
@@ -2101,6 +2187,31 @@ ${hints.join('\n')}
             params.timeout != null ? params : { ...params, timeout: DEFAULT_BASH_TIMEOUT_SECONDS };
           return originalExecute(toolCallId, effectiveParams, signal, onUpdate, ctx);
         },
+      } as ToolDefinition;
+    });
+  }
+
+  /**
+   * Some models repeatedly omit required edit args after a validation error
+   * (for example edits[].newText when deleting text). Keep SDK execution intact,
+   * but make the call contract explicit in the prompt-facing tool metadata.
+   */
+  private static clarifyEditToolContract(tools: ToolDefinition[]): ToolDefinition[] {
+    const editGuidelines = [
+      'The edit input must include path and edits. Every edits[] entry must include both oldText and newText.',
+      'To delete text, set edits[].newText to an empty string (""); never omit newText.',
+      'Do not call edit with only oldText, only whitespace oldText, or without a path.',
+    ];
+
+    return tools.map((tool) => {
+      if (tool.name !== 'edit') return tool;
+
+      return {
+        ...tool,
+        description:
+          `${tool.description} Required shape: { "path": "...", "edits": [{ "oldText": "...", "newText": "..." }] }. ` +
+          'For deletions, newText must be the empty string, not omitted.',
+        promptGuidelines: [...(tool.promptGuidelines ?? []), ...editGuidelines],
       } as ToolDefinition;
     });
   }
@@ -2897,6 +3008,8 @@ ${hints.join('\n')}
       let historyMessagesOmitted = 0;
       let excludedCurrentTurnUser = false;
       let historyCharBudget = 0;
+      let sdkStateMessagesInjected: number | undefined;
+      let sdkStateExcludedCurrentUser: boolean | undefined;
       if (!cachedSession) {
         // Cold start: inject recent history into prompt if available
         const conversationMessages = existingMessages.filter(
@@ -3815,12 +3928,13 @@ ${hints.join('\n')}
 
       // Inject a default 120s timeout for bash commands when the model omits one
       const withTimeout = ClaudeAgentRunner.wrapBashToolWithDefaultTimeout(windowsBashTools);
+      const clarifiedEditTools = ClaudeAgentRunner.clarifyEditToolContract(withTimeout);
       // Wrap the bash tool to intercept sudo commands and request passwords
       // Note: wrapBashToolForSudo returns ToolDefinition[] (5-param execute) but
       // createAgentSession.tools expects Tool[] (4-param execute). The extra ctx
       // parameter is simply not passed by the session runner — safe to cast.
       const wrappedTools = this.wrapBashToolForSudo(
-        withTimeout,
+        clarifiedEditTools,
         session.id,
         effectiveCwd,
         sanitizeOutputPaths
@@ -4065,6 +4179,8 @@ ${hints.join('\n')}
         historyMessagesOmitted,
         excludedCurrentTurnUser,
         historyCharBudget,
+        ...(sdkStateMessagesInjected !== undefined ? { sdkStateMessagesInjected } : {}),
+        ...(sdkStateExcludedCurrentUser !== undefined ? { sdkStateExcludedCurrentUser } : {}),
         ...(historyPreamble
           ? { historyPreambleFingerprint: fingerprintText(historyPreamble) }
           : {}),
@@ -4130,22 +4246,33 @@ ${hints.join('\n')}
           cachedSession.thinkingLevel = thinkingLevel;
         }
 
-        // 🔑 Replace SDK agent internal messages with the compressed version from session-manager.
-        // Without this, SDK accumulates ALL previous turns' messages in state.messages and sends
-        // them to the model, causing context ballooning (~400K → 780K+). By injecting the
-        // budgeted/compacted messages here, the SDK only sends what we control.
-        if (existingMessages.length > 0) {
-          const agent = piSession.agent;
-          const compressedMessages = convertToPiAgentMessages(existingMessages);
-          agent.state.messages = compressedMessages as typeof agent.state.messages;
-          logCtx(
-            '[ClaudeAgentRunner] Replaced SDK agent messages with compressed version:',
-            compressedMessages.length,
-            'messages (from',
-            existingMessages.length,
-            'existing)'
-          );
-        }
+        // Replace SDK agent internal messages with the app-controlled runtime context.
+        // The current user prompt is passed to piSession.prompt() below, so exclude a
+        // trailing user message here to avoid sending the same turn twice. Always assign
+        // the array, even when empty, so stale SDK history cannot survive compaction.
+        const agent = piSession.agent;
+        const sdkStateSourceMessages =
+          existingMessages[existingMessages.length - 1]?.role === 'user'
+            ? existingMessages.slice(0, -1)
+            : existingMessages;
+        sdkStateExcludedCurrentUser = sdkStateSourceMessages.length !== existingMessages.length;
+        const compressedMessages = convertToPiAgentMessages(sdkStateSourceMessages);
+        agent.state.messages = compressedMessages as typeof agent.state.messages;
+        sdkStateMessagesInjected = compressedMessages.length;
+        cacheDiagnostics.sdkStateMessagesInjected = sdkStateMessagesInjected;
+        cacheDiagnostics.sdkStateExcludedCurrentUser = sdkStateExcludedCurrentUser;
+        this.sendTraceUpdate(session.id, cacheDiagnosticsStepId, {
+          content: JSON.stringify(cacheDiagnostics, null, 2),
+        });
+        logCtx(
+          '[ClaudeAgentRunner] Replaced SDK agent messages with app-controlled context:',
+          compressedMessages.length,
+          'messages (from',
+          existingMessages.length,
+          'existing, excludedCurrentUser=',
+          sdkStateExcludedCurrentUser,
+          ')'
+        );
 
         logCtx('[ClaudeAgentRunner] Reusing cached pi session for:', session.id);
         logTiming('pi-coding-agent session reused', runStartTime);

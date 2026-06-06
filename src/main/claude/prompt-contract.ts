@@ -151,6 +151,7 @@ Open Cowork 支持计划模式和普通模式。如果当前用户提示以 <cur
 - 需要直接请求 API 或网页时可以使用 http，但不要把它当作默认搜索路径。
 - 如果 read、search、shell、browser 或 MCP 结果提示被截断，或保存为 tool-output://...，在判断省略内容不重要前，先用 recall_tool_output 的 start、startLine/endLine、maxChars 或 query 召回。
 - 如果需要读取大部分或全部大源码文件，或发现自己反复读同一文件的相邻片段，使用 read_full 的 startLine/endLine/maxChars，不要手工拼接许多窄片段。
+- 调用 edit 工具时必须提供 path 和 edits 数组；每个 edits[] 项都必须同时包含 oldText 和 newText。删除文本时把 newText 设为 ""，不要省略 newText。
 - Open Cowork 管理的后台进程是当前会话资源。用 list_background_tasks 查看正在运行的任务，用 read_background_task_log 查看输出，用 stop_background_task 停止托管任务；优先使用这些工具，不要手工找 pid 或 kill。
 </tool_behavior>`,
         `<memory_tool_policy>
@@ -196,6 +197,7 @@ Use the least powerful tool that can answer the request. When the user asks for 
 - Use http for direct API or page requests when needed; do not use it as the default search path.
 - If a normal read, search, shell, browser, or MCP result says it was truncated or saved as tool-output://..., use recall_tool_output with start, startLine/endLine, maxChars, or query before assuming the omitted text is irrelevant.
 - If you need most or all of a large source file, or you find yourself reading adjacent chunks of the same file, use read_full with startLine/endLine/maxChars instead of stitching many narrow reads manually.
+- When calling the edit tool, always provide path and an edits array; every edits[] item must include both oldText and newText. To delete text, set newText to "" rather than omitting it.
 - Treat Open Cowork-managed background processes as session resources. Use list_background_tasks to inspect what is already running, read_background_task_log to inspect output, and stop_background_task to stop managed tasks. Prefer these tools over manually finding or killing pids.
 </tool_behavior>`,
     `<memory_tool_policy>

@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useAppStore } from '../store';
 import { useIPC } from '../hooks/useIPC';
 import { useAppConfig } from '../store/selectors';
-import type { ContentBlock } from '../types';
+import type { ContentBlock, ThinkingLevel } from '../types';
 import { API_PROVIDER_PRESETS } from '../../shared/api-model-presets';
 import { getInitialSessionTitle } from '../../shared/session-title';
 import { buildProjectSummaries } from '../utils/projects';
@@ -19,6 +19,8 @@ import {
   FileSearch,
   ChevronDown,
   Settings,
+  Brain,
+  ClipboardList,
 } from 'lucide-react';
 
 type AttachedFile = {
@@ -27,6 +29,51 @@ type AttachedFile = {
   size: number;
   type: string;
   inlineDataBase64?: string;
+};
+
+const THINKING_LEVEL_OPTIONS: Array<{ value: ThinkingLevel; labelKey: string }> = [
+  { value: 'off', labelKey: 'chat.thinkingOff' },
+  { value: 'minimal', labelKey: 'chat.thinkingMinimal' },
+  { value: 'low', labelKey: 'chat.thinkingLow' },
+  { value: 'medium', labelKey: 'chat.thinkingMedium' },
+  { value: 'high', labelKey: 'chat.thinkingHigh' },
+  { value: 'xhigh', labelKey: 'chat.thinkingXHigh' },
+];
+
+const THINKING_LEVEL_STYLES: Record<ThinkingLevel, string> = {
+  off: 'border-border-subtle bg-background/60 text-text-muted hover:bg-surface-hover hover:text-text-secondary',
+  minimal: 'bg-emerald-500/5 border-emerald-500/20 text-emerald-600 dark:text-emerald-400',
+  low: 'bg-emerald-500/10 border-emerald-500/35 text-emerald-700 dark:text-emerald-300',
+  medium: 'bg-amber-500/10 border-amber-500/35 text-amber-700 dark:text-amber-300',
+  high: 'bg-orange-500/12 border-orange-500/40 text-orange-700 dark:text-orange-300',
+  xhigh: 'bg-red-500/12 border-red-500/45 text-red-700 dark:text-red-300',
+};
+
+const THINKING_LEVEL_MENU_STYLES: Record<ThinkingLevel, { selected: string; dot: string }> = {
+  off: {
+    selected: 'bg-surface-hover text-text-secondary',
+    dot: 'bg-border',
+  },
+  minimal: {
+    selected: 'bg-emerald-500/8 text-emerald-600 dark:text-emerald-400',
+    dot: 'bg-emerald-400',
+  },
+  low: {
+    selected: 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300',
+    dot: 'bg-emerald-600',
+  },
+  medium: {
+    selected: 'bg-amber-500/12 text-amber-700 dark:text-amber-300',
+    dot: 'bg-amber-500',
+  },
+  high: {
+    selected: 'bg-orange-500/12 text-orange-700 dark:text-orange-300',
+    dot: 'bg-orange-500',
+  },
+  xhigh: {
+    selected: 'bg-red-500/12 text-red-700 dark:text-red-300',
+    dot: 'bg-red-500',
+  },
 };
 
 import welcomeLogoSrc from '../assets/logo.png';
@@ -43,7 +90,12 @@ export function WelcomeView() {
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [thinkingPickerOpen, setThinkingPickerOpen] = useState(false);
+  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>('off');
+  const [planMode, setPlanMode] = useState(false);
+  const isSavingThinking = useRef(false);
   const modelPickerRef = useRef<HTMLDivElement>(null);
+  const thinkingPickerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { startSession, changeWorkingDir, isElectron } = useIPC();
   const workingDir = useAppStore((state) => state.workingDir);
@@ -55,6 +107,9 @@ export function WelcomeView() {
   const setShowSettings = useAppStore((state) => state.setShowSettings);
   const setSettingsTab = useAppStore((state) => state.setSettingsTab);
   const appConfig = useAppConfig();
+  const currentThinkingLabel =
+    THINKING_LEVEL_OPTIONS.find((option) => option.value === thinkingLevel)?.labelKey ||
+    'chat.thinkingOff';
   const configSets = useMemo(() => {
     if (!appConfig) return [];
     return appConfig.configSets.map((cs) => {
@@ -81,6 +136,34 @@ export function WelcomeView() {
       };
     });
   }, [appConfig]);
+
+  useEffect(() => {
+    if (!isSavingThinking.current) {
+      setThinkingLevel(appConfig?.thinkingLevel || (appConfig?.enableThinking ? 'medium' : 'off'));
+    }
+  }, [appConfig?.enableThinking, appConfig?.thinkingLevel]);
+
+  const updateThinkingLevel = async (next: ThinkingLevel) => {
+    const previous = thinkingLevel;
+    setThinkingLevel(next);
+    isSavingThinking.current = true;
+    try {
+      const result = await window.electronAPI.config.save({
+        thinkingLevel: next,
+        enableThinking: next !== 'off',
+      });
+      if (result.success) {
+        useAppStore.getState().setAppConfig(result.config);
+      } else {
+        setThinkingLevel(previous);
+      }
+    } catch {
+      setThinkingLevel(previous);
+    } finally {
+      isSavingThinking.current = false;
+    }
+  };
+
   const canSubmit = prompt.trim().length > 0 || pastedImages.length > 0 || attachedFiles.length > 0;
   const activeProject = useMemo(() => {
     if (!activeProjectId) return null;
@@ -396,7 +479,7 @@ export function WelcomeView() {
     setIsSubmitting(true);
     try {
       const sessionTitle = getInitialSessionTitle(currentPrompt, attachedFiles[0]?.name);
-      const session = await startSession(sessionTitle, contentBlocks, effectiveWorkingDir);
+      const session = await startSession(sessionTitle, contentBlocks, effectiveWorkingDir, planMode);
       if (session) {
         setPrompt('');
         if (textareaRef.current) {
@@ -443,17 +526,23 @@ export function WelcomeView() {
     adjustTextareaHeight();
   }, [prompt]);
 
-  // Click outside model picker to close
+  // Click outside pickers to close
   useEffect(() => {
-    if (!modelPickerOpen) return;
+    if (!modelPickerOpen && !thinkingPickerOpen) return;
     const handleClick = (e: MouseEvent) => {
       if (modelPickerRef.current && !modelPickerRef.current.contains(e.target as Node)) {
         setModelPickerOpen(false);
       }
+      if (
+        thinkingPickerRef.current &&
+        !thinkingPickerRef.current.contains(e.target as Node)
+      ) {
+        setThinkingPickerOpen(false);
+      }
     };
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
-  }, [modelPickerOpen]);
+  }, [modelPickerOpen, thinkingPickerOpen]);
 
   const quickTags = [
     {
@@ -659,7 +748,7 @@ export function WelcomeView() {
 
           {/* Bottom Actions */}
           <div className="flex items-center justify-between pt-3 border-t border-border-muted">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={handleSelectFolder}
@@ -788,6 +877,119 @@ export function WelcomeView() {
                   </div>
                 )}
               </div>
+
+              {isElectron && (
+                <div className="relative" ref={thinkingPickerRef}>
+                  <button
+                    type="button"
+                    onClick={() => setThinkingPickerOpen((open) => !open)}
+                    disabled={isSavingThinking.current}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs transition-colors ${
+                      THINKING_LEVEL_STYLES[thinkingLevel]
+                    } ${isSavingThinking.current ? 'opacity-60 cursor-not-allowed' : ''}`}
+                    title={t('chat.toggleThinking')}
+                    aria-haspopup="menu"
+                    aria-expanded={thinkingPickerOpen}
+                  >
+                    <Brain className={`w-3 h-3 ${thinkingLevel === 'off' ? 'opacity-60' : ''}`} />
+                    <span className="font-medium">{t(currentThinkingLabel)}</span>
+                    <ChevronDown
+                      className={`w-3 h-3 transition-transform ${
+                        thinkingPickerOpen ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </button>
+
+                  {thinkingPickerOpen && (
+                    <div className="absolute bottom-full left-0 mb-2 w-40 rounded-xl border border-border bg-background shadow-xl z-50 py-1.5">
+                      <div className="px-3 py-1.5 text-[10px] font-semibold text-text-muted uppercase tracking-wider">
+                        {t('chat.thinking')}
+                      </div>
+                      {THINKING_LEVEL_OPTIONS.map((option, index) => {
+                        const selected = option.value === thinkingLevel;
+                        const active = option.value !== 'off';
+                        const menuStyle = THINKING_LEVEL_MENU_STYLES[option.value];
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => {
+                              setThinkingPickerOpen(false);
+                              updateThinkingLevel(option.value);
+                            }}
+                            className={`w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors ${
+                              selected
+                                ? menuStyle.selected
+                                : 'text-text-primary hover:bg-surface-hover'
+                            } ${index === 1 ? 'border-t border-border-subtle mt-1 pt-2' : ''}`}
+                            role="menuitemradio"
+                            aria-checked={selected}
+                          >
+                            <span
+                              className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                active ? menuStyle.dot : 'bg-border'
+                              } ${selected ? 'opacity-100' : 'opacity-35'}`}
+                            />
+                            <span
+                              className={`flex-1 ${
+                                selected
+                                  ? ''
+                                  : option.value === 'off'
+                                    ? 'text-text-primary'
+                                    : THINKING_LEVEL_STYLES[option.value]
+                                        .split(' ')
+                                        .filter(
+                                          (part) =>
+                                            part.startsWith('text-') ||
+                                            part.startsWith('dark:text-')
+                                        )
+                                        .join(' ')
+                              }`}
+                            >
+                              {t(option.labelKey)}
+                            </span>
+                            {selected && (
+                              <span
+                                className={`w-1.5 h-1.5 rounded-full shrink-0 ${menuStyle.dot}`}
+                              />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {isElectron && (
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={planMode}
+                  onClick={() => setPlanMode((value) => !value)}
+                  disabled={isSubmitting}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs transition-colors ${
+                    planMode
+                      ? 'bg-amber-500/10 border-amber-500/30 text-amber-600 dark:text-amber-400'
+                      : 'border-border-subtle bg-background/60 text-text-muted hover:bg-surface-hover hover:text-text-secondary'
+                  } ${isSubmitting ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  title={planMode ? t('chat.planModeActive') : t('chat.planModeOff')}
+                >
+                  <ClipboardList className={`w-3 h-3 ${planMode ? '' : 'opacity-60'}`} />
+                  <span>{t('chat.plan')}</span>
+                  <span
+                    className={`relative inline-block w-7 h-4 rounded-full transition-colors ${
+                      planMode ? 'bg-amber-500' : 'bg-border'
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white transition-transform ${
+                        planMode ? 'translate-x-3' : 'translate-x-0'
+                      }`}
+                    />
+                  </span>
+                </button>
+              )}
             </div>
 
             <button

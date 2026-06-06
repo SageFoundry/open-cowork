@@ -20,6 +20,9 @@ import i18n from '../i18n/config';
 // Check if running in Electron
 const isElectron = typeof window !== 'undefined' && window.electronAPI !== undefined;
 
+let ipcListenerRefCount = 0;
+let ipcListenerCleanup: (() => void) | null = null;
+
 export function useIPC() {
   // Handle incoming server events - only setup once
   useEffect(() => {
@@ -28,7 +31,18 @@ export function useIPC() {
       return;
     }
 
-    console.log('[useIPC] Setting up IPC listener (once)');
+    ipcListenerRefCount += 1;
+    if (ipcListenerCleanup) {
+      return () => {
+        ipcListenerRefCount = Math.max(0, ipcListenerRefCount - 1);
+        if (ipcListenerRefCount === 0) {
+          ipcListenerCleanup?.();
+          ipcListenerCleanup = null;
+        }
+      };
+    }
+
+    console.log('[useIPC] Setting up shared IPC listener');
     let disposed = false;
 
     // --- RAF batching for high-frequency events ---
@@ -440,8 +454,7 @@ export function useIPC() {
       }
     })();
 
-    // Cleanup on unmount only
-    return () => {
+    ipcListenerCleanup = () => {
       disposed = true;
       console.log('[useIPC] Cleaning up IPC listener');
       // Flush any pending RAF batches before cancelling to avoid lost updates
@@ -458,6 +471,15 @@ export function useIPC() {
         flushTraces();
       }
       cleanup?.();
+    };
+
+    // Cleanup on final unmount only
+    return () => {
+      ipcListenerRefCount = Math.max(0, ipcListenerRefCount - 1);
+      if (ipcListenerRefCount === 0) {
+        ipcListenerCleanup?.();
+        ipcListenerCleanup = null;
+      }
     };
   }, []); // Empty deps - setup listener only once!
 
@@ -496,7 +518,12 @@ export function useIPC() {
 
   // Start a new session
   const startSession = useCallback(
-    async (title: string, promptOrContent: string | ContentBlock[], cwd?: string) => {
+    async (
+      title: string,
+      promptOrContent: string | ContentBlock[],
+      cwd?: string,
+      planMode?: boolean
+    ) => {
       setLoading(true);
       console.log('[useIPC] Starting session:', title);
 
@@ -523,6 +550,7 @@ export function useIPC() {
           mountedPaths: [],
           allowedTools: ['websearch', 'read', 'write', 'edit', 'list_directory', 'glob', 'grep'],
           memoryEnabled: false,
+          planMode: planMode ?? false,
         };
 
         addSession(session);
@@ -572,6 +600,7 @@ export function useIPC() {
               memoryStrategy: runtimeSettings.memoryStrategy,
               maxContextTokens: runtimeSettings.maxContextTokens,
             },
+            planMode,
           },
         });
         if (session) {
