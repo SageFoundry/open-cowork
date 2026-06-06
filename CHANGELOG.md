@@ -5,6 +5,30 @@ All notable changes to the Open Cowork AI agent desktop app will be documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.9] - 2026-06-06
+
+### 🚀 新功能
+
+#### 会话级配置隔离
+- 每个会话独立保存 model、configSet、thinkingLevel，切换会话时配置自动跟随
+- 新增 `session.updateRuntime` IPC 事件，运行时修改会话配置无需重建
+- 数据库 sessions 表新增 `config_set_id`、`thinking_level` 字段
+
+#### 诊断包重构
+- 导出改为以当前会话为中心，不再收集所有会话
+- 日志自动脱敏（API key、路径、token 替换）
+- 新增 Pi 路由诊断（provider、protocol、model、thinkingLevel）
+- 按钮文案改为"生成当前会话支持包"
+
+### 🔧 改进
+- sudo 检测改为逐字符引号解析，避免误匹配 commit message
+- ChatView turn 结束时自动滚动到底部
+- agent-runner 使用 `getForConfigSet()` 替代 `getAll()` 确保会话配置独立
+- 移除旧的"全局 model 覆盖会话 model"逻辑
+
+### 📦 发布构成
+- Open Cowork v3.5.9 Windows 安装包
+
 ## [3.5.7] - 2026-05-28
 
 ### 🚀 重大更新
