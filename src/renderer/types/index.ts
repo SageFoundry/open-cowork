@@ -454,6 +454,8 @@ export type ClientEvent =
         content?: ContentBlock[];
         contextConfig?: SessionContextConfig;
         planMode?: boolean;
+        clientMessageId?: string;
+        clientTimestamp?: number;
       };
     }
   | {
@@ -463,6 +465,8 @@ export type ClientEvent =
         prompt: string;
         content?: ContentBlock[];
         contextConfig?: SessionContextConfig;
+        clientMessageId?: string;
+        clientTimestamp?: number;
       };
     }
   | { type: 'session.compact'; payload: { sessionId: string } }
@@ -608,7 +612,41 @@ export type ServerEvent =
         code?: 'CONFIG_REQUIRED_ACTIVE_SET';
         action?: 'open_api_settings' | 'open_tools_settings';
       };
-    };
+    }
+  | { type: 'update.status'; payload: UpdateState }
+  | { type: 'update.downloadProgress'; payload: { progress: DownloadProgress; state: UpdateState } }
+  | { type: 'update.downloaded'; payload: { version: string; state: UpdateState } }
+  | { type: 'update.error'; payload: { error: string; state: UpdateState } };
+
+// Update types
+export type UpdateStatus =
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'not-available'
+  | 'downloading'
+  | 'downloaded'
+  | 'error';
+
+export interface UpdateState {
+  status: UpdateStatus;
+  currentVersion: string;
+  latestVersion: string | null;
+  releaseNotes: string | null;
+  releaseUrl: string | null;
+  downloadUrl: string | null;
+  downloadProgress: DownloadProgress | null;
+  error: string | null;
+  dismissedVersion: string | null;
+}
+
+export interface DownloadProgress {
+  total: number;
+  delta: number;
+  transferred: number;
+  percent: number;
+  bytesPerSecond: number;
+}
 
 // Settings types
 export interface Settings {

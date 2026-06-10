@@ -155,6 +155,8 @@
     "apiKey": "API 密钥",
     "enterApiKey": "输入你的 API Key",
     "apiKeyDescription": "仅保存在本地，并绑定到当前配置方案。",
+    "showApiKey": "显示 API 密钥",
+    "hideApiKey": "隐藏 API 密钥",
     "protocol": "协议",
     "baseUrl": "基础 URL",
     "model": "模型",
@@ -1099,5 +1101,30 @@
     "description": "应用遇到了意外错误。你可以点击下方按钮尝试恢复。",
     "details": "错误详情",
     "retry": "重试"
+  },
+  "update": {
+    "tooltip": {
+      "available": "新版本 v{{version}} 可用",
+      "downloading": "下载中 {{progress}}%",
+      "downloaded": "更新已就绪，点击安装",
+      "error": "更新检查失败"
+    },
+    "dialog": {
+      "title": "应用更新",
+      "subtitle": "获取最新功能和改进",
+      "currentVersion": "当前版本",
+      "latestVersion": "最新版本",
+      "updateAvailable": "可更新",
+      "upToDate": "已是最新版本",
+      "downloading": "正在下载...",
+      "download": "下载更新",
+      "downloadInstaller": "下载安装包",
+      "downloadLatest": "下载最新版本",
+      "installAndRestart": "立即重启安装",
+      "viewReleaseNotes": "查看更新日志",
+      "dismiss": "稍后提醒",
+      "checkForUpdates": "检查更新",
+      "retry": "重试"
+    }
   }
 }

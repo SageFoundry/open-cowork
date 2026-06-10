@@ -23,6 +23,7 @@ import { SandboxSetupDialog } from './components/SandboxSetupDialog';
 import { SandboxSyncToast } from './components/SandboxSyncToast';
 import { GlobalNoticeToast } from './components/GlobalNoticeToast';
 import { PanelErrorBoundary } from './components/PanelErrorBoundary';
+import { UpdateDialog } from './components/UpdateDialog';
 import type { AppConfig } from './types';
 import type { GlobalNoticeAction } from './store';
 
@@ -222,6 +223,8 @@ function App() {
           </PanelErrorBoundary>
         )}
       </div>
+
+      <UpdateDialog />
 
       {/* Permission Dialog */}
       {pendingPermission && <PermissionDialog permission={pendingPermission} />}

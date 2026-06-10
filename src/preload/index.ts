@@ -21,6 +21,7 @@ import type {
   LocalOllamaDiscoveryResult,
   BackgroundTask,
   BackgroundTaskStartInput,
+  UpdateState,
 } from '../renderer/types';
 import type { DiagnosticInput, DiagnosticResult } from '../renderer/types';
 import type {
@@ -38,8 +39,8 @@ import type {
 } from '../shared/ipc-types';
 import type { EnvironmentDoctorReport } from '../main/runtime/environment-doctor';
 
-// Track registered callbacks to prevent duplicate listeners
-let registeredCallback: ((event: ServerEvent) => void) | null = null;
+// Fan out the single IPC listener to all renderer subscribers.
+const registeredCallbacks = new Set<(event: ServerEvent) => void>();
 let ipcListener: ((event: Electron.IpcRendererEvent, data: ServerEvent) => void) | null = null;
 
 // Allowlist of valid ClientEvent types to prevent spoofing arbitrary IPC channels
@@ -76,36 +77,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
       console.warn('[Preload] Blocked unauthorized event type:', event.type);
       return;
     }
-    console.log('[Preload] Sending event:', event.type);
     ipcRenderer.send('client-event', event);
   },
 
-  // Receive events from main process - ensures only ONE listener
+  // Receive events from main process. Keep one ipcRenderer listener, but allow
+  // multiple renderer subscribers so one component cannot steal events from another.
   on: (callback: (event: ServerEvent) => void) => {
-    // Remove previous listener if exists
-    if (ipcListener) {
-      console.log('[Preload] Removing previous listener');
-      ipcRenderer.removeListener('server-event', ipcListener);
+    registeredCallbacks.add(callback);
+
+    if (!ipcListener) {
+      ipcListener = (_: Electron.IpcRendererEvent, data: ServerEvent) => {
+        for (const registeredCallback of Array.from(registeredCallbacks)) {
+          registeredCallback(data);
+        }
+      };
+      ipcRenderer.on('server-event', ipcListener);
     }
-
-    registeredCallback = callback;
-    ipcListener = (_: Electron.IpcRendererEvent, data: ServerEvent) => {
-      console.log('[Preload] Received event:', data.type);
-      if (registeredCallback) {
-        registeredCallback(data);
-      }
-    };
-
-    console.log('[Preload] Registering new listener');
-    ipcRenderer.on('server-event', ipcListener);
 
     // Return cleanup function
     return () => {
-      console.log('[Preload] Cleanup called');
-      if (ipcListener) {
+      registeredCallbacks.delete(callback);
+      if (ipcListener && registeredCallbacks.size === 0) {
         ipcRenderer.removeListener('server-event', ipcListener);
         ipcListener = null;
-        registeredCallback = null;
       }
     };
   },
@@ -116,7 +110,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
       console.warn('[Preload] Blocked unauthorized invoke type:', event.type);
       throw new Error(`Unauthorized event type: ${event.type}`);
     }
-    console.log('[Preload] Invoking:', event.type);
     return ipcRenderer.invoke('client-invoke', event);
   },
 
@@ -482,6 +475,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openDetectedUrl: (taskId: string): Promise<boolean> =>
       ipcRenderer.invoke('tasks.openDetectedUrl', taskId),
   },
+
+  // Update methods
+  update: {
+    check: (): Promise<UpdateState> => ipcRenderer.invoke('update.check'),
+    download: (): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke('update.download'),
+    install: (): Promise<void> => ipcRenderer.invoke('update.install'),
+    dismiss: (): Promise<void> => ipcRenderer.invoke('update.dismiss'),
+    getState: (): Promise<UpdateState> => ipcRenderer.invoke('update.getState'),
+    openReleasePage: (): Promise<void> => ipcRenderer.invoke('update.openReleasePage'),
+  },
 });
 
 // Type declaration for the renderer process
@@ -778,6 +782,14 @@ declare global {
         getLogTail: (taskId: string, maxChars?: number) => Promise<string>;
         openLog: (taskId: string) => Promise<boolean>;
         openDetectedUrl: (taskId: string) => Promise<boolean>;
+      };
+      update: {
+        check: () => Promise<UpdateState>;
+        download: () => Promise<{ success: boolean; error?: string }>;
+        install: () => Promise<void>;
+        dismiss: () => Promise<void>;
+        getState: () => Promise<UpdateState>;
+        openReleasePage: () => Promise<void>;
       };
     };
   }

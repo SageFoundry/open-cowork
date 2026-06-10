@@ -35,6 +35,12 @@ Source edits under `E:\workspace\open-cowork\src\` affect dev mode immediately, 
 
 When checking the current version, read `package.json` and confirm the running process path if it matters.
 
+Auto-update dev testing:
+
+- Dev mode uses `dev-app-update.yml` plus `autoUpdater.forceDevUpdateConfig = true`, so `npm run dev` can exercise update-check UI without a full Windows build.
+- For deterministic UI testing without GitHub/network dependency, set `OPEN_COWORK_MOCK_UPDATE=available|downloaded|not-available|error` before `npm run dev`. Optionally set `OPEN_COWORK_MOCK_UPDATE_VERSION=3.5.9` and `OPEN_COWORK_MOCK_UPDATE_DOWNLOAD_URL=...`.
+- The update flow uses the GitHub Releases API for version detection and opens the selected release asset URL in the browser for download. It does not rely on `electron-updater` download/install behavior in this simplified flow.
+
 ## Commands
 
 Use PowerShell on Windows.

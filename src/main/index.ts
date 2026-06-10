@@ -46,6 +46,7 @@ import {
 import { eventRequiresSessionManager } from './client-event-utils';
 import { getUnsupportedWorkspacePathReason } from './workspace-path-constraints';
 import { log, logWarn, logError, closeLogFile, setDevLogsEnabled } from './utils/logger';
+import { installNodeReadableGetReaderShim } from './utils/readable-stream-shim';
 import { listRecentWorkspaceFiles } from './utils/recent-workspace-files';
 import { registerConfigHandlers } from './ipc/config-handlers';
 import { registerMcpHandlers } from './ipc/mcp-handlers';
@@ -57,11 +58,15 @@ import { registerScheduleHandlers } from './ipc/schedule-handlers';
 import { registerTasksHandlers } from './ipc/tasks-handlers';
 import { registerMemoryHandlers } from './ipc/memory-handlers';
 import { registerToolCompressionHandlers } from './ipc/tool-compression-handlers';
+import { registerUpdateHandlers } from './ipc/update-handlers';
+import { initUpdateManager, subscribeUpdateState, checkForUpdates } from './update/update-manager';
 import { BackgroundTaskService } from './background/background-task-service';
 import { initializeOpenRouterModelSpecsCache } from './config/openrouter-model-specs-cache';
 
 // Current working directory used for new sessions and relative path resolution.
 let currentWorkingDir: string | null = null;
+
+installNodeReadableGetReaderShim();
 
 // Load .env file from project root (for development)
 const envPath = resolve(__dirname, '../../.env');
@@ -875,18 +880,20 @@ app
       }
     });
 
-    // Auto-updater: check for updates in production
-    if (!isDev) {
-      import('electron-updater')
-        .then(({ autoUpdater }) => {
-          autoUpdater.checkForUpdatesAndNotify().catch((err: unknown) => {
-            log('[AutoUpdater] Update check failed:', err);
-          });
-        })
-        .catch((err: unknown) => {
-          log('[AutoUpdater] Failed to load electron-updater:', err);
+    initUpdateManager(() => mainWindow)
+      .then(() => {
+        subscribeUpdateState((state) => {
+          sendToRenderer({ type: 'update.status', payload: state });
         });
-    }
+        setTimeout(() => {
+          checkForUpdates({ silentOnError: app.isPackaged }).catch((err: unknown) => {
+            log('[UpdateManager] Initial update check failed:', err);
+          });
+        }, 5000);
+      })
+      .catch((err: unknown) => {
+        log('[UpdateManager] Failed to initialize:', err);
+      });
 
     startNavServer(() => mainWindow);
 
@@ -1489,6 +1496,7 @@ registerMemoryHandlers({
     sessionManager?.listSessions().find((session) => session.id === sessionId)?.cwd ?? null,
 });
 registerToolCompressionHandlers();
+registerUpdateHandlers(() => mainWindow);
 async function handleClientEvent(event: ClientEvent): Promise<unknown> {
   // Check if configured before starting sessions
   if (event.type === 'session.start' && !configStore.hasUsableCredentialsForActiveSet()) {
@@ -1528,7 +1536,9 @@ async function handleClientEvent(event: ClientEvent): Promise<unknown> {
         event.payload.allowedTools,
         event.payload.content,
         event.payload.contextConfig,
-        event.payload.planMode
+        event.payload.planMode,
+        event.payload.clientMessageId,
+        event.payload.clientTimestamp
       );
 
     case 'session.continue':
@@ -1536,7 +1546,9 @@ async function handleClientEvent(event: ClientEvent): Promise<unknown> {
         event.payload.sessionId,
         event.payload.prompt,
         event.payload.content,
-        event.payload.contextConfig
+        event.payload.contextConfig,
+        event.payload.clientMessageId,
+        event.payload.clientTimestamp
       );
 
     case 'session.compact':

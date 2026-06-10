@@ -11,6 +11,8 @@ import {
   RefreshCw,
   Plus,
   X,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { useApiConfigState } from '../../hooks/useApiConfigState';
 import { ApiConfigSetManager } from '../ApiConfigSetManager';
@@ -32,6 +34,7 @@ const THINKING_LEVEL_OPTIONS: Array<{ value: ThinkingLevel; labelKey: string }> 
 export function SettingsAPI() {
   const { t } = useTranslation();
   const [newModelInput, setNewModelInput] = useState('');
+  const [showApiKey, setShowApiKey] = useState(false);
   const {
     provider,
     customProtocol,
@@ -164,14 +167,25 @@ export function SettingsAPI() {
           {t('api.apiKey')}
         </label>
         <p className="text-xs leading-5 text-text-muted">{t('api.apiKeyDescription')}</p>
-        <input
-          id="api-key-input"
-          type="password"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          placeholder={currentPreset?.keyPlaceholder || t('api.enterApiKey')}
-          className="w-full px-4 py-3 rounded-lg bg-background border border-border text-text-primary placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent transition-all"
-        />
+        <div className="relative">
+          <input
+            id="api-key-input"
+            type={showApiKey ? 'text' : 'password'}
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={currentPreset?.keyPlaceholder || t('api.enterApiKey')}
+            className="w-full px-4 py-3 pr-12 rounded-lg bg-background border border-border text-text-primary placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent transition-all"
+          />
+          <button
+            type="button"
+            onClick={() => setShowApiKey((value) => !value)}
+            className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-lg flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-surface-hover transition-colors"
+            title={showApiKey ? t('api.hideApiKey') : t('api.showApiKey')}
+            aria-label={showApiKey ? t('api.hideApiKey') : t('api.showApiKey')}
+          >
+            {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+          </button>
+        </div>
         {currentPreset?.keyHint && (
           <p className="text-xs text-text-muted">{currentPreset.keyHint}</p>
         )}

@@ -2292,6 +2292,42 @@ ${hints.join('\n')}
     });
   }
 
+  /**
+   * Some Claude-compatible/custom models emit Claude Code style PascalCase tool
+   * names even when the registered pi-agent custom tool name is lowercase.
+   * Keep the canonical lowercase tools, but add thin aliases for common built-ins
+   * so calls like `Bash` do not fail with "Tool Bash not found".
+   */
+  private static addClaudeStyleToolNameAliases(tools: ToolDefinition[]): ToolDefinition[] {
+    const aliasMap: Record<string, string> = {
+      bash: 'Bash',
+      read: 'Read',
+      edit: 'Edit',
+      write: 'Write',
+      glob: 'Glob',
+      grep: 'Grep',
+      http: 'Http',
+      pwsh: 'Pwsh',
+    };
+    const existingNames = new Set(tools.map((tool) => tool.name));
+    const aliases: ToolDefinition[] = [];
+
+    for (const tool of tools) {
+      const aliasName = aliasMap[tool.name];
+      if (!aliasName || existingNames.has(aliasName)) {
+        continue;
+      }
+      existingNames.add(aliasName);
+      aliases.push({
+        ...tool,
+        name: aliasName,
+        label: tool.label ? `${tool.label} (compat)` : aliasName,
+      } as ToolDefinition);
+    }
+
+    return aliases.length > 0 ? [...tools, ...aliases] : tools;
+  }
+
   private wrapBashToolForBackgroundSyntax(
     tools: ToolDefinition[],
     sessionId: string,
@@ -4227,7 +4263,8 @@ ${hints.join('\n')}
         session.id,
         effectiveCwd
       );
-      const sdkCustomTools = [...limitedShellTools, ...limitedBaseCustomTools];
+      const sdkShellTools = ClaudeAgentRunner.addClaudeStyleToolNameAliases(limitedShellTools);
+      const sdkCustomTools = [...sdkShellTools, ...limitedBaseCustomTools];
       const activeToolNames = Array.from(new Set(sdkCustomTools.map((tool) => tool.name)));
 
       // Diagnostic: log tools being passed to SDK (helps debug Ollama tool use)
@@ -4249,7 +4286,7 @@ ${hints.join('\n')}
       );
 
       const toolFingerprintInput = {
-        builtIn: limitedShellTools.map((tool) => describeToolForFingerprint(tool)),
+        builtIn: sdkShellTools.map((tool) => describeToolForFingerprint(tool)),
         custom: limitedBaseCustomTools.map((tool) => describeToolForFingerprint(tool)),
       };
       const cacheDiagnostics: CacheDiagnosticsPayload = {

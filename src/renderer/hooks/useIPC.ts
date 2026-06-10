@@ -27,7 +27,6 @@ export function useIPC() {
   // Handle incoming server events - only setup once
   useEffect(() => {
     if (!isElectron) {
-      console.log('[useIPC] Not in Electron, skipping IPC setup');
       return;
     }
 
@@ -42,7 +41,6 @@ export function useIPC() {
       };
     }
 
-    console.log('[useIPC] Setting up shared IPC listener');
     let disposed = false;
 
     // --- RAF batching for high-frequency events ---
@@ -164,7 +162,6 @@ export function useIPC() {
 
     const cleanup = window.electronAPI.on((event: ServerEvent) => {
       const store = useAppStore.getState();
-      console.log('[useIPC] Received event:', event.type);
 
       try {
         switch (event.type) {
@@ -196,12 +193,6 @@ export function useIPC() {
             break;
 
           case 'stream.message':
-            console.log(
-              '[useIPC] stream.message received:',
-              event.payload.message.role,
-              'content:',
-              JSON.stringify(event.payload.message.content)
-            );
             // Clear pending partial buffer to prevent RAF from appending stale chunks
             delete pendingPartials[event.payload.sessionId];
             // Clear thinking buffer too — final thinking is in the message content blocks
@@ -292,31 +283,19 @@ export function useIPC() {
           }
 
           case 'config.status': {
-            console.log('[useIPC] config.status received:', event.payload.isConfigured);
             applyConfigSnapshot(event.payload.config, event.payload.isConfigured);
             break;
           }
 
           case 'sandbox.progress':
-            console.log(
-              '[useIPC] sandbox.progress received:',
-              event.payload.phase,
-              event.payload.message
-            );
             store.setSandboxSetupProgress(event.payload);
             break;
 
           case 'sandbox.sync':
-            console.log(
-              '[useIPC] sandbox.sync received:',
-              event.payload.phase,
-              event.payload.message
-            );
             store.setSandboxSyncStatus(event.payload);
             break;
 
           case 'workdir.changed':
-            console.log('[useIPC] workdir.changed received:', event.payload.path);
             store.setWorkingDir(event.payload.path || null);
             break;
 
@@ -406,8 +385,20 @@ export function useIPC() {
             }
             break;
 
+          case 'update.status':
+            store.setUpdateState(event.payload);
+            break;
+
+          case 'update.downloaded':
+            store.setUpdateState(event.payload.state);
+            break;
+
+          case 'update.error':
+            store.setUpdateState(event.payload.state);
+            break;
+
           default:
-            console.log('[useIPC] Unknown server event:', event);
+            break;
         }
       } catch (err) {
         console.error('[useIPC] Error handling server event:', event.type, err);
@@ -454,9 +445,19 @@ export function useIPC() {
       }
     })();
 
+    void (async () => {
+      try {
+        const state = await window.electronAPI.update?.getState?.();
+        if (!disposed && state) {
+          useAppStore.getState().setUpdateState(state);
+        }
+      } catch (error) {
+        console.error('[useIPC] Failed to bootstrap update state:', error);
+      }
+    })();
+
     ipcListenerCleanup = () => {
       disposed = true;
-      console.log('[useIPC] Cleaning up IPC listener');
       // Flush any pending RAF batches before cancelling to avoid lost updates
       if (partialRafId !== null) {
         cancelAnimationFrame(partialRafId);
@@ -499,20 +500,16 @@ export function useIPC() {
   // Send event to main process
   const send = useCallback((event: ClientEvent) => {
     if (!isElectron) {
-      console.log('[useIPC] Browser mode - would send:', event.type);
       return;
     }
-    console.log('[useIPC] Sending:', event.type);
     window.electronAPI.send(event);
   }, []);
 
   // Invoke and wait for response
   const invoke = useCallback(async <T>(event: ClientEvent): Promise<T> => {
     if (!isElectron) {
-      console.log('[useIPC] Browser mode - would invoke:', event.type);
       return null as T;
     }
-    console.log('[useIPC] Invoking:', event.type);
     return window.electronAPI.invoke<T>(event);
   }, []);
 
@@ -525,7 +522,6 @@ export function useIPC() {
       planMode?: boolean
     ) => {
       setLoading(true);
-      console.log('[useIPC] Starting session:', title);
 
       // Normalize input to ContentBlock array
       const content: ContentBlock[] =
@@ -589,6 +585,8 @@ export function useIPC() {
       // Electron mode
       try {
         const runtimeSettings = useAppStore.getState().settings;
+        const clientTimestamp = Date.now();
+        const clientMessageId = `msg-user-${clientTimestamp}`;
         const session = await invoke<Session>({
           type: 'session.start',
           payload: {
@@ -601,6 +599,8 @@ export function useIPC() {
               maxContextTokens: runtimeSettings.maxContextTokens,
             },
             planMode,
+            clientMessageId,
+            clientTimestamp,
           },
         });
         if (session) {
@@ -609,11 +609,11 @@ export function useIPC() {
 
           // Immediately add user message to UI
           const userMessage: Message = {
-            id: `msg-user-${Date.now()}`,
+            id: clientMessageId,
             sessionId: session.id,
             role: 'user',
             content,
-            timestamp: Date.now(),
+            timestamp: clientTimestamp,
           };
           addMessage(session.id, userMessage);
           startExecutionClock(session.id, userMessage.timestamp);
@@ -651,7 +651,6 @@ export function useIPC() {
   const continueSession = useCallback(
     async (sessionId: string, promptOrContent: string | ContentBlock[]) => {
       setLoading(true);
-      console.log('[useIPC] Continuing session:', sessionId);
 
       // Normalize input to ContentBlock array
       const content: ContentBlock[] =
@@ -681,12 +680,14 @@ export function useIPC() {
       const hasActiveTurn = Boolean(ss?.activeTurn);
       const hasPending = (ss?.pendingTurns?.length ?? 0) > 0;
       const shouldQueue = isSessionRunning || hasActiveTurn || hasPending;
+      const clientTimestamp = Date.now();
+      const clientMessageId = `msg-user-${clientTimestamp}`;
       const userMessage: Message = {
-        id: `msg-user-${Date.now()}`,
+        id: clientMessageId,
         sessionId,
         role: 'user',
         content,
-        timestamp: Date.now(),
+        timestamp: clientTimestamp,
         localStatus: shouldQueue ? 'queued' : undefined,
       };
       addMessage(sessionId, userMessage);
@@ -735,6 +736,8 @@ export function useIPC() {
               memoryStrategy: runtimeSettings.memoryStrategy,
               maxContextTokens: runtimeSettings.maxContextTokens,
             },
+            clientMessageId,
+            clientTimestamp,
           },
         });
         // Loading will be reset when we receive session.status event
@@ -855,10 +858,8 @@ export function useIPC() {
       options?: { limit?: number; beforeTimestamp?: number }
     ): Promise<SessionMessagesPage> => {
       if (!isElectron) {
-        console.log('[useIPC] Browser mode - no persistent messages');
         return { messages: [], hasMore: false, oldestTimestamp: null };
       }
-      console.log('[useIPC] Getting messages for session:', sessionId);
       const page = await invoke<SessionMessagesPage>({
         type: 'session.getMessages',
         payload: {
@@ -875,7 +876,6 @@ export function useIPC() {
   const getSessionTraceSteps = useCallback(
     async (sessionId: string): Promise<TraceStep[]> => {
       if (!isElectron) {
-        console.log('[useIPC] Browser mode - no persistent trace steps');
         return [];
       }
       return (

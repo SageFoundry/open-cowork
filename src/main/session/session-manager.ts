@@ -430,7 +430,13 @@ export class SessionManager {
   private activeSessions: Map<string, AbortController> = new Map();
   private promptQueues: Map<
     string,
-    Array<{ prompt: string; content?: ContentBlock[]; contextConfig?: SessionContextConfig }>
+    Array<{
+      prompt: string;
+      content?: ContentBlock[];
+      contextConfig?: SessionContextConfig;
+      clientMessageId?: string;
+      clientTimestamp?: number;
+    }>
   > = new Map();
   private pendingPermissions: Map<string, (result: PermissionResult) => void> = new Map();
   private pendingSudoPasswords: Map<
@@ -609,7 +615,9 @@ export class SessionManager {
     allowedTools?: string[],
     content?: ContentBlock[],
     contextConfig?: SessionContextConfig,
-    planMode?: boolean
+    planMode?: boolean,
+    clientMessageId?: string,
+    clientTimestamp?: number
   ): Promise<Session> {
     log('[SessionManager] Starting new session:', title);
 
@@ -619,7 +627,7 @@ export class SessionManager {
     this.saveSession(session);
 
     // Start processing the prompt with content blocks
-    this.enqueuePrompt(session, prompt, content, contextConfig);
+    this.enqueuePrompt(session, prompt, content, contextConfig, clientMessageId, clientTimestamp);
 
     return session;
   }
@@ -776,7 +784,9 @@ export class SessionManager {
     sessionId: string,
     prompt: string,
     content?: ContentBlock[],
-    contextConfig?: SessionContextConfig
+    contextConfig?: SessionContextConfig,
+    clientMessageId?: string,
+    clientTimestamp?: number
   ): Promise<void> {
     log('[SessionManager] Continuing session:', sessionId);
 
@@ -785,7 +795,7 @@ export class SessionManager {
       throw new Error(`Session not found: ${sessionId}`);
     }
 
-    this.enqueuePrompt(session, prompt, content, contextConfig);
+    this.enqueuePrompt(session, prompt, content, contextConfig, clientMessageId, clientTimestamp);
   }
 
   async compactSession(sessionId: string, contextConfig?: SessionContextConfig): Promise<void> {
@@ -1541,7 +1551,9 @@ export class SessionManager {
     session: Session,
     prompt: string,
     content?: ContentBlock[],
-    contextConfigOverride?: SessionContextConfig
+    contextConfigOverride?: SessionContextConfig,
+    clientMessageId?: string,
+    clientTimestamp?: number
   ): Promise<void> {
     const traceId = generateTraceId();
     return runWithLogContext({ sessionId: session.id, traceId }, async () => {
@@ -1592,13 +1604,15 @@ export class SessionManager {
         // Save user message to database for persistence
         const existingMessages = this.getMessages(session.id);
         const userMessage: Message = {
-          id: uuidv4(),
+          id: clientMessageId || uuidv4(),
           sessionId: session.id,
           role: 'user',
           content: messageContent, // Save full content including images and files
-          timestamp: Date.now(),
+          timestamp: clientTimestamp || Date.now(),
         };
-        this.saveMessage(userMessage);
+        if (!existingMessages.some((message) => message.id === userMessage.id)) {
+          this.saveMessage(userMessage);
+        }
         logCtx(
           '[SessionManager] User message saved:',
           userMessage.id,
@@ -1859,10 +1873,12 @@ export class SessionManager {
     session: Session,
     prompt: string,
     content?: ContentBlock[],
-    contextConfig?: SessionContextConfig
+    contextConfig?: SessionContextConfig,
+    clientMessageId?: string,
+    clientTimestamp?: number
   ): void {
     const queue = this.promptQueues.get(session.id) || [];
-    queue.push({ prompt, content, contextConfig });
+    queue.push({ prompt, content, contextConfig, clientMessageId, clientTimestamp });
     this.promptQueues.set(session.id, queue);
 
     if (!this.activeSessions.has(session.id)) {
@@ -1908,7 +1924,14 @@ export class SessionManager {
             return; // finally handles cleanup
           }
 
-          await this.processPrompt(latestSession, item.prompt, item.content, item.contextConfig);
+          await this.processPrompt(
+            latestSession,
+            item.prompt,
+            item.content,
+            item.contextConfig,
+            item.clientMessageId,
+            item.clientTimestamp
+          );
 
           if (controller.signal.aborted) return; // finally handles cleanup
         }

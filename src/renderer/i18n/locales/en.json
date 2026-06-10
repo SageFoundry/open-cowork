@@ -155,6 +155,8 @@
     "apiKey": "API Key",
     "enterApiKey": "Enter your API Key",
     "apiKeyDescription": "Saved locally and scoped to the active configuration set.",
+    "showApiKey": "Show API key",
+    "hideApiKey": "Hide API key",
     "protocol": "Protocol",
     "baseUrl": "Base URL",
     "model": "Model",
@@ -1095,5 +1097,30 @@
     "description": "An unexpected error occurred in the application. You can try to recover by clicking the button below.",
     "details": "Error details",
     "retry": "Try again"
+  },
+  "update": {
+    "tooltip": {
+      "available": "New version v{{version}} available",
+      "downloading": "Downloading {{progress}}%",
+      "downloaded": "Update ready to install",
+      "error": "Update check failed"
+    },
+    "dialog": {
+      "title": "App Update",
+      "subtitle": "Get the latest features and improvements",
+      "currentVersion": "Current Version",
+      "latestVersion": "Latest Version",
+      "updateAvailable": "Update Available",
+      "upToDate": "You're up to date",
+      "downloading": "Downloading...",
+      "download": "Download Update",
+      "downloadInstaller": "Download Installer",
+      "downloadLatest": "Download Latest Version",
+      "installAndRestart": "Install and Restart",
+      "viewReleaseNotes": "View Release Notes",
+      "dismiss": "Remind Later",
+      "checkForUpdates": "Check for Updates",
+      "retry": "Retry"
+    }
   }
 }

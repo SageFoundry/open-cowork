@@ -16,6 +16,7 @@ import type {
   TokenBudgetSnapshot,
   BackgroundTask,
   ProviderPresets,
+  UpdateState,
 } from '../types';
 import { applySessionUpdate } from '../utils/session-update';
 import { getProjectIdForCwd } from '../utils/projects';
@@ -190,6 +191,10 @@ interface AppState {
   // System theme (from OS native theme)
   systemDarkMode: boolean;
 
+  // Update state
+  updateState: UpdateState | null;
+  showUpdateDialog: boolean;
+
   // Actions
   setSessions: (sessions: Session[]) => void;
   addSession: (session: Session) => void;
@@ -281,6 +286,10 @@ interface AppState {
 
   // System theme actions
   setSystemDarkMode: (dark: boolean) => void;
+
+  // Update actions
+  setUpdateState: (state: UpdateState | null) => void;
+  setShowUpdateDialog: (show: boolean) => void;
 }
 
 const defaultSettings: Settings = {
@@ -343,16 +352,20 @@ export const useAppStore = create<AppState>((set) => ({
   isSandboxSetupComplete: false,
   sandboxSyncStatus: null,
   systemDarkMode: false,
+  updateState: null,
+  showUpdateDialog: false,
 
   // Session actions
   setSessions: (sessions) => set({ sessions }),
 
   addSession: (session) =>
     set((state) => ({
-      sessions: [session, ...state.sessions],
+      sessions: state.sessions.some((existing) => existing.id === session.id)
+        ? applySessionUpdate(state.sessions, session.id, session)
+        : [session, ...state.sessions],
       sessionStates: {
         ...state.sessionStates,
-        [session.id]: { ...DEFAULT_SESSION_STATE },
+        [session.id]: state.sessionStates[session.id] ?? { ...DEFAULT_SESSION_STATE },
       },
     })),
 
@@ -842,6 +855,10 @@ export const useAppStore = create<AppState>((set) => ({
 
   // System theme actions
   setSystemDarkMode: (dark) => set({ systemDarkMode: dark }),
+
+  // Update actions
+  setUpdateState: (state) => set({ updateState: state }),
+  setShowUpdateDialog: (show) => set({ showUpdateDialog: show }),
 }));
 
 // Expose helpers for nav-server (CLI-driven UI navigation via executeJavaScript)

@@ -37,7 +37,9 @@ import { fetchOllamaModelIndex } from './ollama-api';
 const STEP_NAMES: DiagnosticStepName[] = ['dns', 'tcp', 'tls', 'auth', 'model'];
 const TCP_TIMEOUT_MS = 5000;
 const TLS_TIMEOUT_MS = 5000;
+const MODEL_PROBE_TIMEOUT_MS = 15000;
 const LOCAL_ANTHROPIC_PLACEHOLDER_KEY = 'sk-ant-local-proxy';
+const ANTHROPIC_API_VERSION = '2023-06-01';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -138,6 +140,88 @@ function getApiErrorInfo(err: unknown): { status?: number; message: string } {
     };
   }
   return { message: String(err) };
+}
+
+async function postJsonWithTimeout(
+  url: string,
+  headers: Record<string, string>,
+  body: unknown,
+  timeoutMs = MODEL_PROBE_TIMEOUT_MS
+): Promise<{ status: number; text: string }> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    return { status: response.status, text: await response.text() };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function parseProviderError(status: number, text: string): Error {
+  let message = text.trim();
+  try {
+    const parsed = JSON.parse(text) as { error?: { message?: string }; message?: string };
+    message = parsed.error?.message || parsed.message || message;
+  } catch {
+    // Plain-text provider errors are fine.
+  }
+  const error = new Error(message || `Provider returned HTTP ${status}`) as Error & {
+    status?: number;
+  };
+  error.status = status;
+  return error;
+}
+
+async function probeAnthropicMessagesHttp(input: DiagnosticInput): Promise<void> {
+  const clientBaseUrl = resolveClientBaseUrl(input);
+  const baseUrl = normalizeAnthropicBaseUrl(clientBaseUrl);
+  if (!baseUrl) {
+    throw new Error('Missing Anthropic base URL');
+  }
+
+  const allowEmpty = shouldAllowEmptyAnthropicApiKey({
+    provider: input.provider,
+    customProtocol: input.customProtocol,
+    baseUrl,
+  });
+  const effectiveKey = input.apiKey?.trim() || (allowEmpty ? LOCAL_ANTHROPIC_PLACEHOLDER_KEY : '');
+  if (!effectiveKey) {
+    throw new Error('No API key provided');
+  }
+
+  const useAuthToken = shouldUseAnthropicAuthToken({
+    provider: input.provider,
+    customProtocol: input.customProtocol,
+    apiKey: effectiveKey,
+  });
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'anthropic-version': ANTHROPIC_API_VERSION,
+  };
+  headers[useAuthToken ? 'Authorization' : 'x-api-key'] = useAuthToken
+    ? `Bearer ${effectiveKey}`
+    : effectiveKey;
+
+  const { status, text } = await postJsonWithTimeout(
+    `${baseUrl.replace(/\/$/, '')}/v1/messages`,
+    headers,
+    {
+      model: input.model?.trim(),
+      max_tokens: 8,
+      messages: [{ role: 'user', content: 'Reply with ok.' }],
+      stream: false,
+    }
+  );
+
+  if (status < 200 || status >= 300) {
+    throw parseProviderError(status, text);
+  }
 }
 
 function getModelDiagnosticFix(
@@ -496,6 +580,13 @@ async function stepModel(input: DiagnosticInput, step: DiagnosticStep): Promise<
       return;
     }
 
+    if (isAnthropicCompatible(input)) {
+      await probeAnthropicMessagesHttp(input);
+      step.status = 'ok';
+      step.latencyMs = Date.now() - start;
+      return;
+    }
+
     const config = configStore.getAll();
     const result = await probeWithClaudeSdk(
       {
@@ -518,8 +609,18 @@ async function stepModel(input: DiagnosticInput, step: DiagnosticStep): Promise<
     }
   } catch (err) {
     step.status = 'fail';
-    step.error = getErrorMessage(err);
-    step.fix = `model_unavailable:${input.model}`;
+    const e = getApiErrorInfo(err);
+    step.error = e.message;
+    if (e.status === 401 || e.status === 403) {
+      step.fix = 'auth_invalid_key';
+    } else if (e.status === 400 || e.status === 404) {
+      step.fix = `model_unavailable:${input.model}`;
+    } else {
+      step.fix = getModelDiagnosticFix(
+        e.status && e.status >= 500 ? 'server_error' : undefined,
+        input.model
+      );
+    }
   }
   step.latencyMs = Date.now() - start;
 }

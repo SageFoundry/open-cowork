@@ -24,6 +24,7 @@ import {
   getProjectIdForCwd,
   getProjectSessions,
 } from '../utils/projects';
+import { UpdateBadge } from './UpdateBadge';
 
 import sidebarLogoSrc from '../assets/logo.png';
 
@@ -387,6 +388,7 @@ export function Sidebar() {
           >
             {themeIcon}
           </button>
+          <UpdateBadge />
           <button
             onClick={() => setShowSettings(true)}
             className="w-9 h-9 rounded-2xl flex items-center justify-center hover:bg-surface-hover transition-colors text-text-secondary relative"
@@ -583,6 +585,8 @@ export function Sidebar() {
                 </div>
               </div>
             </button>
+
+            <UpdateBadge />
 
             <button
               onClick={toggleTheme}
