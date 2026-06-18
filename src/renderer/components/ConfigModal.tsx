@@ -16,6 +16,7 @@ import type { AppConfig, ApiTestResult } from '../types';
 import { useApiConfigState } from '../hooks/useApiConfigState';
 import { ApiConfigSetManager } from './ApiConfigSetManager';
 import { CommonProviderSetupsCard, GuidanceInlineHint } from './ProviderGuidance';
+import { ModelSettingsList } from './ModelSettingsList';
 
 interface ConfigModalProps {
   isOpen: boolean;
@@ -55,6 +56,7 @@ export function ConfigModal({
     baseUrl,
     model,
     models,
+    modelSettings,
     presets,
     currentPreset,
     modelOptions,
@@ -86,6 +88,10 @@ export function ConfigModal({
     setModel,
     addModel,
     removeModel,
+    setModelContextWindow,
+    setModelMaxTokens,
+    setModelImageInputMode,
+    setModelCapabilityMode,
     applyCommonProviderSetup,
     changeProvider,
     changeProtocol,
@@ -350,57 +356,19 @@ export function ConfigModal({
               </div>
             </div>
 
-            {/* Unified model dropdown: preset models + user-added models */}
-            {(() => {
-              const presetIds = modelOptions.map((m) => m.id);
-              const merged = [...new Set([...presetIds, ...models])].filter(Boolean);
-              return (
-                <select
-                  value={model || ''}
-                  onChange={(e) => setModel(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl bg-background border border-border text-text-primary focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent transition-all appearance-none cursor-pointer"
-                >
-                  {merged.length > 0 ? (
-                    merged.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))
-                  ) : (
-                    <option value="" disabled>
-                      {t('api.noModelsAvailable')}
-                    </option>
-                  )}
-                </select>
-              );
-            })()}
-
-            {/* User-added custom models - removable chips */}
-            {(() => {
-              const presetIds = modelOptions.map((m) => m.id);
-              const customModels = models.filter((m) => !presetIds.includes(m));
-              if (customModels.length === 0) return null;
-              return (
-                <div className="flex flex-wrap gap-1.5">
-                  {customModels.map((m) => (
-                    <span
-                      key={m}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-accent/10 text-xs text-accent border border-accent/20"
-                    >
-                      <span className="max-w-[180px] truncate">{m}</span>
-                      <button
-                        type="button"
-                        onClick={() => removeModel(m)}
-                        className="text-accent/60 hover:text-error transition-colors"
-                        title={t('api.removeCustomModel')}
-                      >
-                        <X className="w-3 h-3" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              );
-            })()}
+            <ModelSettingsList
+              compact
+              model={model}
+              models={models}
+              modelOptions={modelOptions}
+              modelSettings={modelSettings}
+              onSelectModel={setModel}
+              onRemoveModel={removeModel}
+              onSetContextWindow={setModelContextWindow}
+              onSetMaxTokens={setModelMaxTokens}
+              onSetImageInputMode={setModelImageInputMode}
+              onSetCapabilityMode={setModelCapabilityMode}
+            />
 
             {/* Add custom model */}
             <div className="flex gap-1.5">

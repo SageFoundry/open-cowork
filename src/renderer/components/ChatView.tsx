@@ -301,7 +301,15 @@ export function ChatView() {
   const pendingCount = pendingTurns.length;
   const isSessionRunning = activeSession?.status === 'running';
   const canStop = isSessionRunning || hasActiveTurn || pendingCount > 0;
+  const isRuntimeSwitchDisabled = isSessionRunning || hasActiveTurn;
   const isBlockingContext = tokenBudget?.warningState === 'blocking';
+
+  useEffect(() => {
+    if (isRuntimeSwitchDisabled) {
+      setModelPickerOpen(false);
+      setThinkingPickerOpen(false);
+    }
+  }, [isRuntimeSwitchDisabled]);
 
   useEffect(() => {
     adjustTextareaHeight();
@@ -1510,9 +1518,17 @@ export function ChatView() {
                   <div className="relative" ref={modelPickerRef}>
                     <button
                       type="button"
-                      onClick={() => setModelPickerOpen(!modelPickerOpen)}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-border-subtle bg-background/60 text-xs text-text-muted hover:bg-surface-hover hover:text-text-secondary transition-colors"
-                      title={currentSessionModel || t('chat.noModel')}
+                      onClick={() => {
+                        if (isRuntimeSwitchDisabled) return;
+                        setModelPickerOpen(!modelPickerOpen);
+                      }}
+                      disabled={isRuntimeSwitchDisabled}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-border-subtle bg-background/60 text-xs text-text-muted hover:bg-surface-hover hover:text-text-secondary disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                      title={
+                        isRuntimeSwitchDisabled
+                          ? t('chat.runtimeSwitchDisabled')
+                          : currentSessionModel || t('chat.noModel')
+                      }
                     >
                       <span className="max-w-[120px] truncate">
                         {currentSessionModel || t('chat.noModel')}
@@ -1542,6 +1558,10 @@ export function ChatView() {
                                 key={option.id}
                                 type="button"
                                 onClick={() => {
+                                  if (isRuntimeSwitchDisabled) {
+                                    setModelPickerOpen(false);
+                                    return;
+                                  }
                                   if (
                                     (option.id !== currentSessionModel ||
                                       cs.id !== currentSessionConfigSetId) &&
@@ -1613,12 +1633,23 @@ export function ChatView() {
                     <div className="relative" ref={thinkingPickerRef}>
                       <button
                         type="button"
-                        onClick={() => setThinkingPickerOpen((open) => !open)}
-                        disabled={isSavingThinking.current}
+                        onClick={() => {
+                          if (isRuntimeSwitchDisabled) return;
+                          setThinkingPickerOpen((open) => !open);
+                        }}
+                        disabled={isSavingThinking.current || isRuntimeSwitchDisabled}
                         className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] transition-colors ${
                           THINKING_LEVEL_STYLES[thinkingLevel]
-                        } ${isSavingThinking.current ? 'opacity-60 cursor-not-allowed' : ''}`}
-                        title={t('chat.toggleThinking')}
+                        } ${
+                          isSavingThinking.current || isRuntimeSwitchDisabled
+                            ? 'opacity-60 cursor-not-allowed'
+                            : ''
+                        }`}
+                        title={
+                          isRuntimeSwitchDisabled
+                            ? t('chat.runtimeSwitchDisabled')
+                            : t('chat.toggleThinking')
+                        }
                         aria-haspopup="menu"
                         aria-expanded={thinkingPickerOpen}
                       >
@@ -1645,6 +1676,10 @@ export function ChatView() {
                                 key={option.value}
                                 type="button"
                                 onClick={() => {
+                                  if (isRuntimeSwitchDisabled) {
+                                    setThinkingPickerOpen(false);
+                                    return;
+                                  }
                                   setThinkingPickerOpen(false);
                                   updateThinkingLevel(option.value);
                                 }}

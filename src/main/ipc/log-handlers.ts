@@ -20,6 +20,7 @@ import { normalizeOpenAICompatibleBaseUrl } from '../config/auth-utils';
 import {
   applyPiModelRuntimeOverrides,
   buildSyntheticPiModel,
+  resolveImageInputOverride,
   resolvePiModelString,
   resolvePiRegistryModel,
   resolvePiRouteProtocol,
@@ -126,7 +127,8 @@ function buildPiRouteDiagnostic(session: Session) {
         undefined,
         undefined,
         runtimeConfig.contextWindow,
-        runtimeConfig.maxTokens
+        runtimeConfig.maxTokens,
+        resolveImageInputOverride(runtimeConfig.imageInputMode)
       );
       piModel = applyPiModelRuntimeOverrides(piModel, {
         configProvider: routeProtocol,

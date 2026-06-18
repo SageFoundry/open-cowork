@@ -96,6 +96,20 @@ export interface KnownModelSpecEntry extends KnownModelSpecs {
   aliases: string[];
 }
 
+export type ImageInputMode = 'auto' | 'enabled' | 'disabled';
+
+export function resolveImageInputOverride(
+  mode?: ImageInputMode
+): ('text' | 'image')[] | undefined {
+  if (mode === 'enabled') {
+    return ['text', 'image'];
+  }
+  if (mode === 'disabled') {
+    return ['text'];
+  }
+  return undefined;
+}
+
 /**
  * OpenRouter model specs refreshed from /api/v1/models on 2026-05-27.
  * Scope: text-output language and multimodal models created since 2025-11-27.

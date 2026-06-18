@@ -91,7 +91,12 @@ import type { SkillsManager } from '../skills/skills-manager';
 import type { BackgroundTaskService } from '../background/background-task-service';
 
 interface AgentRunner {
-  run(session: Session, prompt: string, existingMessages: Message[]): Promise<void>;
+  run(
+    session: Session,
+    prompt: string,
+    existingMessages: Message[],
+    runtimeConfig?: ReturnType<typeof configStore.getAll>
+  ): Promise<void>;
   cancel(sessionId: string): void;
   clearSdkSession?(sessionId: string): void;
 }
@@ -1721,7 +1726,7 @@ export class SessionManager {
 
         // Run the agent
         const agentRunStartedAt = Date.now();
-        await this.agentRunner.run(session, enhancedPrompt, messagesForContext);
+        await this.agentRunner.run(session, enhancedPrompt, messagesForContext, runtimeConfig);
 
         // Keep the same app-controlled context that was sent to the runner
         // (including in-memory micro compaction), then append only messages
@@ -2006,7 +2011,9 @@ export class SessionManager {
     const controller = this.activeSessions.get(sessionId);
     if (controller) {
       controller.abort();
+      this.activeSessions.delete(sessionId);
     }
+    this.markRunningTraceStepsStopped(sessionId);
     this.promptQueues.delete(sessionId);
     this.messageCache.delete(sessionId);
     this.updateSessionStatus(sessionId, 'idle');
@@ -2115,6 +2122,19 @@ export class SessionManager {
     if (!existing) {
       logWarn('[SessionManager] Cannot update runtime; session not found:', sessionId);
       return null;
+    }
+
+    if (
+      this.activeSessions.has(sessionId) &&
+      (updates.model !== undefined ||
+        updates.configSetId !== undefined ||
+        updates.thinkingLevel !== undefined)
+    ) {
+      logWarn(
+        '[SessionManager] Ignoring runtime update while session is running to preserve active SDK/tool state:',
+        sessionId
+      );
+      return existing;
     }
 
     const normalizedModel =
@@ -2590,5 +2610,22 @@ export class SessionManager {
     if (updates.duration !== undefined) rowUpdates.duration = updates.duration;
 
     this.db.traceSteps.update(stepId, rowUpdates);
+  }
+
+  private markRunningTraceStepsStopped(sessionId: string): void {
+    const runningSteps = this.getTraceSteps(sessionId).filter((step) => step.status === 'running');
+    for (const step of runningSteps) {
+      const updates: Partial<TraceStep> = {
+        status: 'error',
+        content: step.content || 'stopped',
+        toolOutput: step.toolOutput || 'Request stopped',
+        isError: true,
+      };
+      this.updateTraceStep(step.id, updates);
+      this.sendToRenderer({
+        type: 'trace.update',
+        payload: { sessionId, stepId: step.id, updates },
+      });
+    }
   }
 }

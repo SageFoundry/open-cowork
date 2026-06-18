@@ -5,6 +5,7 @@ import {
   buildSyntheticPiModel,
   clearRuntimeOpenRouterModelSpecsForTests,
   inferPiApi,
+  resolveImageInputOverride,
   resolvePiModelString,
   resolvePiRegistryModel,
   resolveKnownModelSpecs,
@@ -243,6 +244,37 @@ describe('pi model resolution helpers', () => {
     expect(model.provider).toBe('xai');
     expect(model.api).toBe('openai-completions');
     expect(model.baseUrl).toBe('https://api.x.ai/v1');
+  });
+
+  it('allows explicit image input overrides for synthetic models', () => {
+    const auto = buildSyntheticPiModel('mimo-v2.5-pro', 'openai', 'openai');
+    expect(auto.input).toEqual(['text']);
+
+    const enabled = buildSyntheticPiModel(
+      'mimo-v2.5-pro',
+      'openai',
+      'openai',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      resolveImageInputOverride('enabled')
+    );
+    expect(enabled.input).toEqual(['text', 'image']);
+
+    const disabled = buildSyntheticPiModel(
+      'mimo-v2-omni',
+      'openai',
+      'openai',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      resolveImageInputOverride('disabled')
+    );
+    expect(disabled.input).toEqual(['text']);
   });
 
   it('preserves explicit provider-prefixed ids for openrouter synthetic fallbacks', () => {

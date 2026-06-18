@@ -30,6 +30,12 @@ import {
   shouldUseAnthropicAuthToken,
 } from './auth-utils';
 import { API_PROVIDER_PRESETS, PI_AI_CURATED_PRESETS } from '../../shared/api-model-presets';
+import {
+  normalizeImageInputMode,
+  normalizeModelCapabilityModes,
+  type ModelCapabilityModes,
+  type ImageInputMode,
+} from '../../shared/model-capabilities';
 
 /**
  * Application configuration schema
@@ -73,8 +79,18 @@ export interface ProviderProfile {
   baseUrl?: string;
   model: string;
   models?: string[];
+  // Legacy compatibility only. Normalized config stores these in modelSettings[model].
   contextWindow?: number;
   maxTokens?: number;
+  imageInputMode?: ImageInputMode;
+  modelSettings?: Record<string, ProviderModelSettings>;
+}
+
+export interface ProviderModelSettings {
+  contextWindow?: number;
+  maxTokens?: number;
+  imageInputMode?: ImageInputMode;
+  capabilities?: ModelCapabilityModes;
 }
 
 export interface ApiConfigSet {
@@ -103,6 +119,7 @@ export interface AppConfig {
   model: string;
   contextWindow?: number;
   maxTokens?: number;
+  imageInputMode?: ImageInputMode;
 
   // Active profile
   activeProfileKey: ProviderProfileKey;
@@ -496,6 +513,51 @@ function normalizeCustomProtocol(
   return fallback;
 }
 
+function normalizeModelSettings(
+  value: unknown
+): Record<string, ProviderModelSettings> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const result: Record<string, ProviderModelSettings> = {};
+  for (const [rawModelId, rawSettings] of Object.entries(value)) {
+    const modelId = rawModelId.trim();
+    if (!modelId || !rawSettings || typeof rawSettings !== 'object' || Array.isArray(rawSettings)) {
+      continue;
+    }
+
+    const settings = rawSettings as Partial<ProviderModelSettings>;
+    const next: ProviderModelSettings = {};
+    if (typeof settings.contextWindow === 'number' && settings.contextWindow > 0) {
+      next.contextWindow = settings.contextWindow;
+    }
+    if (typeof settings.maxTokens === 'number' && settings.maxTokens > 0) {
+      next.maxTokens = settings.maxTokens;
+    }
+    const imageInputMode = normalizeImageInputMode(settings.imageInputMode);
+    if (imageInputMode !== 'auto') {
+      next.imageInputMode = imageInputMode;
+    }
+    const capabilities = normalizeModelCapabilityModes(settings.capabilities);
+    if (capabilities) {
+      next.capabilities = capabilities;
+      if (capabilities.imageInput && !next.imageInputMode) {
+        next.imageInputMode = capabilities.imageInput;
+      }
+    }
+    if (Object.keys(next).length > 0) {
+      result[modelId] = next;
+    }
+  }
+
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function resolveActiveModelSettings(profile: ProviderProfile): ProviderModelSettings {
+  return profile.modelSettings?.[profile.model] || {};
+}
+
 function defaultProtocolForProvider(provider: ProviderType): CustomProtocolType {
   if (
     provider === 'openai' ||
@@ -613,12 +675,28 @@ export class ConfigStore {
       baseUrl,
       model,
     };
-    // Preserve optional numeric fields so callers don't silently lose user-set values
+    const modelSettings = normalizeModelSettings(profile?.modelSettings) || {};
+
+    // Migration: old profile-level overrides now belong to the selected model.
     if (typeof profile?.contextWindow === 'number' && profile.contextWindow > 0) {
-      result.contextWindow = profile.contextWindow;
+      modelSettings[model] = { ...modelSettings[model], contextWindow: profile.contextWindow };
     }
     if (typeof profile?.maxTokens === 'number' && profile.maxTokens > 0) {
-      result.maxTokens = profile.maxTokens;
+      modelSettings[model] = { ...modelSettings[model], maxTokens: profile.maxTokens };
+    }
+    const legacyImageInputMode = normalizeImageInputMode(profile?.imageInputMode);
+    if (legacyImageInputMode !== 'auto') {
+      modelSettings[model] = {
+        ...modelSettings[model],
+        imageInputMode: legacyImageInputMode,
+        capabilities: {
+          ...modelSettings[model]?.capabilities,
+          imageInput: legacyImageInputMode,
+        },
+      };
+    }
+    if (Object.keys(modelSettings).length > 0) {
+      result.modelSettings = modelSettings;
     }
     if (Array.isArray(profile?.models)) {
       const cleaned = profile.models
@@ -685,6 +763,12 @@ export class ConfigStore {
       if (typeof rawProfile.maxTokens === 'number' && rawProfile.maxTokens > 0) {
         return true;
       }
+      if (rawProfile.imageInputMode === 'enabled' || rawProfile.imageInputMode === 'disabled') {
+        return true;
+      }
+      if (normalizeModelSettings(rawProfile.modelSettings)) {
+        return true;
+      }
       return false;
     });
     const shouldUseLegacyProjection = !hasAnyRawProfiles || !hasProfileUserData;
@@ -701,7 +785,9 @@ export class ConfigStore {
       typeof raw.baseUrl === 'string' ||
       typeof raw.model === 'string' ||
       typeof raw.contextWindow === 'number' ||
-      typeof raw.maxTokens === 'number';
+      typeof raw.maxTokens === 'number' ||
+      raw.imageInputMode === 'enabled' ||
+      raw.imageInputMode === 'disabled';
 
     if (shouldUseLegacyProjection && hasLegacyProjection) {
       profiles[derivedProfileKey] = this.normalizeProfile(derivedProfileKey, {
@@ -714,6 +800,10 @@ export class ConfigStore {
             : undefined,
         maxTokens:
           typeof raw.maxTokens === 'number' && raw.maxTokens > 0 ? raw.maxTokens : undefined,
+        imageInputMode:
+          raw.imageInputMode === 'enabled' || raw.imageInputMode === 'disabled'
+            ? raw.imageInputMode
+            : undefined,
       });
       activeProfileKey = derivedProfileKey;
     }
@@ -759,6 +849,7 @@ export class ConfigStore {
     model: string;
     contextWindow?: number;
     maxTokens?: number;
+    imageInputMode?: 'auto' | 'enabled' | 'disabled';
     thinkingLevel: ThinkingLevel;
     enableThinking: boolean;
   } {
@@ -767,6 +858,7 @@ export class ConfigStore {
       ? configSet.activeProfileKey
       : profileKeyFromProvider(configSet.provider, configSet.customProtocol);
     const activeProfile = profiles[activeProfileKey] || this.getDefaultProfile(activeProfileKey);
+    const activeSettings = resolveActiveModelSettings(activeProfile);
 
     const thinkingLevel = normalizeThinkingLevel(
       configSet.thinkingLevel,
@@ -782,8 +874,9 @@ export class ConfigStore {
       apiKey: activeProfile.apiKey,
       baseUrl: activeProfile.baseUrl,
       model: activeProfile.model,
-      contextWindow: activeProfile.contextWindow,
-      maxTokens: activeProfile.maxTokens,
+      contextWindow: activeSettings.contextWindow,
+      maxTokens: activeSettings.maxTokens,
+      imageInputMode: activeSettings.imageInputMode,
       thinkingLevel,
       enableThinking: thinkingLevel !== 'off',
     };
@@ -950,12 +1043,15 @@ export class ConfigStore {
 
     const activeProfile = legacy.profiles[legacy.activeProfileKey];
     const fallbackActive = this.getDefaultProfile(legacy.activeProfileKey);
+    const activeSettings = resolveActiveModelSettings(activeProfile);
+    const fallbackSettings = resolveActiveModelSettings(fallbackActive);
     return Boolean(
       activeProfile.apiKey.trim() ||
       (activeProfile.baseUrl || '') !== (fallbackActive.baseUrl || '') ||
       activeProfile.model !== fallbackActive.model ||
-      activeProfile.contextWindow !== fallbackActive.contextWindow ||
-      activeProfile.maxTokens !== fallbackActive.maxTokens
+      activeSettings.contextWindow !== fallbackSettings.contextWindow ||
+      activeSettings.maxTokens !== fallbackSettings.maxTokens ||
+      activeSettings.imageInputMode !== fallbackSettings.imageInputMode
     );
   }
 
@@ -984,6 +1080,7 @@ export class ConfigStore {
 
     const projected = this.projectFromConfigSet(onlySet);
     const legacyActive = legacy.profiles[legacy.activeProfileKey];
+    const legacySettings = resolveActiveModelSettings(legacyActive);
     return !(
       projected.provider === legacy.provider &&
       projected.customProtocol === legacy.customProtocol &&
@@ -993,8 +1090,9 @@ export class ConfigStore {
       projected.apiKey === legacyActive.apiKey &&
       (projected.baseUrl || '') === (legacyActive.baseUrl || '') &&
       projected.model === legacyActive.model &&
-      projected.contextWindow === legacyActive.contextWindow &&
-      projected.maxTokens === legacyActive.maxTokens
+      projected.contextWindow === legacySettings.contextWindow &&
+      projected.maxTokens === legacySettings.maxTokens &&
+      projected.imageInputMode === legacySettings.imageInputMode
     );
   }
 
@@ -1022,6 +1120,7 @@ export class ConfigStore {
       model: projected.model,
       contextWindow: projected.contextWindow,
       maxTokens: projected.maxTokens,
+      imageInputMode: projected.imageInputMode,
       activeProfileKey: projected.activeProfileKey,
       profiles: projected.profiles,
       activeConfigSetId,
@@ -1092,6 +1191,7 @@ export class ConfigStore {
       model: projected.model,
       contextWindow: projected.contextWindow,
       maxTokens: projected.maxTokens,
+      imageInputMode: projected.imageInputMode,
       activeProfileKey: projected.activeProfileKey,
       profiles: projected.profiles,
       thinkingLevel: projected.thinkingLevel,
@@ -1420,6 +1520,7 @@ export class ConfigStore {
       updates.model !== undefined ||
       updates.contextWindow !== undefined ||
       updates.maxTokens !== undefined ||
+      updates.imageInputMode !== undefined ||
       updates.thinkingLevel !== undefined ||
       updates.enableThinking !== undefined;
 
@@ -1469,11 +1570,56 @@ export class ConfigStore {
         const model = updates.model?.trim();
         nextActiveProfile.model = model ?? '';
       }
-      if (updates.contextWindow !== undefined) {
-        nextActiveProfile.contextWindow = updates.contextWindow;
-      }
-      if (updates.maxTokens !== undefined) {
-        nextActiveProfile.maxTokens = updates.maxTokens;
+      if (
+        updates.contextWindow !== undefined ||
+        updates.maxTokens !== undefined ||
+        updates.imageInputMode !== undefined
+      ) {
+        const targetModel = nextActiveProfile.model || '';
+        const currentSettings = normalizeModelSettings(nextActiveProfile.modelSettings) || {};
+        const existing = targetModel ? currentSettings[targetModel] || {} : {};
+        const nextSettings: ProviderModelSettings = { ...existing };
+        if (updates.contextWindow !== undefined) {
+          if (typeof updates.contextWindow === 'number' && updates.contextWindow > 0) {
+            nextSettings.contextWindow = updates.contextWindow;
+          } else {
+            delete nextSettings.contextWindow;
+          }
+        }
+        if (updates.maxTokens !== undefined) {
+          if (typeof updates.maxTokens === 'number' && updates.maxTokens > 0) {
+            nextSettings.maxTokens = updates.maxTokens;
+          } else {
+            delete nextSettings.maxTokens;
+          }
+        }
+        if (updates.imageInputMode !== undefined) {
+          const imageInputMode = normalizeImageInputMode(updates.imageInputMode);
+          if (imageInputMode === 'auto') {
+            delete nextSettings.imageInputMode;
+            if (nextSettings.capabilities) {
+              delete nextSettings.capabilities.imageInput;
+              if (Object.keys(nextSettings.capabilities).length === 0) {
+                delete nextSettings.capabilities;
+              }
+            }
+          } else {
+            nextSettings.imageInputMode = imageInputMode;
+            nextSettings.capabilities = {
+              ...nextSettings.capabilities,
+              imageInput: imageInputMode,
+            };
+          }
+        }
+        if (targetModel) {
+          if (Object.keys(nextSettings).length > 0) {
+            currentSettings[targetModel] = nextSettings;
+          } else {
+            delete currentSettings[targetModel];
+          }
+        }
+        nextActiveProfile.modelSettings =
+          Object.keys(currentSettings).length > 0 ? currentSettings : undefined;
       }
       nextProfiles[nextActiveProfileKey] = this.normalizeProfile(
         nextActiveProfileKey,

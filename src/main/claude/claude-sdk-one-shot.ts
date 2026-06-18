@@ -17,6 +17,7 @@ import {
   applyPiModelRuntimeOverrides,
   buildSyntheticPiModel,
   inferPiApi,
+  resolveImageInputOverride,
   resolvePiModelString,
   resolvePiRegistryModel,
   resolvePiRouteProtocol,
@@ -207,7 +208,11 @@ async function runPiAiOneShot(
       synthetic.provider,
       effectiveProtocol,
       effectiveBaseUrl || '',
-      api
+      api,
+      undefined,
+      config.contextWindow,
+      config.maxTokens,
+      resolveImageInputOverride(config.imageInputMode)
     );
     piModel = applyPiModelRuntimeOverrides(piModel, {
       configProvider: keyProvider,

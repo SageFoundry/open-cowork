@@ -82,6 +82,34 @@ describe('api config state helpers', () => {
     expect(snapshot.profiles.ollama.baseUrl).toBe('http://localhost:11434/v1');
   });
 
+  it('preserves explicit image input mode overrides for custom ollama models', () => {
+    const config = {
+      provider: 'ollama',
+      customProtocol: 'openai',
+      activeProfileKey: 'ollama',
+      apiKey: '',
+      baseUrl: 'http://localhost:11434/v1',
+      model: 'mimo-v2.5-pro',
+      profiles: {
+        ollama: {
+          apiKey: '',
+          baseUrl: 'http://localhost:11434/v1',
+          model: 'mimo-v2.5-pro',
+          imageInputMode: 'enabled',
+        },
+      },
+      isConfigured: true,
+    } as AppConfig;
+
+    const snapshot = buildApiConfigSnapshot(config, FALLBACK_PROVIDER_PRESETS);
+    expect(snapshot.profiles.ollama.modelSettings['mimo-v2.5-pro']?.imageInputMode).toBe(
+      'enabled'
+    );
+    expect(snapshot.profiles.ollama.modelSettings['mimo-v2.5-pro']?.capabilities.imageInput).toBe(
+      'enabled'
+    );
+  });
+
   it('keeps remote custom openai configs generic instead of auto-migrating them to ollama', () => {
     const config = {
       provider: 'custom',

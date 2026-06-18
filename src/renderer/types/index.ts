@@ -712,14 +712,39 @@ export type ProviderProfileKey =
   | 'custom:openai'
   | 'custom:gemini';
 export type ConfigSetId = string;
+export type ImageInputMode = 'auto' | 'enabled' | 'disabled';
+export type CapabilityMode = 'auto' | 'enabled' | 'disabled';
+export type ModelCapabilityId =
+  | 'textInput'
+  | 'imageInput'
+  | 'audioInput'
+  | 'videoInput'
+  | 'fileInput'
+  | 'tools'
+  | 'reasoning'
+  | 'embedding'
+  | 'rerank'
+  | 'imageOutput'
+  | 'audioOutput';
+export type ModelCapabilityModes = Partial<Record<ModelCapabilityId, CapabilityMode>>;
+
+export interface ProviderModelSettings {
+  contextWindow?: number;
+  maxTokens?: number;
+  imageInputMode?: ImageInputMode;
+  capabilities?: ModelCapabilityModes;
+}
 
 export interface ProviderProfile {
   apiKey: string;
   baseUrl?: string;
   model: string;
   models?: string[];
+  modelSettings?: Record<string, ProviderModelSettings>;
+  // Legacy compatibility only. New config stores these per model in modelSettings.
   contextWindow?: number;
   maxTokens?: number;
+  imageInputMode?: ImageInputMode;
 }
 
 export interface ApiConfigSet {
@@ -749,6 +774,7 @@ export interface AppConfig {
   model: string;
   contextWindow?: number;
   maxTokens?: number;
+  imageInputMode?: ImageInputMode;
   activeProfileKey: ProviderProfileKey;
   profiles: Partial<Record<ProviderProfileKey, ProviderProfile>>;
   activeConfigSetId: ConfigSetId;

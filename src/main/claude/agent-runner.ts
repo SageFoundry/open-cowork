@@ -71,6 +71,7 @@ import {
 import {
   applyPiModelRuntimeOverrides,
   buildSyntheticPiModel,
+  resolveImageInputOverride,
   resolvePiRegistryModel,
   resolvePiRouteProtocol,
   resolveSyntheticPiModelFallback,
@@ -2444,17 +2445,18 @@ ${hints.join('\n')}
    */
   private getCurrentModelString(preferredModel?: string): string {
     const routeModel = preferredModel?.trim();
-    const configuredModel = configStore.get('model')?.trim();
-    const model = routeModel || configuredModel || 'anthropic/claude-sonnet-4-6';
+    const model = routeModel || 'anthropic/claude-sonnet-4-6';
     logCtx('[ClaudeAgentRunner] Current model:', model);
-    logCtx(
-      '[ClaudeAgentRunner] Model source:',
-      routeModel ? 'runtimeRoute.model' : configuredModel ? 'configStore.model' : 'default'
-    );
+    logCtx('[ClaudeAgentRunner] Model source:', routeModel ? 'runtimeRoute.model' : 'default');
     return model;
   }
 
-  async run(session: Session, prompt: string, existingMessages: Message[]): Promise<void> {
+  async run(
+    session: Session,
+    prompt: string,
+    existingMessages: Message[],
+    runtimeConfigSnapshot?: ReturnType<typeof configStore.getAll>
+  ): Promise<void> {
     const runStartTime = Date.now();
     logCtx('[ClaudeAgentRunner] run() started');
 
@@ -2864,10 +2866,12 @@ ${hints.join('\n')}
       logTiming('before pi-ai model resolution', runStartTime);
 
       // Resolve model via pi-ai
-      const runtimeConfig = configStore.getForConfigSet(session.configSetId, {
-        model: session.model,
-        thinkingLevel: session.thinkingLevel,
-      });
+      const runtimeConfig =
+        runtimeConfigSnapshot ||
+        configStore.getForConfigSet(session.configSetId, {
+          model: session.model,
+          thinkingLevel: session.thinkingLevel,
+        });
       throwIfRunAborted('before model resolution');
       const modelString = this.getCurrentModelString(runtimeConfig.model);
       const configProtocol = resolvePiRouteProtocol(
@@ -2908,7 +2912,8 @@ ${hints.join('\n')}
           undefined,
           undefined,
           runtimeConfig.contextWindow,
-          runtimeConfig.maxTokens
+          runtimeConfig.maxTokens,
+          resolveImageInputOverride(runtimeConfig.imageInputMode)
         );
         // Apply the same runtime overrides (developer role compat, base URL, API downgrade)
         // that resolvePiRegistryModel applies to registry models
@@ -4694,10 +4699,12 @@ ${hints.join('\n')}
 
       const FIRST_RESPONSE_WARNING_MS = 90 * 1000;
       const SILENCE_TIMEOUT_MS = 3 * 60 * 1000;
+      const TOOL_EXECUTION_TIMEOUT_MS = 5 * 60 * 1000;
       let firstResponseWarningTimerId: ReturnType<typeof setTimeout> | undefined;
       let silenceTimeoutId: ReturnType<typeof setTimeout> | undefined;
       let receivedFirstSdkEvent = false;
       const activeToolExecutions = new Set<string>();
+      const activeToolStartedAt = new Map<string, number>();
 
       // Ollama cold-start feedback: if provider is 'ollama' and no stream event arrives
       // within 10 seconds, show a "model loading" trace update so users know what's happening.
@@ -4777,6 +4784,17 @@ ${hints.join('\n')}
             return;
           }
           if (activeToolExecutions.size > 0) {
+            const now = Date.now();
+            const staleTool = Array.from(activeToolExecutions).find((toolCallId) => {
+              const startedAt = activeToolStartedAt.get(toolCallId) ?? now;
+              return now - startedAt >= TOOL_EXECUTION_TIMEOUT_MS;
+            });
+            if (staleTool) {
+              abortPromptForTimeout(
+                `Tool execution timed out after ${Math.round(TOOL_EXECUTION_TIMEOUT_MS / 1000)}s: ${staleTool}`
+              );
+              return;
+            }
             log(
               '[ClaudeAgentRunner] SDK silence timeout deferred while tools are running:',
               Array.from(activeToolExecutions).join(', ')
@@ -5112,6 +5130,7 @@ ${hints.join('\n')}
               logCtx(`[ClaudeAgentRunner] Tool execution start: ${event.toolName}`);
               const toolCallId = event.toolCallId;
               activeToolExecutions.add(toolCallId);
+              activeToolStartedAt.set(toolCallId, Date.now());
               const toolArgs = isRecord(event.args) ? event.args : {};
               if (runningTraceStepIds.has(toolCallId)) {
                 this.sendTraceUpdate(session.id, toolCallId, {
@@ -5154,10 +5173,19 @@ ${hints.join('\n')}
             }
 
             case 'tool_execution_end': {
-              if (controller.signal.aborted) break;
               const toolCallId = event.toolCallId;
               activeToolExecutions.delete(toolCallId);
+              activeToolStartedAt.delete(toolCallId);
               resetSilenceTimeout();
+              if (controller.signal.aborted) {
+                runningTraceStepIds.delete(toolCallId);
+                this.sendTraceUpdate(session.id, toolCallId, {
+                  status: 'error',
+                  toolName: event.toolName,
+                  toolOutput: 'Request stopped',
+                });
+                break;
+              }
               for (const key of partialToolArgSnapshots.keys()) {
                 if (key.startsWith(`${toolCallId}:`)) {
                   partialToolArgSnapshots.delete(key);

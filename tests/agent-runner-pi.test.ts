@@ -86,6 +86,41 @@ describe('ClaudeAgentRunner pi-coding-agent integration', () => {
     expect(agentRunnerContent).toContain('runtimeSignature: sessionRuntimeSignature');
   });
 
+  it('uses the per-turn runtime config snapshot instead of rereading model config mid-run', () => {
+    expect(agentRunnerContent).toContain('runtimeConfigSnapshot?: ReturnType<typeof configStore.getAll>');
+    expect(agentRunnerContent).toContain('const runtimeConfig =');
+    expect(agentRunnerContent).toContain('runtimeConfigSnapshot ||');
+    expect(agentRunnerContent).not.toContain("const configuredModel = configStore.get('model')");
+
+    const sessionManagerPath = path.resolve(process.cwd(), 'src/main/session/session-manager.ts');
+    const sessionManagerContent = readFileSync(sessionManagerPath, 'utf8');
+    expect(sessionManagerContent).toContain(
+      'await this.agentRunner.run(session, enhancedPrompt, messagesForContext, runtimeConfig)'
+    );
+  });
+
+  it('does not clear the SDK session by changing runtime settings while a turn is active', () => {
+    const sessionManagerPath = path.resolve(process.cwd(), 'src/main/session/session-manager.ts');
+    const sessionManagerContent = readFileSync(sessionManagerPath, 'utf8');
+    expect(sessionManagerContent).toContain('this.activeSessions.has(sessionId)');
+    expect(sessionManagerContent).toContain(
+      '[SessionManager] Ignoring runtime update while session is running'
+    );
+
+    const chatViewPath = path.resolve(process.cwd(), 'src/renderer/components/ChatView.tsx');
+    const chatViewContent = readFileSync(chatViewPath, 'utf8');
+    expect(chatViewContent).toContain('const isRuntimeSwitchDisabled = isSessionRunning || hasActiveTurn');
+    expect(chatViewContent).toContain('disabled={isRuntimeSwitchDisabled}');
+    expect(chatViewContent).toContain('disabled={isSavingThinking.current || isRuntimeSwitchDisabled}');
+  });
+
+  it('stopSession force-releases the active session slot so a stuck SDK run cannot block retries', () => {
+    const sessionManagerPath = path.resolve(process.cwd(), 'src/main/session/session-manager.ts');
+    const sessionManagerContent = readFileSync(sessionManagerPath, 'utf8');
+    expect(sessionManagerContent).toContain('controller.abort();');
+    expect(sessionManagerContent).toContain('this.activeSessions.delete(sessionId);');
+  });
+
   it('uses the normalized route protocol so openrouter follows the openai-compatible path', () => {
     expect(agentRunnerContent).toContain('resolvePiRouteProtocol');
     expect(agentRunnerContent).toContain('const configProtocol = resolvePiRouteProtocol(');

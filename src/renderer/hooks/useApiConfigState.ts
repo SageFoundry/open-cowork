@@ -8,7 +8,9 @@ import type {
   CustomProtocolType,
   DiagnosticResult,
   OpenRouterModelSpecsStatus,
+  ModelCapabilityModes,
   ProviderModelInfo,
+  ProviderModelSettings,
   ProviderPreset,
   ProviderProfile,
   ProviderProfileKey,
@@ -31,6 +33,7 @@ import {
   resolveProviderGuidanceErrorHint,
   type CommonProviderSetup,
 } from '../../shared/api-provider-guidance';
+import { normalizeModelCapabilityModes } from '../../shared/model-capabilities';
 export { getModelInputGuidance } from '../../shared/api-model-presets';
 
 interface UseApiConfigStateOptions {
@@ -44,8 +47,14 @@ interface UIProviderProfile {
   baseUrl: string;
   model: string;
   models: string[];
+  modelSettings: Record<string, UIProviderModelSettings>;
+}
+
+export interface UIProviderModelSettings {
   contextWindow: string;
   maxTokens: string;
+  imageInputMode: 'auto' | 'enabled' | 'disabled';
+  capabilities: ModelCapabilityModes;
 }
 
 interface ConfigStateSnapshot {
@@ -226,9 +235,98 @@ function defaultProfileForKey(
     baseUrl: preset.baseUrl,
     model: profileKey === 'ollama' ? '' : (preset.models[0]?.id || ''),
     models: [],
-    contextWindow: '',
-    maxTokens: '',
+    modelSettings: {},
   };
+}
+
+function normalizeImageInputMode(value: unknown): 'auto' | 'enabled' | 'disabled' {
+  return value === 'enabled' || value === 'disabled' ? value : 'auto';
+}
+
+function normalizeModelSettings(
+  value: unknown
+): Record<string, UIProviderModelSettings> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  const result: Record<string, UIProviderModelSettings> = {};
+  for (const [rawModelId, rawSettings] of Object.entries(value)) {
+    const modelId = rawModelId.trim();
+    if (!modelId || !rawSettings || typeof rawSettings !== 'object' || Array.isArray(rawSettings)) {
+      continue;
+    }
+    const settings = rawSettings as Partial<ProviderModelSettings>;
+    result[modelId] = {
+      contextWindow:
+        typeof settings.contextWindow === 'number' && settings.contextWindow > 0
+          ? String(settings.contextWindow)
+          : '',
+      maxTokens:
+        typeof settings.maxTokens === 'number' && settings.maxTokens > 0
+          ? String(settings.maxTokens)
+          : '',
+      imageInputMode: normalizeImageInputMode(settings.imageInputMode),
+      capabilities: normalizeModelCapabilityModes(settings.capabilities) || {},
+    };
+    if (result[modelId].imageInputMode !== 'auto' && !result[modelId].capabilities.imageInput) {
+      result[modelId].capabilities.imageInput = result[modelId].imageInputMode;
+    }
+  }
+  return result;
+}
+
+function getModelSettings(
+  profile: UIProviderProfile,
+  modelId: string
+): UIProviderModelSettings {
+  return (
+    profile.modelSettings[modelId] || {
+      contextWindow: '',
+      maxTokens: '',
+      imageInputMode: 'auto',
+      capabilities: {},
+    }
+  );
+}
+
+function toPersistedModelSettings(
+  modelSettings: Record<string, UIProviderModelSettings>
+): Record<string, ProviderModelSettings> | undefined {
+  const persisted: Record<string, ProviderModelSettings> = {};
+  for (const [modelId, settings] of Object.entries(modelSettings)) {
+    const trimmed = modelId.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const next: ProviderModelSettings = {};
+    if (settings.contextWindow) {
+      const value = Number(settings.contextWindow);
+      if (Number.isFinite(value) && value > 0) {
+        next.contextWindow = value;
+      }
+    }
+    if (settings.maxTokens) {
+      const value = Number(settings.maxTokens);
+      if (Number.isFinite(value) && value > 0) {
+        next.maxTokens = value;
+      }
+    }
+    if (settings.imageInputMode !== 'auto') {
+      next.imageInputMode = settings.imageInputMode;
+    }
+    const capabilities = normalizeModelCapabilityModes(settings.capabilities);
+    if (capabilities) {
+      next.capabilities = capabilities;
+      if (capabilities.imageInput && !next.imageInputMode) {
+        next.imageInputMode = capabilities.imageInput;
+      }
+    }
+    if (Object.keys(next).length > 0) {
+      persisted[trimmed] = next;
+    }
+  }
+  return Object.keys(persisted).length > 0 ? persisted : undefined;
 }
 
 function normalizeDiscoveredOllamaModels(models: string[] | undefined): ProviderModelInfo[] {
@@ -278,8 +376,7 @@ function normalizeProfile(
       ...fallback,
       apiKey: '',
       baseUrl: fallback.baseUrl,
-      contextWindow: '',
-      maxTokens: '',
+      modelSettings: {},
     };
   }
 
@@ -306,6 +403,36 @@ function normalizeProfile(
     dedupedModels.push(modelValue);
   }
 
+  const modelSettings = normalizeModelSettings(profile?.modelSettings);
+
+  // Migration: old profile-level overrides now belong to the selected model.
+  if (
+    modelValue &&
+    (profile?.contextWindow ||
+      profile?.maxTokens ||
+      profile?.imageInputMode === 'enabled' ||
+      profile?.imageInputMode === 'disabled')
+  ) {
+    modelSettings[modelValue] = {
+      ...getModelSettings({ ...fallback, modelSettings }, modelValue),
+      contextWindow: profile?.contextWindow
+        ? String(profile.contextWindow)
+        : modelSettings[modelValue]?.contextWindow || '',
+      maxTokens: profile?.maxTokens
+        ? String(profile.maxTokens)
+        : modelSettings[modelValue]?.maxTokens || '',
+      imageInputMode: normalizeImageInputMode(
+        profile?.imageInputMode ?? modelSettings[modelValue]?.imageInputMode
+      ),
+      capabilities: {
+        ...modelSettings[modelValue]?.capabilities,
+        ...(normalizeImageInputMode(profile?.imageInputMode) !== 'auto'
+          ? { imageInput: normalizeImageInputMode(profile?.imageInputMode) }
+          : {}),
+      },
+    };
+  }
+
   return {
     apiKey: profile?.apiKey || '',
     baseUrl: profileKey === 'ollama'
@@ -313,8 +440,7 @@ function normalizeProfile(
       : rawBaseUrl,
     model: modelValue,
     models: dedupedModels,
-    contextWindow: profile?.contextWindow ? String(profile.contextWindow) : '',
-    maxTokens: profile?.maxTokens ? String(profile.maxTokens) : '',
+    modelSettings,
   };
 }
 
@@ -392,8 +518,7 @@ function toPersistedProfiles(
       baseUrl: profile.baseUrl.trim() || undefined,
       model: profile.model,
       models: profile.models.length > 0 ? profile.models : undefined,
-      contextWindow: profile.contextWindow ? Number(profile.contextWindow) : undefined,
-      maxTokens: profile.maxTokens ? Number(profile.maxTokens) : undefined,
+      modelSettings: toPersistedModelSettings(profile.modelSettings),
     };
   }
   return persisted;
@@ -421,6 +546,7 @@ export function buildApiConfigDraftSignature(
       baseUrl: persisted[key]?.baseUrl || '',
       model: persisted[key]?.model || '',
       models: persisted[key]?.models || [],
+      modelSettings: persisted[key]?.modelSettings || {},
     })),
   });
 }
@@ -463,6 +589,7 @@ export function buildApiConfigSets(
           baseUrl: uiProfile.baseUrl,
           model: uiProfile.model,
           models: uiProfile.models.length > 0 ? uiProfile.models : undefined,
+          modelSettings: toPersistedModelSettings(uiProfile.modelSettings),
         };
       }
 
@@ -477,6 +604,7 @@ export function buildApiConfigSets(
           baseUrl: ollamaProfile.baseUrl,
           model: ollamaProfile.model,
           models: ollamaProfile.models.length > 0 ? ollamaProfile.models : undefined,
+          modelSettings: toPersistedModelSettings(ollamaProfile.modelSettings),
         };
       }
 
@@ -1032,8 +1160,10 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
   const baseUrl = currentProfile.baseUrl;
   const model = currentProfile.model;
   const models = currentProfile.models;
-  const contextWindow = currentProfile.contextWindow;
-  const maxTokens = currentProfile.maxTokens;
+  const activeModelSettings = getModelSettings(currentProfile, model);
+  const modelSettings = currentProfile.modelSettings;
+  const contextWindow = activeModelSettings.contextWindow;
+  const maxTokens = activeModelSettings.maxTokens;
   const detectedProviderSetup = useMemo(
     () => (provider === 'custom' ? detectCommonProviderSetup(baseUrl) : null),
     [baseUrl, provider]
@@ -1278,18 +1408,106 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
     [updateActiveProfile]
   );
 
-  const setContextWindow = useCallback(
-    (value: string) => {
-      updateActiveProfile((prev) => ({ ...prev, contextWindow: value }));
+  const updateModelSettings = useCallback(
+    (
+      modelId: string,
+      updater: (prev: UIProviderModelSettings) => UIProviderModelSettings
+    ) => {
+      const trimmed = modelId.trim();
+      if (!trimmed) {
+        return;
+      }
+      updateActiveProfile((prev) => {
+        const nextSettings = updater(getModelSettings(prev, trimmed));
+        const modelSettings = { ...prev.modelSettings };
+        const isEmpty =
+          !nextSettings.contextWindow &&
+          !nextSettings.maxTokens &&
+          nextSettings.imageInputMode === 'auto' &&
+          Object.keys(nextSettings.capabilities).length === 0;
+        if (isEmpty) {
+          delete modelSettings[trimmed];
+        } else {
+          modelSettings[trimmed] = nextSettings;
+        }
+        return { ...prev, modelSettings };
+      });
     },
     [updateActiveProfile]
   );
 
+  const setModelContextWindow = useCallback(
+    (modelId: string, value: string) => {
+      updateModelSettings(modelId, (prev) => ({ ...prev, contextWindow: value }));
+    },
+    [updateModelSettings]
+  );
+
+  const setModelMaxTokens = useCallback(
+    (modelId: string, value: string) => {
+      updateModelSettings(modelId, (prev) => ({ ...prev, maxTokens: value }));
+    },
+    [updateModelSettings]
+  );
+
+  const setModelImageInputMode = useCallback(
+    (modelId: string, value: 'auto' | 'enabled' | 'disabled') => {
+      updateModelSettings(modelId, (prev) => {
+        const capabilities = { ...prev.capabilities };
+        if (value === 'auto') {
+          delete capabilities.imageInput;
+        } else {
+          capabilities.imageInput = value;
+        }
+        return { ...prev, imageInputMode: value, capabilities };
+      });
+    },
+    [updateModelSettings]
+  );
+
+  const setModelCapabilityMode = useCallback(
+    (
+      modelId: string,
+      capabilityId: keyof ModelCapabilityModes,
+      value: 'auto' | 'enabled' | 'disabled'
+    ) => {
+      updateModelSettings(modelId, (prev) => {
+        const capabilities = { ...prev.capabilities };
+        if (value === 'auto') {
+          delete capabilities[capabilityId];
+        } else {
+          capabilities[capabilityId] = value;
+        }
+        return {
+          ...prev,
+          capabilities,
+          imageInputMode:
+            capabilityId === 'imageInput' ? value : prev.imageInputMode,
+        };
+      });
+    },
+    [updateModelSettings]
+  );
+
+  const setContextWindow = useCallback(
+    (value: string) => {
+      setModelContextWindow(model, value);
+    },
+    [model, setModelContextWindow]
+  );
+
   const setMaxTokens = useCallback(
     (value: string) => {
-      updateActiveProfile((prev) => ({ ...prev, maxTokens: value }));
+      setModelMaxTokens(model, value);
     },
-    [updateActiveProfile]
+    [model, setModelMaxTokens]
+  );
+
+  const setImageInputMode = useCallback(
+    (value: 'auto' | 'enabled' | 'disabled') => {
+      setModelImageInputMode(model, value);
+    },
+    [model, setModelImageInputMode]
   );
 
   const setModels = useCallback(
@@ -1314,11 +1532,17 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
 
   const removeModel = useCallback(
     (modelId: string) => {
-      updateActiveProfile((prev) => ({
-        ...prev,
-        models: prev.models.filter((m) => m !== modelId),
-        model: prev.model === modelId ? prev.models[0] || '' : prev.model,
-      }));
+      updateActiveProfile((prev) => {
+        const nextModels = prev.models.filter((m) => m !== modelId);
+        const nextModelSettings = { ...prev.modelSettings };
+        delete nextModelSettings[modelId];
+        return {
+          ...prev,
+          models: nextModels,
+          model: prev.model === modelId ? nextModels[0] || '' : prev.model,
+          modelSettings: nextModelSettings,
+        };
+      });
     },
     [updateActiveProfile]
   );
@@ -2168,8 +2392,10 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
     baseUrl,
     model,
     models,
+    modelSettings,
     contextWindow,
     maxTokens,
+    imageInputMode: activeModelSettings.imageInputMode,
     modelInputPlaceholder: modelInputGuidance.placeholder,
     modelInputHint: modelInputGuidance.hint,
     thinkingLevel,
@@ -2212,6 +2438,11 @@ export function useApiConfigState(options: UseApiConfigStateOptions = {}) {
     removeModel,
     setContextWindow,
     setMaxTokens,
+    setImageInputMode,
+    setModelContextWindow,
+    setModelMaxTokens,
+    setModelImageInputMode,
+    setModelCapabilityMode,
     setModels,
     setThinkingLevel,
     setEnableThinking,

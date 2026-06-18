@@ -66,7 +66,68 @@ describe('ConfigStore context window projection', () => {
     expect(config.model).toBe('deepseek-v4-flash');
     expect(config.contextWindow).toBe(1_024_000);
     expect(config.maxTokens).toBe(384_000);
-    expect(config.profiles['custom:openai']?.contextWindow).toBe(1_024_000);
+    expect(
+      config.profiles['custom:openai']?.modelSettings?.['deepseek-v4-flash']?.contextWindow
+    ).toBe(1_024_000);
+    expect(
+      config.profiles['custom:openai']?.modelSettings?.['deepseek-v4-flash']?.maxTokens
+    ).toBe(384_000);
+  });
+
+  it('projects only the active model settings from multi-model profiles', async () => {
+    const { ConfigStore } = await import('../main/config/config-store');
+    const configStore = new ConfigStore();
+
+    configStore.update({
+      provider: 'ollama',
+      activeProfileKey: 'ollama',
+      profiles: {
+        ollama: {
+          apiKey: '',
+          baseUrl: 'http://localhost:11434/v1',
+          model: 'llava-vl',
+          models: ['llava-vl', 'deepseek-r1'],
+          modelSettings: {
+            'llava-vl': {
+              contextWindow: 65_536,
+              maxTokens: 8_192,
+              imageInputMode: 'enabled',
+              capabilities: {
+                imageInput: 'enabled',
+                tools: 'enabled',
+                audioInput: 'disabled',
+              },
+            },
+            'deepseek-r1': {
+              contextWindow: 131_072,
+              maxTokens: 16_384,
+              imageInputMode: 'disabled',
+              capabilities: {
+                imageInput: 'disabled',
+                reasoning: 'enabled',
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(configStore.getAll().contextWindow).toBe(65_536);
+    expect(configStore.getAll().imageInputMode).toBe('enabled');
+
+    configStore.update({ model: 'deepseek-r1' });
+    const config = configStore.getAll();
+
+    expect(config.model).toBe('deepseek-r1');
+    expect(config.contextWindow).toBe(131_072);
+    expect(config.maxTokens).toBe(16_384);
+    expect(config.imageInputMode).toBe('disabled');
+    expect(config.profiles.ollama?.modelSettings?.['deepseek-r1']?.capabilities?.reasoning).toBe(
+      'enabled'
+    );
+    expect(config.profiles.ollama?.modelSettings?.['llava-vl']?.capabilities?.tools).toBe(
+      'enabled'
+    );
   });
 
   it('does not persist undefined context fields when creating or switching config sets', async () => {
