@@ -5,6 +5,32 @@ All notable changes to the Open Cowork AI agent desktop app will be documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.10] - 2026-06-18
+
+### 🚀 新功能
+
+#### 模型设置重构（per-model 配置）
+- contextWindow/maxTokens/imageInputMode 从 profile 级别改为**每个模型独立设置**
+- 新增 `ModelSettingsList` 组件，每个模型可展开配置
+- 新增 `model-capabilities.ts`，支持按模型名称自动推断能力（视觉/推理/工具等）并手动覆盖
+- 新增 27 个 i18n key 支持模型设置界面中英文
+
+#### 运行时安全加固
+- agent-runner 启动时固定配置快照，会话运行中禁止切 model/configSet/thinkingLevel
+- 新增 5min 独立工具超时追踪（`TOOL_EXECUTION_TIMEOUT`）
+- `stopSession` 强制释放 active session slot，避免 stuck SDK 阻塞重试
+
+### 🔧 改进
+- Pi SDK 模型路由集成 `resolveImageInputOverride()` 透传用户图片输入设置
+- 旧 profile 级配置自动迁移到新的 modelSettings 结构
+- SettingsAPI 简化：原有 contextWindow/maxTokens 输入框移除，纳入 ModelSettingsList
+
+### 🧪 测试
+- 新增 config-store-context-window.test.ts（多模型独立设置）
+- 新增 api-config-state.test.ts（旧字段自动迁移）
+- 新增 pi-model-resolution.test.ts（resolveImageInputOverride）
+- 新增 agent-runner-pi.test.ts（运行时快照/安全守卫/release session slot）
+
 ## [3.5.9] - 2026-06-06
 
 ### 🚀 新功能
