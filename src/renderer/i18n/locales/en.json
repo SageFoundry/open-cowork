@@ -717,6 +717,7 @@
     "plan": "Plan",
     "planModeActive": "Currently in Plan Mode (read-only)",
     "planModeOff": "Switch to Plan Mode",
+    "commonTextSuggestions": "Common text",
     "running": "Running",
     "outputActive": "Streaming",
     "waitingOutput": "Waiting for output",

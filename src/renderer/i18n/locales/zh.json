@@ -717,6 +717,7 @@
     "plan": "计划",
     "planModeActive": "当前处于计划模式（只读）",
     "planModeOff": "切换到计划模式",
+    "commonTextSuggestions": "常用文本",
     "running": "运行中",
     "outputActive": "输出中",
     "waitingOutput": "等待输出",

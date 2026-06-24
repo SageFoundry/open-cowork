@@ -14,6 +14,10 @@ import {
 import { getDisplayStreamRate, useAppStore } from '../store';
 import { useIPC } from '../hooks/useIPC';
 import { groupMessagesByTurn, type ConversationTurn } from '../utils/conversation-turns';
+import {
+  getCommonTextSuggestions,
+  type CommonTextSuggestion,
+} from '../utils/common-text-suggestions';
 import { formatChatTurnTime } from '../utils/i18n-format';
 import { AssistantTurnGroup } from './AssistantTurnGroup';
 import { MessageCard } from './MessageCard';
@@ -31,6 +35,7 @@ import {
   Brain,
   ClipboardList,
   Activity,
+  Sparkles,
 } from 'lucide-react';
 import { API_PROVIDER_PRESETS } from '../../shared/api-model-presets';
 
@@ -359,6 +364,10 @@ export function ChatView() {
   const conversationTurns = useMemo(
     () => groupMessagesByTurn(displayedMessages),
     [displayedMessages]
+  );
+  const commonTextSuggestions = useMemo(
+    () => getCommonTextSuggestions(messages, 3),
+    [messages]
   );
 
   const forceScrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
@@ -1221,6 +1230,27 @@ export function ChatView() {
     }
   };
 
+  const sendSuggestedText = useCallback(
+    async (suggestion: CommonTextSuggestion) => {
+      if (!activeSessionId || isSubmitting || isBlockingContext) {
+        return;
+      }
+
+      setIsSubmitting(true);
+      try {
+        await continueSession(activeSessionId, [
+          {
+            type: 'text',
+            text: suggestion.text,
+          },
+        ]);
+      } finally {
+        setIsSubmitting(false);
+      }
+    },
+    [activeSessionId, continueSession, isBlockingContext, isSubmitting]
+  );
+
   if (!activeSession) {
     return (
       <div className="flex-1 flex items-center justify-center text-text-muted">
@@ -1402,6 +1432,33 @@ export function ChatView() {
                     <span className="hidden md:inline">{streamKindLabel}</span>
                   </>
                 )}
+              </div>
+            </div>
+          )}
+          {commonTextSuggestions.length > 0 && (
+            <div className="mb-3 rounded-[1.4rem] border border-border-subtle bg-background/78 px-3 py-3 shadow-sm">
+              <div className="mb-2 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.14em] text-text-muted">
+                <Sparkles className="h-3.5 w-3.5" />
+                <span>{t('chat.commonTextSuggestions')}</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {commonTextSuggestions.map((suggestion) => (
+                  <button
+                    key={suggestion.text}
+                    type="button"
+                    onClick={() => {
+                      void sendSuggestedText(suggestion);
+                    }}
+                    disabled={isSubmitting || isBlockingContext}
+                    className="group inline-flex max-w-full items-center gap-2 rounded-full border border-border-subtle bg-surface-muted px-3 py-2 text-left text-xs text-text-primary transition-colors hover:border-accent/40 hover:bg-accent/5 disabled:cursor-not-allowed disabled:opacity-60"
+                    title={suggestion.text}
+                  >
+                    <span className="min-w-0 truncate">{suggestion.previewText}</span>
+                    <span className="shrink-0 rounded-full bg-background/80 px-1.5 py-0.5 text-[10px] text-text-muted">
+                      ×{suggestion.count}
+                    </span>
+                  </button>
+                ))}
               </div>
             </div>
           )}
