@@ -53,6 +53,11 @@ export interface SessionMessagesPage {
   oldestTimestamp: number | null;
 }
 
+export interface ForkSessionResult {
+  session: Session;
+  messages: Message[];
+}
+
 export type MessageRole = 'user' | 'assistant' | 'system';
 
 export type ContentBlock =
@@ -469,6 +474,7 @@ export type ClientEvent =
         clientTimestamp?: number;
       };
     }
+  | { type: 'session.fork'; payload: { sourceSessionId: string; messageId: string } }
   | { type: 'session.compact'; payload: { sessionId: string } }
   | { type: 'session.stop'; payload: { sessionId: string } }
   | { type: 'session.delete'; payload: { sessionId: string } }

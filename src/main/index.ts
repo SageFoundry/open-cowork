@@ -1551,6 +1551,9 @@ async function handleClientEvent(event: ClientEvent): Promise<unknown> {
         event.payload.clientTimestamp
       );
 
+    case 'session.fork':
+      return sm.forkSessionAtMessage(event.payload.sourceSessionId, event.payload.messageId);
+
     case 'session.compact':
       return sm.compactSession(event.payload.sessionId);
 

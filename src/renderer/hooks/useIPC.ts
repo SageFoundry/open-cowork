@@ -14,6 +14,7 @@ import type {
   TokenBudgetSnapshot,
   BackgroundTask,
   BackgroundTaskStartInput,
+  ForkSessionResult,
 } from '../types';
 import i18n from '../i18n/config';
 
@@ -488,6 +489,8 @@ export function useIPC() {
   const addSession = useAppStore((s) => s.addSession);
   const updateSession = useAppStore((s) => s.updateSession);
   const addMessage = useAppStore((s) => s.addMessage);
+  const setMessages = useAppStore((s) => s.setMessages);
+  const setMessagePagination = useAppStore((s) => s.setMessagePagination);
   const setLoading = useAppStore((s) => s.setLoading);
   const setPendingPermission = useAppStore((s) => s.setPendingPermission);
   const clearActiveTurn = useAppStore((s) => s.clearActiveTurn);
@@ -761,6 +764,55 @@ export function useIPC() {
       clearPendingTurns,
       startExecutionClock,
     ]
+  );
+
+  const forkSession = useCallback(
+    async (sourceSessionId: string, messageId: string): Promise<Session | null> => {
+      if (!isElectron) {
+        useAppStore.getState().setGlobalNotice({
+          id: `notice-session-fork-${Date.now()}`,
+          type: 'error',
+          message: i18n.t('chat.forkFailed'),
+          messageKey: 'chat.forkFailed',
+        });
+        return null;
+      }
+
+      try {
+        const result = await invoke<ForkSessionResult>({
+          type: 'session.fork',
+          payload: { sourceSessionId, messageId },
+        });
+        if (!result?.session) return null;
+
+        addSession(result.session);
+        setMessages(result.session.id, result.messages || []);
+        setMessagePagination(result.session.id, {
+          hasMore: false,
+          oldestTimestamp: result.messages?.[0]?.timestamp ?? null,
+          initialLoaded: true,
+          loadingOlder: false,
+        });
+        useAppStore.getState().setActiveSession(result.session.id);
+        useAppStore.getState().setGlobalNotice({
+          id: `notice-session-fork-${Date.now()}`,
+          type: 'success',
+          message: i18n.t('chat.forkCreated'),
+          messageKey: 'chat.forkCreated',
+        });
+
+        return result.session;
+      } catch (e) {
+        useAppStore.getState().setGlobalNotice({
+          id: `notice-session-fork-${Date.now()}`,
+          type: 'error',
+          message: e instanceof Error ? e.message : i18n.t('chat.forkFailed'),
+          messageKey: e instanceof Error ? undefined : 'chat.forkFailed',
+        });
+        return null;
+      }
+    },
+    [invoke, addSession, setMessages, setMessagePagination]
   );
 
   const stopSession = useCallback(
@@ -1039,6 +1091,7 @@ export function useIPC() {
     invoke,
     startSession,
     continueSession,
+    forkSession,
     stopSession,
     renameSession,
     deleteSession,

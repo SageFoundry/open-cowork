@@ -36,6 +36,7 @@ import {
   ClipboardList,
   Activity,
   Sparkles,
+  GitFork,
 } from 'lucide-react';
 import { API_PROVIDER_PRESETS } from '../../shared/api-model-presets';
 
@@ -223,7 +224,7 @@ export function ChatView() {
   const streamActivity = useAppStore((s) =>
     activeSessionId ? s.sessionStates[activeSessionId]?.streamActivity ?? null : null
   );
-  const { continueSession, stopSession, getSessionMessages, isElectron } = useIPC();
+  const { continueSession, forkSession, stopSession, getSessionMessages, isElectron } = useIPC();
   const currentThinkingLabel =
     THINKING_LEVEL_OPTIONS.find((option) => option.value === thinkingLevel)?.labelKey ||
     'chat.thinkingOff';
@@ -364,6 +365,13 @@ export function ChatView() {
   const conversationTurns = useMemo(
     () => groupMessagesByTurn(displayedMessages),
     [displayedMessages]
+  );
+  const handleForkMessage = useCallback(
+    (messageId: string) => {
+      if (!activeSessionId) return;
+      void forkSession(activeSessionId, messageId);
+    },
+    [activeSessionId, forkSession]
   );
   const commonTextSuggestions = useMemo(
     () => getCommonTextSuggestions(messages, 3),
@@ -630,6 +638,25 @@ export function ChatView() {
     const total = input + output;
     if (total <= 0 && cacheRead <= 0 && cacheWrite <= 0) return null;
     return { input, output, cacheRead, cacheWrite, total };
+  }, []);
+
+  const getTurnForkMessageId = useCallback((turn: ConversationTurn): string | null => {
+    for (let index = turn.assistantMessages.length - 1; index >= 0; index -= 1) {
+      const message = turn.assistantMessages[index];
+      if (!message.id.startsWith('partial-') && !message.localStatus) {
+        return message.id;
+      }
+    }
+
+    if (
+      turn.userMessage &&
+      !turn.userMessage.id.startsWith('partial-') &&
+      !turn.userMessage.localStatus
+    ) {
+      return turn.userMessage.id;
+    }
+
+    return null;
   }, []);
 
   // Debounced scroll function to prevent scroll conflicts
@@ -1318,7 +1345,7 @@ export function ChatView() {
             conversationTurns.map((turn, index) => (
               <div
                 key={turn.userMessage?.id ?? turn.assistantMessages[0]?.id ?? `turn-${index}`}
-                className="space-y-1.5"
+                className="space-y-1.5 group"
               >
                 {turn.userMessage && <MessageCard message={turn.userMessage} />}
                 {turn.assistantMessages.length > 0 && (
@@ -1334,7 +1361,8 @@ export function ChatView() {
                 {(() => {
                   const startedAt = getTurnStartedAt(turn);
                   const tokenSummary = getTurnTokenSummary(turn);
-                  if (!startedAt && !tokenSummary) return null;
+                  const forkMessageId = getTurnForkMessageId(turn);
+                  if (!startedAt && !tokenSummary && !forkMessageId) return null;
 
                   return (
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 pt-0.5 text-[11px] text-text-muted/75">
@@ -1360,6 +1388,22 @@ export function ChatView() {
                             output: formatCompactTokenCount(tokenSummary.output),
                           })}
                         </span>
+                      )}
+                      {(startedAt || tokenSummary) && forkMessageId && (
+                        <span className="text-text-muted/35">·</span>
+                      )}
+                      {forkMessageId && (
+                        <button
+                          type="button"
+                          onClick={() => handleForkMessage(forkMessageId)}
+                          className="group/fork relative inline-flex h-5 w-5 items-center justify-center rounded-md text-text-muted/75 opacity-0 transition-all hover:bg-surface-hover hover:text-text-secondary group-hover:opacity-100 focus:opacity-100"
+                          aria-label={t('messageCard.forkFromHere')}
+                        >
+                          <GitFork className="h-3 w-3" />
+                          <span className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-1 -translate-x-1/2 whitespace-nowrap rounded-md bg-surface-active px-2 py-1 text-[11px] font-medium text-text-primary opacity-0 shadow-lg transition-opacity group-hover/fork:opacity-100 group-focus/fork:opacity-100">
+                            {t('messageCard.forkFromHere')}
+                          </span>
+                        </button>
                       )}
                     </div>
                   );

@@ -8,6 +8,8 @@ function makeEvent(type: ClientEvent['type']): ClientEvent {
       return { type, payload: { title: 'Hello', prompt: 'World' } };
     case 'session.continue':
       return { type, payload: { sessionId: 'session-1', prompt: 'Next' } };
+    case 'session.fork':
+      return { type, payload: { sourceSessionId: 'session-1', messageId: 'message-1' } };
     case 'session.stop':
     case 'session.delete':
     case 'session.getMessages':
@@ -36,6 +38,7 @@ describe('eventRequiresSessionManager', () => {
     const requiredTypes: ClientEvent['type'][] = [
       'session.start',
       'session.continue',
+      'session.fork',
       'session.stop',
       'session.delete',
       'session.list',

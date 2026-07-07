@@ -274,6 +274,180 @@ describe('SessionManager.getMessages content normalization', () => {
 });
 
 // ------------------------------------------------------------------
+// forkSessionAtMessage
+// ------------------------------------------------------------------
+describe('SessionManager.forkSessionAtMessage', () => {
+  const sourceSessionRow = {
+    id: 'source-session',
+    title: 'Source Session',
+    claude_session_id: 'claude-source',
+    openai_thread_id: 'thread-source',
+    status: 'running',
+    cwd: '/tmp/workspace',
+    mounted_paths: JSON.stringify([{ virtual: '/mnt/workspace', real: '/tmp/workspace' }]),
+    allowed_tools: JSON.stringify(['read', 'write']),
+    memory_enabled: 1,
+    model: 'claude-3-5-sonnet',
+    config_set_id: 'config-1',
+    thinking_level: 'high',
+    plan_mode: 1,
+    created_at: 1000,
+    updated_at: 2000,
+  };
+
+  const sourceMessageRows = [
+    {
+      id: 'm1',
+      session_id: 'source-session',
+      role: 'user',
+      content: JSON.stringify([{ type: 'text', text: 'first' }]),
+      timestamp: 10,
+      token_usage: null,
+      execution_time_ms: null,
+    },
+    {
+      id: 'm2',
+      session_id: 'source-session',
+      role: 'assistant',
+      content: JSON.stringify([{ type: 'text', text: 'second' }]),
+      timestamp: 20,
+      token_usage: JSON.stringify({ input: 12, output: 34 }),
+      execution_time_ms: 1234,
+    },
+    {
+      id: 'm3',
+      session_id: 'source-session',
+      role: 'user',
+      content: JSON.stringify([{ type: 'text', text: 'third' }]),
+      timestamp: 30,
+      token_usage: null,
+      execution_time_ms: null,
+    },
+  ];
+
+  it('forks metadata without copying provider runtime ids', () => {
+    const db = makeDb({
+      sessions: {
+        create: vi.fn(),
+        get: vi.fn(() => sourceSessionRow),
+        getAll: vi.fn(() => []),
+        update: vi.fn(),
+        delete: vi.fn(),
+      } as any,
+      messages: {
+        create: vi.fn(),
+        delete: vi.fn(),
+        deleteBySessionId: vi.fn(),
+        getBySessionId: vi.fn(() => sourceMessageRows),
+      } as any,
+    });
+    const manager = new SessionManager(db, vi.fn());
+
+    const result = manager.forkSessionAtMessage('source-session', 'm2');
+
+    expect(result.session.id).not.toBe('source-session');
+    expect(result.session.title).toBe('Source Session (fork)');
+    expect(result.session.claudeSessionId).toBeUndefined();
+    expect(result.session.openaiThreadId).toBeUndefined();
+    expect(result.session.cwd).toBe('/tmp/workspace');
+    expect(result.session.mountedPaths).toEqual([
+      { virtual: '/mnt/workspace', real: '/tmp/workspace' },
+    ]);
+    expect(result.session.allowedTools).toEqual(['read', 'write']);
+    expect(result.session.memoryEnabled).toBe(true);
+    expect(result.session.model).toBe('claude-3-5-sonnet');
+    expect(result.session.configSetId).toBe('config-1');
+    expect(result.session.thinkingLevel).toBe('high');
+    expect(result.session.planMode).toBe(true);
+
+    const savedSession = vi.mocked(db.sessions.create).mock.calls[0][0];
+    expect(savedSession.claude_session_id).toBeNull();
+    expect(savedSession.openai_thread_id).toBeNull();
+    expect(savedSession.status).toBe('idle');
+  });
+
+  it('copies only messages through the selected message and rewrites ids', () => {
+    const db = makeDb({
+      sessions: {
+        create: vi.fn(),
+        get: vi.fn(() => sourceSessionRow),
+        getAll: vi.fn(() => []),
+        update: vi.fn(),
+        delete: vi.fn(),
+      } as any,
+      messages: {
+        create: vi.fn(),
+        delete: vi.fn(),
+        deleteBySessionId: vi.fn(),
+        getBySessionId: vi.fn(() => sourceMessageRows),
+      } as any,
+    });
+    const manager = new SessionManager(db, vi.fn());
+
+    const result = manager.forkSessionAtMessage('source-session', 'm2');
+
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages.map((message) => message.role)).toEqual(['user', 'assistant']);
+    expect(result.messages.map((message) => message.content)).toEqual([
+      [{ type: 'text', text: 'first' }],
+      [{ type: 'text', text: 'second' }],
+    ]);
+    expect(result.messages.every((message) => message.sessionId === result.session.id)).toBe(true);
+    expect(result.messages.map((message) => message.id)).not.toContain('m1');
+    expect(result.messages.map((message) => message.id)).not.toContain('m2');
+    expect(result.messages[1].tokenUsage).toEqual({ input: 12, output: 34 });
+    expect(result.messages[1].executionTimeMs).toBe(1234);
+
+    const savedMessages = vi.mocked(db.messages.create).mock.calls.map((call) => call[0]);
+    expect(savedMessages).toHaveLength(2);
+    expect(savedMessages.every((message) => message.session_id === result.session.id)).toBe(true);
+    expect(savedMessages.map((message) => message.id)).toEqual(
+      result.messages.map((message) => message.id)
+    );
+  });
+
+  it('throws when the source session is missing', () => {
+    const db = makeDb({
+      sessions: {
+        create: vi.fn(),
+        get: vi.fn(() => null),
+        getAll: vi.fn(() => []),
+        update: vi.fn(),
+        delete: vi.fn(),
+      } as any,
+    });
+    const manager = new SessionManager(db, vi.fn());
+
+    expect(() => manager.forkSessionAtMessage('missing-session', 'm1')).toThrow(
+      'Session not found: missing-session'
+    );
+  });
+
+  it('throws when the selected message is missing', () => {
+    const db = makeDb({
+      sessions: {
+        create: vi.fn(),
+        get: vi.fn(() => sourceSessionRow),
+        getAll: vi.fn(() => []),
+        update: vi.fn(),
+        delete: vi.fn(),
+      } as any,
+      messages: {
+        create: vi.fn(),
+        delete: vi.fn(),
+        deleteBySessionId: vi.fn(),
+        getBySessionId: vi.fn(() => sourceMessageRows),
+      } as any,
+    });
+    const manager = new SessionManager(db, vi.fn());
+
+    expect(() => manager.forkSessionAtMessage('source-session', 'missing-message')).toThrow(
+      'Message not found in session: missing-message'
+    );
+  });
+});
+
+// ------------------------------------------------------------------
 // handlePermissionResponse
 // ------------------------------------------------------------------
 describe('SessionManager.handlePermissionResponse', () => {

@@ -2878,6 +2878,16 @@ ${hints.join('\n')}
         runtimeConfig.provider,
         runtimeConfig.customProtocol
       );
+      const configuredThinkingLevel = runtimeConfig.thinkingLevel as PiThinkingLevel | undefined;
+      const enableThinking =
+        (runtimeConfig.enableThinking ?? false) ||
+        Boolean(configuredThinkingLevel && configuredThinkingLevel !== 'off');
+      const requestedThinkingLevel: PiThinkingLevel =
+        configuredThinkingLevel && configuredThinkingLevel !== 'off'
+          ? configuredThinkingLevel
+          : enableThinking
+            ? 'medium'
+            : 'off';
 
       // Normalize base URL for OpenAI-compatible providers (strips copy-pasted endpoint suffixes)
       const rawBaseUrl = runtimeConfig.baseUrl?.trim() || undefined;
@@ -2892,6 +2902,7 @@ ${hints.join('\n')}
         customBaseUrl: effectiveBaseUrl,
         rawProvider: runtimeConfig.provider,
         customProtocol: runtimeConfig.customProtocol,
+        requestedThinkingLevel,
       });
 
       if (!piModel) {
@@ -2922,6 +2933,7 @@ ${hints.join('\n')}
           customBaseUrl: effectiveBaseUrl,
           rawProvider: runtimeConfig.provider,
           customProtocol: runtimeConfig.customProtocol,
+          requestedThinkingLevel,
         });
         logCtxWarn(
           '[ClaudeAgentRunner] Model not in pi-ai registry, using synthetic model:',
@@ -3051,16 +3063,6 @@ ${hints.join('\n')}
       const turnLanguagePrompt = buildVisibleLanguageRuntimePrompt({ visibleLanguage });
 
       // Resolve thinking level early — needed for session reuse check below
-      const configuredThinkingLevel = runtimeConfig.thinkingLevel as PiThinkingLevel | undefined;
-      const enableThinking =
-        (runtimeConfig.enableThinking ?? false) ||
-        Boolean(configuredThinkingLevel && configuredThinkingLevel !== 'off');
-      const requestedThinkingLevel: PiThinkingLevel =
-        configuredThinkingLevel && configuredThinkingLevel !== 'off'
-          ? configuredThinkingLevel
-          : enableThinking
-            ? 'medium'
-            : 'off';
       const thinkingLevel = mapThinkingLevelForPiModel(requestedThinkingLevel, piModel);
       logCtx('[ClaudeAgentRunner] Thinking level:', thinkingLevel);
       if (thinkingLevel !== requestedThinkingLevel) {

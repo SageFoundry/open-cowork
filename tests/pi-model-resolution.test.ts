@@ -601,6 +601,60 @@ describe('pi model resolution helpers', () => {
     expect((model.compat as any)?.supportsStreaming).toBe(true);
   });
 
+  it('marks unknown custom openai-compatible models as reasoning-capable when thinking is requested', () => {
+    const model = applyPiModelRuntimeOverrides(
+      {
+        id: 'claude-3-7-sonnet',
+        name: 'claude-3-7-sonnet',
+        api: 'openai-completions',
+        provider: 'openai',
+        baseUrl: '',
+        reasoning: false,
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 16384,
+      },
+      {
+        configProvider: 'openai',
+        rawProvider: 'custom',
+        customProtocol: 'openai',
+        customBaseUrl: 'https://newapi.example.com/v1',
+        requestedThinkingLevel: 'medium',
+      },
+    );
+
+    expect(model.reasoning).toBe(true);
+    expect(model.compat?.supportsReasoningEffort).toBe(true);
+    expect(model.compat?.thinkingFormat).toBe('openai');
+  });
+
+  it('does not force reasoning for official openai endpoints when thinking is requested', () => {
+    const model = applyPiModelRuntimeOverrides(
+      {
+        id: 'gpt-4.1',
+        name: 'gpt-4.1',
+        api: 'openai-completions',
+        provider: 'openai',
+        baseUrl: 'https://api.openai.com/v1',
+        reasoning: false,
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 16384,
+      },
+      {
+        configProvider: 'openai',
+        rawProvider: 'openai',
+        customBaseUrl: 'https://api.openai.com/v1',
+        requestedThinkingLevel: 'medium',
+      },
+    );
+
+    expect(model.reasoning).toBe(false);
+    expect(model.compat?.supportsReasoningEffort).toBeUndefined();
+  });
+
   it.skip('applies DeepSeek V4 thinking compat to synthetic fallback aliases', () => {
     const model = applyPiModelRuntimeOverrides(
       {

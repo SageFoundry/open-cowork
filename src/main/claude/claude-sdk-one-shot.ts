@@ -181,12 +181,19 @@ async function runPiAiOneShot(
     routeProtocol === 'openai' && config.provider !== 'ollama'
       ? normalizeOpenAICompatibleBaseUrl(rawBaseUrl) || rawBaseUrl
       : rawBaseUrl;
+  const requestedThinkingLevel =
+    config.thinkingLevel && config.thinkingLevel !== 'off'
+      ? config.thinkingLevel
+      : config.enableThinking
+        ? 'medium'
+        : 'off';
 
   let piModel = resolvePiRegistryModel(modelString, {
     configProvider: keyProvider,
     customBaseUrl: effectiveBaseUrl,
     rawProvider: config.provider || 'anthropic',
     customProtocol: config.customProtocol,
+    requestedThinkingLevel,
   });
 
   if (!piModel) {
@@ -219,6 +226,7 @@ async function runPiAiOneShot(
       customBaseUrl: effectiveBaseUrl,
       rawProvider: config.provider || 'anthropic',
       customProtocol: config.customProtocol,
+      requestedThinkingLevel,
     });
     logWarn('[OneShot] Model not in pi-ai registry, using synthetic model:', modelString, '→', api);
   }

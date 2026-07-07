@@ -29,6 +29,7 @@ import type {
   TraceStep,
   FileAttachmentContent,
   SessionMessagesPage,
+  ForkSessionResult,
 } from '../../renderer/types';
 import type { CompactionSnapshotRow, DatabaseInstance, TraceStepRow } from '../db/database';
 import { PathResolver } from '../sandbox/path-resolver';
@@ -103,6 +104,8 @@ interface AgentRunner {
 
 const WORKSPACE_MOUNT_VIRTUAL_PATH = '/mnt/workspace';
 const TITLE_GENERATION_TIMEOUT_MS = 20000;
+const FORK_TITLE_SUFFIX = ' (fork)';
+const MAX_SESSION_TITLE_LENGTH = 120;
 const HISTORY_SEARCH_MAX_RESULTS = 50;
 const HISTORY_READ_MAX_CHARS = 30000;
 const MODE_EVENT_ENTER_PLAN = `<mode_event type="enter_plan">
@@ -801,6 +804,78 @@ export class SessionManager {
     }
 
     this.enqueuePrompt(session, prompt, content, contextConfig, clientMessageId, clientTimestamp);
+  }
+
+  forkSessionAtMessage(sourceSessionId: string, messageId: string): ForkSessionResult {
+    log('[SessionManager] Forking session:', sourceSessionId, 'at message:', messageId);
+
+    const sourceSession = this.loadSession(sourceSessionId);
+    if (!sourceSession) {
+      throw new Error(`Session not found: ${sourceSessionId}`);
+    }
+
+    const sourceMessages = this.getMessages(sourceSessionId);
+    const targetIndex = sourceMessages.findIndex((message) => message.id === messageId);
+    if (targetIndex < 0) {
+      throw new Error(`Message not found in session: ${messageId}`);
+    }
+
+    const forkedSession: Session = {
+      ...this.createSession(
+        this.buildForkTitle(sourceSession.title),
+        sourceSession.cwd,
+        [...sourceSession.allowedTools],
+        sourceSession.planMode
+      ),
+      mountedPaths: sourceSession.mountedPaths.map((mountedPath) => ({ ...mountedPath })),
+      memoryEnabled: sourceSession.memoryEnabled,
+      model: sourceSession.model,
+      configSetId: sourceSession.configSetId,
+      thinkingLevel: sourceSession.thinkingLevel,
+      planMode: sourceSession.planMode,
+      status: 'idle',
+      claudeSessionId: undefined,
+      openaiThreadId: undefined,
+    };
+
+    this.saveSession(forkedSession);
+
+    const copiedMessages = sourceMessages
+      .slice(0, targetIndex + 1)
+      .map((message) => this.cloneMessageForFork(message, forkedSession.id));
+
+    for (const message of copiedMessages) {
+      this.saveMessage(message);
+    }
+
+    log(
+      '[SessionManager] Forked session created:',
+      forkedSession.id,
+      'messages:',
+      copiedMessages.length
+    );
+
+    return { session: forkedSession, messages: copiedMessages };
+  }
+
+  private buildForkTitle(sourceTitle: string): string {
+    const normalizedTitle = sourceTitle.trim().replace(/\s+/g, ' ') || 'New Session';
+    const baseLength = Math.max(1, MAX_SESSION_TITLE_LENGTH - FORK_TITLE_SUFFIX.length);
+    return `${normalizedTitle.slice(0, baseLength).trimEnd()}${FORK_TITLE_SUFFIX}`;
+  }
+
+  private cloneMessageForFork(message: Message, targetSessionId: string): Message {
+    return {
+      id: uuidv4(),
+      sessionId: targetSessionId,
+      role: message.role,
+      content: JSON.parse(JSON.stringify(message.content)) as ContentBlock[],
+      timestamp: message.timestamp,
+      tokenUsage: message.tokenUsage
+        ? (JSON.parse(JSON.stringify(message.tokenUsage)) as Message['tokenUsage'])
+        : undefined,
+      executionTimeMs: message.executionTimeMs,
+    };
   }
 
   async compactSession(sessionId: string, contextConfig?: SessionContextConfig): Promise<void> {

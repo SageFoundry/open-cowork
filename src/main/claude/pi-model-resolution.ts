@@ -21,6 +21,7 @@ export interface PiModelLookupOptions {
   customBaseUrl?: string;
   customProtocol?: string;
   requestedModelString?: string;
+  requestedThinkingLevel?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 }
 
 export interface PiModelLookupCandidate {
@@ -1054,6 +1055,54 @@ function isDeepSeekV4ModelId(modelId: string | undefined): boolean {
   return /^deepseek-v4(?:[.:-]|$)/i.test(normalizedModelId(modelId));
 }
 
+function isThinkingRequested(level: PiModelLookupOptions['requestedThinkingLevel']): boolean {
+  return typeof level === 'string' && level !== 'off';
+}
+
+function shouldTreatAsCustomOpenAICompatibleEndpoint(
+  model: Model<Api>,
+  options: PiModelLookupOptions
+): boolean {
+  const endpoint = options.customBaseUrl?.trim() || model.baseUrl?.trim() || '';
+  if (!endpoint) {
+    return false;
+  }
+  if (options.rawProvider === 'openai' && isOfficialOpenAIBaseUrl(endpoint)) {
+    return false;
+  }
+  return (
+    model.api === 'openai-completions' &&
+    (options.configProvider === 'openai' ||
+      options.customProtocol === 'openai' ||
+      options.rawProvider === 'custom' ||
+      options.rawProvider === 'openai' ||
+      options.rawProvider === 'lingerai' ||
+      options.rawProvider === 'deepseek')
+  );
+}
+
+function inferOpenAICompatibleThinkingFormat(
+  model: Model<Api>,
+  options: PiModelLookupOptions
+): string {
+  const compat =
+    model.compat && typeof model.compat === 'object'
+      ? (model.compat as Record<string, unknown>)
+      : {};
+  if (typeof compat.thinkingFormat === 'string' && compat.thinkingFormat.trim().length > 0) {
+    return compat.thinkingFormat;
+  }
+
+  const endpoint = options.customBaseUrl?.trim() || model.baseUrl?.trim() || '';
+  if (options.rawProvider === 'deepseek' || endpoint.includes('deepseek.com')) {
+    return 'deepseek';
+  }
+  if (options.rawProvider === 'openrouter' || endpoint.includes('openrouter.ai')) {
+    return 'openrouter';
+  }
+  return 'openai';
+}
+
 function addNativeOpenAICompatibleLookupCandidates(
   candidates: PiModelLookupCandidate[],
   seen: Set<string>,
@@ -1164,6 +1213,25 @@ export function applyPiModelRuntimeOverrides(
         ...(nextModel.compat || {}),
         supportsDeveloperRole: false,
         supportsStore: false,
+      },
+    } as typeof nextModel;
+  }
+
+  if (
+    isThinkingRequested(options.requestedThinkingLevel) &&
+    shouldTreatAsCustomOpenAICompatibleEndpoint(nextModel, options)
+  ) {
+    const currentCompat =
+      nextModel.compat && typeof nextModel.compat === 'object'
+        ? (nextModel.compat as Record<string, unknown>)
+        : {};
+    nextModel = {
+      ...nextModel,
+      reasoning: true,
+      compat: {
+        ...currentCompat,
+        supportsReasoningEffort: currentCompat.supportsReasoningEffort ?? true,
+        thinkingFormat: inferOpenAICompatibleThinkingFormat(nextModel, options),
       },
     } as typeof nextModel;
   }
