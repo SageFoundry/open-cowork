@@ -51,6 +51,8 @@ function populateWin32Artifacts(root: string): void {
   makeDir(path.join(root, 'dist'));
   makeDir(path.join(root, '.claude/skills'));
   makeFile(path.join(root, 'resources/node/win32-x64/node.exe'));
+  makeFile(path.join(root, 'resources/node/win32-x64/npm_pkg/npm/bin/npm-cli.js'));
+  makeFile(path.join(root, 'resources/node/win32-x64/npm_pkg/npm/bin/npx-cli.js'));
   makeFile(path.join(root, 'resources/tools/win32-x64/bin/rg.exe'));
   makeFile(path.join(root, 'dist-wsl-agent/index.js'));
 }
@@ -92,8 +94,8 @@ describe('pre-build-check: runChecks', () => {
 
     expect(result.failed).toBe(0);
     expect(result.hasFatal).toBe(false);
-    // 5 common + 3 win32 FATAL = 8 FATAL checks should pass
-    expect(result.passed).toBeGreaterThanOrEqual(8);
+    // 5 common + 5 win32 FATAL = 10 FATAL checks should pass
+    expect(result.passed).toBeGreaterThanOrEqual(10);
   });
 
   it('reports warnings for optional darwin resources that are missing', () => {
@@ -163,6 +165,19 @@ describe('pre-build-check: runChecks', () => {
 
     expect(result.failed).toBeGreaterThan(0);
     expect(result.hasFatal).toBe(true);
+  });
+
+  it('reports hasFatal when bundled win32 npm CLI is missing', () => {
+    populateWin32Artifacts(tmpDir);
+    fs.rmSync(path.join(tmpDir, 'resources/node/win32-x64/npm_pkg'), { recursive: true });
+
+    const result = runChecks(tmpDir, 'win32', 'x64');
+
+    expect(result.failed).toBeGreaterThan(0);
+    expect(result.hasFatal).toBe(true);
+    expect(result.results.some((r: { relPath: string; passed: boolean }) => {
+      return r.relPath === 'resources/node/win32-x64/npm_pkg/npm/bin/npm-cli.js' && !r.passed;
+    })).toBe(true);
   });
 
   it('reports hasFatal when wsl-agent index.js is missing', () => {

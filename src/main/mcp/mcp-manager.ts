@@ -154,9 +154,10 @@ export class MCPManager {
 
   /**
    * Get bundled Node.js path
-   * Returns the path to the bundled node/npx binaries
+   * Returns the path to the bundled node runtime. npx is optional because
+   * Windows packaged builds may include node.exe without npm's node_modules.
    */
-  private getBundledNodePath(): { node: string; npx: string } | null {
+  private getBundledNodePath(): { node: string; npx: string | null } | null {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const path = require('path');
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -197,17 +198,28 @@ export class MCPManager {
     const nodePath = path.join(binDir, nodeExe);
     const npxPath = path.join(binDir, npxExe);
 
-    // Verify files exist
-    if (fs.existsSync(nodePath) && fs.existsSync(npxPath)) {
-      log(`[MCPManager] Found bundled Node.js: ${nodePath}`);
-      log(`[MCPManager] Found bundled npx: ${npxPath}`);
-      return { node: nodePath, npx: npxPath };
-    } else {
-      logWarn(
-        `[MCPManager] Bundled binaries incomplete - node: ${fs.existsSync(nodePath)}, npx: ${fs.existsSync(npxPath)}`
-      );
+    if (!fs.existsSync(nodePath)) {
+      logWarn(`[MCPManager] Bundled Node.js not found: ${nodePath}`);
       return null;
     }
+
+    const npxCliCandidates = [
+      path.join(binDir, 'npm_pkg', 'npm', 'bin', 'npx-cli.js'),
+      path.join(binDir, 'node_modules', 'npm', 'bin', 'npx-cli.js'),
+      path.join(binDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npx-cli.js'),
+    ];
+    const hasUsableNpx =
+      fs.existsSync(npxPath) && npxCliCandidates.some((candidate) => fs.existsSync(candidate));
+    const resolvedNpxPath = hasUsableNpx ? npxPath : null;
+
+    log(`[MCPManager] Found bundled Node.js: ${nodePath}`);
+    if (resolvedNpxPath) {
+      log(`[MCPManager] Found bundled npx: ${resolvedNpxPath}`);
+    } else {
+      logWarn('[MCPManager] Bundled npx unavailable; npm node_modules are not present');
+    }
+
+    return { node: nodePath, npx: resolvedNpxPath };
   }
 
   /**
@@ -227,6 +239,12 @@ export class MCPManager {
       throw new Error(errorMessage);
     }
 
+    if (!bundledNode.npx) {
+      throw new Error(
+        'Bundled npx is unavailable because npm node_modules are not packaged. Install Node.js so Open Cowork can use your system npx.'
+      );
+    }
+
     this.npxPath = bundledNode.npx;
     log(`[MCPManager] Using bundled npx: ${this.npxPath}`);
   }
@@ -243,19 +261,19 @@ export class MCPManager {
       );
       if (!preferredNpxPath) {
         throw new Error(
-          'npx is not available. Install Node.js so Open Cowork can use your system npx.cmd, or reinstall the app to restore the bundled runtime.'
+          'npx is not available. Install Node.js so Open Cowork can use your system npx.cmd, or configure this server to run with the bundled node.exe and a JavaScript entrypoint.'
         );
       }
 
       this.npxPath = preferredNpxPath;
       if (
         bundledNpxPath &&
-        normalizeWindowsPathForComparison(preferredNpxPath) !==
+        normalizeWindowsPathForComparison(preferredNpxPath) ===
           normalizeWindowsPathForComparison(bundledNpxPath)
       ) {
-        log(`[MCPManager] Using system npx on Windows: ${this.npxPath}`);
+        log(`[MCPManager] Using bundled npx on Windows: ${this.npxPath}`);
       } else {
-        log(`[MCPManager] Using bundled npx: ${this.npxPath}`);
+        log(`[MCPManager] Using system npx on Windows: ${this.npxPath}`);
       }
 
       return preferredNpxPath;

@@ -77,6 +77,8 @@ win:
       to: mcp
     - from: resources/node/win32-x64
       to: node
+      filter:
+        - '**/*'
     - from: resources/tools/win32-x64
       to: tools
     - from: dist-wsl-agent

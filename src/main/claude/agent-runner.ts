@@ -430,10 +430,10 @@ function buildStableConversationHistoryPreamble(input: {
   };
 }
 
-// Bundled node/npx paths never change at runtime — resolve once.
-let cachedBundledNodePaths: { node: string; npx: string } | null | undefined = undefined;
+// Bundled node paths never change at runtime — resolve once.
+let cachedBundledNodePaths: { node: string; npx: string | null } | null | undefined = undefined;
 
-function getBundledNodePaths(): { node: string; npx: string } | null {
+function getBundledNodePaths(): { node: string; npx: string | null } | null {
   if (cachedBundledNodePaths !== undefined) {
     return cachedBundledNodePaths;
   }
@@ -449,8 +449,16 @@ function getBundledNodePaths(): { node: string; npx: string } | null {
   const binDir = platform === 'win32' ? resourcesPath : path.join(resourcesPath, 'bin');
   const nodePath = path.join(binDir, platform === 'win32' ? 'node.exe' : 'node');
   const npxPath = path.join(binDir, platform === 'win32' ? 'npx.cmd' : 'npx');
-  cachedBundledNodePaths =
-    fs.existsSync(nodePath) && fs.existsSync(npxPath) ? { node: nodePath, npx: npxPath } : null;
+  const npxCliCandidates = [
+    path.join(binDir, 'npm_pkg', 'npm', 'bin', 'npx-cli.js'),
+    path.join(binDir, 'node_modules', 'npm', 'bin', 'npx-cli.js'),
+    path.join(binDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npx-cli.js'),
+  ];
+  const hasUsableNpx =
+    fs.existsSync(npxPath) && npxCliCandidates.some((candidate) => fs.existsSync(candidate));
+  cachedBundledNodePaths = fs.existsSync(nodePath)
+    ? { node: nodePath, npx: hasUsableNpx ? npxPath : null }
+    : null;
   return cachedBundledNodePaths;
 }
 
@@ -1086,7 +1094,9 @@ export class ClaudeAgentRunner {
     const nodePaths = getBundledNodePaths();
     if (nodePaths) {
       hints.push(`- node: ${nodePaths.node}`);
-      hints.push(`- npx: ${nodePaths.npx}`);
+      if (nodePaths.npx) {
+        hints.push(`- npx: ${nodePaths.npx}`);
+      }
     }
 
     const pythonBinDir = resolveBundledPythonBinDir();
@@ -3239,13 +3249,16 @@ ${hints.join('\n')}
                     : config.command === 'node' && bundledNodePaths
                       ? bundledNodePaths.node
                       : config.command;
+                const usingBundledNodeRuntime =
+                  bundledNodePaths &&
+                  (command === bundledNodePaths.node || (bundledNpx !== null && command === bundledNpx));
 
                 // 使用内置 npx/node 时，将内置 node bin 注入 PATH
                 const serverEnv = { ...config.env };
-                if (bundledNodePaths && (config.command === 'npx' || config.command === 'node')) {
+                if (usingBundledNodeRuntime) {
                   const nodeBinDir = path.dirname(bundledNodePaths.node);
                   const currentPath = process.env.PATH || '';
-                  // Prepend bundled node bin to PATH so npx can find node
+                  // Prepend bundled node bin so bundled scripts can find node.
                   serverEnv.PATH = `${nodeBinDir}${path.delimiter}${currentPath}`;
                   log(`[ClaudeAgentRunner]   Added bundled node bin to PATH: ${nodeBinDir}`);
                 }

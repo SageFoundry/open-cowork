@@ -2,7 +2,10 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { spawn } from 'child_process';
-import { resolvePreferredWindowsShell, resolvePythonFromPath } from '../runtime/runtime-resolver';
+import {
+  getRuntimePathForChildProcess,
+  resolvePreferredWindowsShell,
+} from '../runtime/runtime-resolver';
 
 export interface PowerShellExecutionParams {
   script: string;
@@ -43,8 +46,7 @@ export async function executeWindowsPowerShell({
   }
 
   const shellFlavor = flavor;
-  const resolvedPython = resolvePythonFromPath();
-  const resolvedPythonDir = resolvedPython ? path.dirname(resolvedPython.path) : null;
+  const effectivePath = getRuntimePathForChildProcess(env?.PATH || process.env.PATH);
 
   const scriptPath = path.join(os.tmpdir(), `oc-pwsh-${Date.now()}-${Math.random().toString(16).slice(2)}.ps1`);
   const encodingPrelude = [
@@ -64,15 +66,11 @@ export async function executeWindowsPowerShell({
         env: {
           ...process.env,
           ...env,
+          PATH: effectivePath,
           PYTHONIOENCODING: 'utf-8',
           PYTHONUTF8: '1',
           LANG: 'en_US.UTF-8',
           LC_ALL: 'en_US.UTF-8',
-          ...(resolvedPythonDir
-            ? {
-                PATH: `${resolvedPythonDir}${path.delimiter}${env?.PATH || process.env.PATH || ''}`,
-              }
-            : {}),
         },
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,

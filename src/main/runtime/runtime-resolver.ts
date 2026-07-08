@@ -23,8 +23,8 @@ function splitPathEntries(pathValue: string | undefined): string[] {
     .filter(Boolean);
 }
 
-function findExecutableInPath(executableNames: string[]): string | null {
-  const entries = splitPathEntries(process.env.PATH);
+function findExecutableInPath(executableNames: string[], pathValue = process.env.PATH): string | null {
+  const entries = splitPathEntries(pathValue);
   for (const entry of entries) {
     for (const executableName of executableNames) {
       const candidate = path.join(entry, executableName);
@@ -40,8 +40,8 @@ function findExecutableInPath(executableNames: string[]): string | null {
   return null;
 }
 
-function findExecutablesInPath(executableNames: string[]): string[] {
-  const entries = splitPathEntries(process.env.PATH);
+function findExecutablesInPath(executableNames: string[], pathValue = process.env.PATH): string[] {
+  const entries = splitPathEntries(pathValue);
   const results: string[] = [];
   const seen = new Set<string>();
   for (const entry of entries) {
@@ -62,6 +62,83 @@ function findExecutablesInPath(executableNames: string[]): string[] {
     }
   }
   return results;
+}
+
+function existingDirectory(candidate: string): string | null {
+  try {
+    return fs.existsSync(candidate) && fs.statSync(candidate).isDirectory() ? candidate : null;
+  } catch {
+    return null;
+  }
+}
+
+function collectBundledRuntimePathEntries(): string[] {
+  const platform = process.platform;
+  const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+  const projectRoot = process.cwd();
+  const resourcesRoot = process.resourcesPath || path.join(projectRoot, 'resources');
+  const entries: string[] = [];
+
+  const nodeDirs =
+    platform === 'win32'
+      ? [
+          path.join(resourcesRoot, 'node'),
+          path.join(projectRoot, 'resources', 'node', `${platform}-${arch}`),
+        ]
+      : [
+          path.join(resourcesRoot, 'node', 'bin'),
+          path.join(projectRoot, 'resources', 'node', `${platform}-${arch}`, 'bin'),
+        ];
+
+  const pythonDirs = [
+    path.join(resourcesRoot, 'python', 'bin'),
+    path.join(projectRoot, 'resources', 'python', 'bin'),
+    path.join(projectRoot, 'resources', 'python', `${platform}-${arch}`, 'bin'),
+  ];
+
+  const toolsDirs = [
+    path.join(resourcesRoot, 'tools', 'bin'),
+    path.join(resourcesRoot, 'tools', `${platform}-${arch}`, 'bin'),
+    path.join(projectRoot, 'resources', 'tools', 'bin'),
+    path.join(projectRoot, 'resources', 'tools', `${platform}-${arch}`, 'bin'),
+  ];
+
+  for (const candidate of [...nodeDirs, ...pythonDirs, ...toolsDirs]) {
+    const dir = existingDirectory(candidate);
+    if (dir) entries.push(dir);
+  }
+
+  return entries;
+}
+
+export function getRuntimePathEntriesForChildProcess(pathValue = process.env.PATH): string[] {
+  const currentPaths = splitPathEntries(pathValue);
+  const restoredPaths =
+    process.platform === 'win32'
+      ? (() => {
+          try {
+            return getWindowsRegistryPathEntries();
+          } catch {
+            return [];
+          }
+        })()
+      : [];
+
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const entry of [...collectBundledRuntimePathEntries(), ...restoredPaths, ...currentPaths]) {
+    const normalized = process.platform === 'win32' ? entry.toLowerCase() : entry;
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+      merged.push(entry);
+    }
+  }
+
+  return merged;
+}
+
+export function getRuntimePathForChildProcess(pathValue = process.env.PATH): string {
+  return getRuntimePathEntriesForChildProcess(pathValue).join(path.delimiter);
 }
 
 function resolveExisting(candidates: string[]): string | null {
@@ -222,9 +299,10 @@ export function resolvePythonFromPath(): ResolvedRuntime | null {
     : ['python3', 'python'];
 
   const warnings: string[] = [];
+  const effectivePath = getRuntimePathForChildProcess();
 
   // Phase 1: Search PATH for non-WindowsApps python executables
-  const candidates = findExecutablesInPath(executableNames);
+  const candidates = findExecutablesInPath(executableNames, effectivePath);
   const realPython = candidates.find((candidate) => !isWindowsStoreAliasPath(candidate));
 
   if (realPython) {
@@ -293,7 +371,7 @@ export function resolvePythonFromPath(): ResolvedRuntime | null {
 
 export function resolveNodeFromPath(): ResolvedRuntime | null {
   const executableName = process.platform === 'win32' ? 'node.exe' : 'node';
-  const found = findExecutableInPath([executableName, 'node']);
+  const found = findExecutableInPath([executableName, 'node'], getRuntimePathForChildProcess());
   if (!found) return null;
 
   return {

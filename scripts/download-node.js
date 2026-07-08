@@ -77,6 +77,82 @@ exec "$DIR/node" "$DIR/../lib/node_modules/npm/bin/npx-cli.js" "$@"
   }
 }
 
+function writeTextFile(filePath, content, mode) {
+  fs.writeFileSync(filePath, content);
+  if (mode) {
+    fs.chmodSync(filePath, mode);
+  }
+}
+
+function writeWindowsNodeWrapperSet(extractDir, commandName, cliRelativePath) {
+  const cmdPath = path.join(extractDir, `${commandName}.cmd`);
+  const ps1Path = path.join(extractDir, `${commandName}.ps1`);
+  const shPath = path.join(extractDir, commandName);
+  const cliWindowsPath = cliRelativePath.replace(/\//g, '\\');
+
+  writeTextFile(
+    cmdPath,
+    `@echo off\r\n` +
+      `rem open-cowork-bundled-node-wrapper\r\n` +
+      `setlocal\r\n` +
+      `set "NODE_EXE=%~dp0node.exe"\r\n` +
+      `if not exist "%NODE_EXE%" set "NODE_EXE=node"\r\n` +
+      `"%NODE_EXE%" "%~dp0${cliWindowsPath}" %*\r\n`
+  );
+
+  writeTextFile(
+    ps1Path,
+    `#!/usr/bin/env pwsh\n` +
+      `# open-cowork-bundled-node-wrapper\n` +
+      `$NODE_EXE = Join-Path $PSScriptRoot 'node.exe'\n` +
+      `if (-not (Test-Path $NODE_EXE)) { $NODE_EXE = 'node' }\n` +
+      `$CLI_JS = Join-Path $PSScriptRoot '${cliRelativePath}'\n` +
+      `& $NODE_EXE $CLI_JS @args\n` +
+      `exit $LASTEXITCODE\n`
+  );
+
+  writeTextFile(
+    shPath,
+    `#!/usr/bin/env bash\n` +
+      `# open-cowork-bundled-node-wrapper\n` +
+      `DIR="$(cd "$(dirname "$0")" && pwd)"\n` +
+      `exec "$DIR/node.exe" "$DIR/${cliRelativePath}" "$@"\n`,
+    0o755
+  );
+}
+
+function ensureWindowsNodePackageLayout(extractDir) {
+  const isWindows = extractDir.includes('win32') || extractDir.includes('win-x');
+  if (!isWindows) {
+    return;
+  }
+
+  const legacyNodeModules = path.join(extractDir, 'node_modules');
+  const packagedModules = path.join(extractDir, 'npm_pkg');
+
+  if (!fs.existsSync(packagedModules) && fs.existsSync(legacyNodeModules)) {
+    fs.renameSync(legacyNodeModules, packagedModules);
+    console.log('  Renamed node_modules/ to npm_pkg/ so electron-builder includes npm runtime');
+  } else if (fs.existsSync(packagedModules) && fs.existsSync(legacyNodeModules)) {
+    fs.rmSync(legacyNodeModules, { recursive: true, force: true });
+    console.log('  Removed legacy node_modules/ after npm_pkg/ was prepared');
+  }
+
+  const npmCli = path.join(packagedModules, 'npm', 'bin', 'npm-cli.js');
+  const npxCli = path.join(packagedModules, 'npm', 'bin', 'npx-cli.js');
+  const corepackCli = path.join(packagedModules, 'corepack', 'dist', 'corepack.js');
+
+  if (fs.existsSync(npmCli)) {
+    writeWindowsNodeWrapperSet(extractDir, 'npm', 'npm_pkg/npm/bin/npm-cli.js');
+  }
+  if (fs.existsSync(npxCli)) {
+    writeWindowsNodeWrapperSet(extractDir, 'npx', 'npm_pkg/npm/bin/npx-cli.js');
+  }
+  if (fs.existsSync(corepackCli)) {
+    writeWindowsNodeWrapperSet(extractDir, 'corepack', 'npm_pkg/corepack/dist/corepack.js');
+  }
+}
+
 function download(url, dest) {
   return new Promise((resolve, reject) => {
     console.log(`Downloading: ${url}`);
@@ -159,6 +235,7 @@ async function downloadAndExtract(platform, arch) {
     console.log(`Already exists: ${extractDir}`);
     // Still apply npx fix in case it was cached without it
     applyNpxFix(extractDir);
+    ensureWindowsNodePackageLayout(extractDir);
     return;
   }
 
@@ -230,6 +307,7 @@ async function downloadAndExtract(platform, arch) {
     }
 
     applyNpxFix(extractDir);
+    ensureWindowsNodePackageLayout(extractDir);
 
     console.log(`✓ Extracted: ${platform}-${arch}`);
   } catch (error) {

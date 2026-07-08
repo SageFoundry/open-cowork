@@ -58,4 +58,15 @@ describe('bundle-mcp staging', () => {
     expect(builderConfig).toContain('.bundle-resources/mcp');
     expect(builderConfig).not.toContain('- from: dist-mcp');
   });
+
+  it('keeps bundled Windows Node node_modules in extraResources', () => {
+    const builderConfig = fs.readFileSync(
+      path.resolve(process.cwd(), 'electron-builder.yml'),
+      'utf8'
+    );
+
+    expect(builderConfig).toMatch(
+      /from: resources\/node\/win32-x64\s+to: node\s+filter:\s+- '\*\*\/\*'/
+    );
+  });
 });

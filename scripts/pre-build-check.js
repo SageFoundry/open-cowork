@@ -103,6 +103,18 @@ function buildCheckList(platform, arch) {
         severity: 'fatal',
       },
       {
+        label: 'npm CLI for bundled Windows Node.js',
+        relPath: 'resources/node/win32-x64/npm_pkg/npm/bin/npm-cli.js',
+        type: 'file',
+        severity: 'fatal',
+      },
+      {
+        label: 'npx CLI for bundled Windows Node.js',
+        relPath: 'resources/node/win32-x64/npm_pkg/npm/bin/npx-cli.js',
+        type: 'file',
+        severity: 'fatal',
+      },
+      {
         label: 'WSL sandbox agent bundle (dist-wsl-agent/index.js)',
         relPath: 'dist-wsl-agent/index.js',
         type: 'file',

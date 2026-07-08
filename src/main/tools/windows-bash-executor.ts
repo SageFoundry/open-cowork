@@ -3,7 +3,10 @@ import * as os from 'os';
 import * as path from 'path';
 import { spawn, execFile as _execFile } from 'child_process';
 import { promisify } from 'util';
-import { resolvePythonFromPath } from '../runtime/runtime-resolver';
+import {
+  getRuntimePathEntriesForChildProcess,
+  getRuntimePathForChildProcess,
+} from '../runtime/runtime-resolver';
 import { getSandboxAdapter } from '../sandbox/sandbox-adapter';
 import type { ExecutionResult } from '../sandbox/types';
 import { log } from '../utils/logger';
@@ -13,7 +16,9 @@ import { log } from '../utils/logger';
  * MSYS2/POSIX format (e.g. "/d/pythonsdk") for use in Git Bash's $PATH.
  */
 function winPathToMsys2(winPath: string): string {
-  return winPath.replace(/^([A-Za-z]):[\\/]/, (_match, drive: string) => `/${drive.toLowerCase()}/`);
+  return winPath
+    .replace(/^([A-Za-z]):[\\/]/, (_match, drive: string) => `/${drive.toLowerCase()}/`)
+    .replace(/\\/g, '/');
 }
 
 export interface WindowsBashExecutionParams {
@@ -243,8 +248,15 @@ async function executeViaGitBash({
     match.replace(/\\/g, '/')
   );
   const normalizedCwd = cwd.replace(/\\/g, '/');
-  const resolvedPython = resolvePythonFromPath();
-  const resolvedPythonDir = resolvedPython ? path.dirname(resolvedPython.path).replace(/\\/g, '/') : null;
+  const gitBashDir = path.dirname(gitBashPath);
+  const enhancedPathEntries = [
+    gitBashDir,
+    ...getRuntimePathEntriesForChildProcess(),
+  ];
+  const bashPath = enhancedPathEntries
+    .map((entry) => winPathToMsys2(entry))
+    .filter(Boolean)
+    .join(':');
   const scriptPath = path.join(
     os.tmpdir(),
     `oc-git-bash-${Date.now()}-${Math.random().toString(16).slice(2)}.sh`
@@ -261,7 +273,7 @@ async function executeViaGitBash({
     'export PYTHONUTF8=1',
     'export LANG=en_US.UTF-8',
     'export LC_ALL=en_US.UTF-8',
-    resolvedPythonDir ? `export PATH='${winPathToMsys2(resolvedPythonDir).replace(/'/g, `"'"'`)}':"$PATH"` : '',
+    bashPath ? `export PATH=${shellEscapeSingleQuoted(bashPath)}:"$PATH"` : '',
     `cd ${shellEscapeSingleQuoted(normalizedCwd)}`,
     'base64 -d | bash',
     '',
@@ -274,6 +286,7 @@ async function executeViaGitBash({
       cwd,
       env: {
         ...process.env,
+        PATH: getRuntimePathForChildProcess(),
         OPEN_COWORK_BASH_BACKEND: 'git-bash',
         MSYS2_ARG_CONV_EXCL: '*',
         PYTHONIOENCODING: 'utf-8',

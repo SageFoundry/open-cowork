@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -17,6 +17,8 @@ describe('runtime-resolver', () => {
     process.env.PATH = originalPath;
     process.env.ProgramFiles = originalProgramFiles;
     process.env.SystemRoot = originalSystemRoot;
+    vi.doUnmock('child_process');
+    vi.resetModules();
     if (tmpDir) {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -98,7 +100,7 @@ describe('runtime-resolver', () => {
     expect(restored).toEqual([]);
   });
 
-  it('detects WindowsApps python alias as warning', async () => {
+  it('skips WindowsApps python alias when resolving python', async () => {
     Object.defineProperty(process, 'platform', {
       value: 'win32',
       writable: true,
@@ -123,8 +125,7 @@ describe('runtime-resolver', () => {
     const { resolvePythonFromPath } = await import('../main/runtime/runtime-resolver');
     const resolved = resolvePythonFromPath();
 
-    expect(resolved?.path).toBe(path.join(windowsApps, 'python.exe'));
-    expect(resolved?.warnings[0]).toContain('WindowsApps alias');
+    expect(resolved?.path).not.toBe(path.join(windowsApps, 'python.exe'));
   });
 
   it('prefers a real python over WindowsApps alias on PATH', async () => {
@@ -152,10 +153,53 @@ describe('runtime-resolver', () => {
 
     process.env.PATH = `${windowsApps};${realPythonDir}`;
 
+    vi.doMock('child_process', () => ({
+      execFileSync: vi.fn((command: string, args: string[]) => {
+        if (command === path.join(realPythonDir, 'python.exe') && args[0] === '-c') {
+          return 'OK\n';
+        }
+        throw new Error('not found');
+      }),
+    }));
+
     const { resolvePythonFromPath } = await import('../main/runtime/runtime-resolver');
     const resolved = resolvePythonFromPath();
 
     expect(resolved?.path).toBe(path.join(realPythonDir, 'python.exe'));
     expect(resolved?.warnings).toEqual([]);
+  });
+
+  it('builds child process PATH from Windows registry and current process PATH', async () => {
+    Object.defineProperty(process, 'platform', {
+      value: 'win32',
+      writable: true,
+      configurable: true,
+    });
+
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-runtime-'));
+    const shellDir = path.join(tmpDir, 'pwsh-bin');
+    const currentDir = path.join(tmpDir, 'current-bin');
+    const registryDir = path.join(tmpDir, 'registry-bin');
+    fs.mkdirSync(shellDir, { recursive: true });
+    fs.mkdirSync(currentDir, { recursive: true });
+    fs.mkdirSync(registryDir, { recursive: true });
+    fs.writeFileSync(path.join(shellDir, 'pwsh.exe'), '');
+
+    process.env.ProgramFiles = path.join(tmpDir, 'missing-program-files');
+    process.env.SystemRoot = path.join(tmpDir, 'missing-system-root');
+    process.env.PATH = `${shellDir};${currentDir}`;
+
+    vi.doMock('child_process', () => ({
+      execFileSync: vi.fn(() => registryDir),
+    }));
+
+    const { getRuntimePathEntriesForChildProcess } = await import(
+      '../main/runtime/runtime-resolver'
+    );
+    const entries = getRuntimePathEntriesForChildProcess();
+
+    expect(entries).toContain(registryDir);
+    expect(entries).toContain(currentDir);
+    expect(entries.indexOf(registryDir)).toBeLessThan(entries.indexOf(currentDir));
   });
 });
