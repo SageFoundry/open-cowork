@@ -545,6 +545,60 @@ export interface SandboxSyncStatus {
   totalSize?: number;
 }
 
+export interface SshServer {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  authType: 'password' | 'privateKey';
+  hasCredential: boolean;
+  hasTrustedHostKey: boolean;
+  defaultCwd: string | null;
+  tags: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface SessionSshGrant extends SshServer {
+  permission: 'read' | 'execute';
+  executionMode: 'foreground' | 'background';
+  grantedAt: number;
+}
+
+export interface SshConnectionStatus {
+  serverId: string;
+  state: 'disconnected' | 'connecting' | 'connected' | 'failed';
+  updatedAt: number;
+  error?: string;
+}
+
+export interface SshAgentTerminal {
+  terminalId: string;
+  serverId: string;
+  serverName: string;
+}
+
+export interface SshResourceNode {
+  id: string;
+  parentId: string | null;
+  type: 'folder' | 'server';
+  serverId: string | null;
+  name: string;
+  sortOrder: number;
+  children: SshResourceNode[];
+}
+
+export interface SshResourceGrant {
+  sessionId: string;
+  resourceNodeId: string;
+  permission: 'read' | 'execute';
+  executionMode: 'foreground' | 'background';
+  recursive: boolean;
+  includeFutureChildren: boolean;
+  grantedAt: number;
+}
+
 export type ServerEvent =
   | { type: 'stream.message'; payload: { sessionId: string; message: Message } }
   | { type: 'stream.partial'; payload: { sessionId: string; delta: string } }
@@ -568,6 +622,10 @@ export type ServerEvent =
   | { type: 'sudo.password.request'; payload: SudoPasswordRequest }
   | { type: 'sudo.password.dismiss'; payload: { toolUseId: string } }
   | { type: 'trace.step'; payload: { sessionId: string; step: TraceStep } }
+  | { type: 'ssh.execution'; payload: { executionId: string; sessionId: string; serverId: string; serverName: string; command: string; cwd?: string; status: 'connecting' | 'running' | 'completed' | 'failed' | 'interrupted' | 'timed_out'; startedAt: number; endedAt?: number; exitCode?: number | null; error?: string; stream?: 'stdout' | 'stderr'; text?: string } }
+  | { type: 'ssh.connection'; payload: SshConnectionStatus }
+  | { type: 'ssh.terminal'; payload: { terminalId: string; serverId: string; serverName?: string; sessionId?: string; kind: 'user' | 'agent'; type: 'opened' | 'data' | 'closed' | 'error'; text?: string; error?: string } }
+  | { type: 'ssh.authorization.request'; payload: { sessionId: string } }
   | {
       type: 'trace.update';
       payload: { sessionId: string; stepId: string; updates: Partial<TraceStep> };

@@ -90,6 +90,7 @@ import {
 } from '../claude/prompt-contract';
 import type { SkillsManager } from '../skills/skills-manager';
 import type { BackgroundTaskService } from '../background/background-task-service';
+import type { SshService } from '../ssh/ssh-service';
 
 interface AgentRunner {
   run(
@@ -435,6 +436,7 @@ export class SessionManager {
   private pluginRuntimeService?: PluginRuntimeService;
   private skillsManager?: SkillsManager;
   private backgroundTaskService?: BackgroundTaskService;
+  private sshService?: SshService;
   private activeSessions: Map<string, AbortController> = new Map();
   private promptQueues: Map<
     string,
@@ -467,7 +469,8 @@ export class SessionManager {
     sendToRenderer: (event: ServerEvent) => void,
     pluginRuntimeService?: PluginRuntimeService,
     skillsManager?: SkillsManager,
-    backgroundTaskService?: BackgroundTaskService
+    backgroundTaskService?: BackgroundTaskService,
+    sshService?: SshService
   ) {
     this.db = db;
     this.sendToRenderer = (event) => {
@@ -484,6 +487,7 @@ export class SessionManager {
     this.pluginRuntimeService = pluginRuntimeService;
     this.skillsManager = skillsManager;
     this.backgroundTaskService = backgroundTaskService;
+    this.sshService = sshService;
 
     // Initialize MCP Manager
     this.mcpManager = new MCPManager();
@@ -520,7 +524,8 @@ export class SessionManager {
       this.mcpManager,
       this.pluginRuntimeService,
       this.skillsManager,
-      this.backgroundTaskService
+      this.backgroundTaskService,
+      this.sshService
     );
   }
 
@@ -2074,6 +2079,8 @@ export class SessionManager {
     log('[SessionManager] Stopping session:', sessionId);
     this.titleGenerationTokens.delete(sessionId);
     this.agentRunner.cancel(sessionId);
+    this.sshService?.cancelBySession(sessionId);
+    this.sshService?.cancelAuthorization(sessionId);
     // Cancel any pending sudo password requests for this session
     for (const [toolUseId, entry] of this.pendingSudoPasswords) {
       if (entry.sessionId === sessionId) {
@@ -2262,6 +2269,17 @@ export class SessionManager {
         type: 'session.update',
         payload: { sessionId, updates: sessionUpdates },
       });
+
+      if (normalizedModel !== undefined || normalizedConfigSetId !== undefined) {
+        const tokenBudget = this.getTokenBudgetSnapshot(sessionId);
+        if (tokenBudget) {
+          this.sendToRenderer({
+            type: 'session.contextInfo',
+            payload: { sessionId, contextWindow: tokenBudget.contextWindow },
+          });
+          this.emitTokenBudget(sessionId, tokenBudget);
+        }
+      }
     }
 
     if (typeof updates.planMode === 'boolean') {

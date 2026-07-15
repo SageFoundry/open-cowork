@@ -54,6 +54,8 @@ import { getDefaultShell } from '../utils/shell-resolver';
 import { PluginRuntimeService } from '../skills/plugin-runtime-service';
 import type { SkillsAdapter } from '../skills/skills-adapter';
 import type { BackgroundTaskService } from '../background/background-task-service';
+import type { SshService } from '../ssh/ssh-service';
+import { SshMcpProvider } from '../mcp/providers/ssh-mcp-provider';
 import { configStore } from '../config/config-store';
 import { normalizeOpenAICompatibleBaseUrl } from '../config/auth-utils';
 import { resolveMessageEndPayload, toUserFacingErrorText } from './agent-runner-message-end';
@@ -1038,6 +1040,7 @@ export class ClaudeAgentRunner {
   private _pluginRuntimeService?: PluginRuntimeService;
   private _skillsAdapter?: SkillsAdapter;
   private backgroundTaskService?: BackgroundTaskService;
+  private sshService?: SshService;
   private projectMemoryService = new ProjectMemoryService();
   private activeControllers: Map<string, AbortController> = new Map();
   private piSessions: Map<string, CachedPiSession> = new Map();
@@ -1161,7 +1164,8 @@ ${hints.join('\n')}
     mcpManager?: MCPManager,
     pluginRuntimeService?: PluginRuntimeService,
     skillsAdapter?: SkillsAdapter,
-    backgroundTaskService?: BackgroundTaskService
+    backgroundTaskService?: BackgroundTaskService,
+    sshService?: SshService
   ) {
     this.sendToRenderer = options.sendToRenderer;
     this.saveMessage = options.saveMessage;
@@ -1174,6 +1178,7 @@ ${hints.join('\n')}
     this._pluginRuntimeService = pluginRuntimeService;
     this._skillsAdapter = skillsAdapter;
     this.backgroundTaskService = backgroundTaskService;
+    this.sshService = sshService;
 
     log('[ClaudeAgentRunner] Initialized with pi-coding-agent SDK');
     log('[ClaudeAgentRunner] Skills enabled: settingSources=[user, project], Skill tool enabled');
@@ -3383,6 +3388,7 @@ ${hints.join('\n')}
       // Re-read every query so newly added/removed MCP servers take effect immediately.
       const mcpCustomTools = this.mcpManager ? buildMcpCustomTools(this.mcpManager) : [];
       const backgroundTaskTools = this.buildBackgroundTaskTool(session.id, effectiveCwd);
+      const sshTools = this.buildSshTools(session.id);
       const readFullTool = this.buildReadFullTool(session.id, effectiveCwd);
       const anySearchTool = buildAnySearchTool();
       const anySearchExtractTool = buildAnySearchExtractTool();
@@ -3391,6 +3397,7 @@ ${hints.join('\n')}
         anySearchExtractTool,
         readFullTool,
         ...backgroundTaskTools,
+        ...sshTools,
         ...mcpCustomTools,
       ];
       log('[ClaudeAgentRunner] Registered AnySearch websearch custom tool');
@@ -5494,7 +5501,13 @@ ${hints.join('\n')}
     }
   }
 
+  private buildSshTools(sessionId: string): ToolDefinition[] {
+    if (!this.sshService) return [];
+    return new SshMcpProvider(this.sshService, (id) => Boolean(this.getSessionPlanMode?.(id))).getTools(sessionId);
+  }
+
   cancel(sessionId: string): void {
+    this.sshService?.cancelBySession(sessionId);
     const controller = this.activeControllers.get(sessionId);
     if (controller) controller.abort();
 

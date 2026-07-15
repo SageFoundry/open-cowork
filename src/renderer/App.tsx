@@ -33,11 +33,17 @@ const ChatView = lazy(() =>
 const ContextPanel = lazy(() =>
   import('./components/ContextPanel').then((module) => ({ default: module.ContextPanel }))
 );
+const SshActivitySection = lazy(() =>
+  import('./components/ssh/SshActivitySection').then((module) => ({ default: module.SshActivitySection }))
+);
 const ConfigModal = lazy(() =>
   import('./components/ConfigModal').then((module) => ({ default: module.ConfigModal }))
 );
 const SettingsPanel = lazy(() =>
   import('./components/SettingsPanel').then((module) => ({ default: module.SettingsPanel }))
+);
+const ServersPage = lazy(() =>
+  import('./components/servers/ServersPage').then((module) => ({ default: module.ServersPage }))
 );
 
 function MainPanelFallback() {
@@ -63,6 +69,7 @@ function App() {
   const settings = useSettings();
   const systemDarkMode = useSystemDarkMode();
   const { showSettings } = useSettingsState();
+  const mainView = useAppStore((s) => s.mainView);
   const { sidebarCollapsed } = useLayoutState();
   const { showConfigModal, isConfigured, appConfig } = useConfigModalState();
   const globalNotice = useGlobalNotice();
@@ -117,7 +124,7 @@ function App() {
 
   // Auto-collapse sidebar when Settings is open, restore on close
   useEffect(() => {
-    if (showSettings) {
+    if (showSettings || mainView === 'servers') {
       sidebarBeforeSettings.current = !sidebarCollapsed;
       setSidebarCollapsed(true);
     } else if (sidebarBeforeSettings.current) {
@@ -125,7 +132,7 @@ function App() {
       sidebarBeforeSettings.current = false;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showSettings]);
+  }, [showSettings, mainView]);
 
   // Handle config save
   const handleConfigSave = useCallback(
@@ -195,6 +202,12 @@ function App() {
                 <SettingsPanel onClose={() => setShowSettings(false)} />
               </Suspense>
             </PanelErrorBoundary>
+          ) : mainView === 'servers' ? (
+            <PanelErrorBoundary name="ServersPage" resetKey="servers" fallback={<MainPanelFallback />}>
+              <Suspense fallback={<MainPanelFallback />}>
+                <ServersPage />
+              </Suspense>
+            </PanelErrorBoundary>
           ) : activeSessionId ? (
             <PanelErrorBoundary
               name="ChatView"
@@ -208,10 +221,17 @@ function App() {
           ) : (
             <WelcomeView />
           )}
+          {activeSessionId && !showSettings && mainView === 'chat' && (
+            <PanelErrorBoundary name="SshTerminalDock" resetKey={activeSessionId} fallback={null}>
+              <Suspense fallback={null}>
+                <SshActivitySection key={activeSessionId} sessionId={activeSessionId} />
+              </Suspense>
+            </PanelErrorBoundary>
+          )}
         </main>
 
         {/* Context Panel - only show when in session and not in settings */}
-        {activeSessionId && !showSettings && (
+        {activeSessionId && !showSettings && mainView === 'chat' && (
           <PanelErrorBoundary
             name="ContextPanel"
             resetKey={activeSessionId}

@@ -375,6 +375,29 @@ describe('SessionState unified store', () => {
       useAppStore.getState().setSessionContextWindow('s1', 200000);
       expect(useAppStore.getState().sessionStates['s1'].contextWindow).toBe(200000);
     });
+
+    it('clears a token budget from a different context window', () => {
+      useAppStore.getState().addSession(makeSession('s1'));
+      useAppStore.getState().setSessionTokenBudget('s1', {
+        contextWindow: 200000,
+        maxContextTokens: 180000,
+        estimatedConversationTokens: 1000,
+        estimatedSystemPromptTokens: 500,
+        estimatedTotalTokens: 1500,
+        availableTokens: 178500,
+        reserveTokens: 2048,
+        usageRatio: 1500 / 180000,
+        warningState: 'normal',
+        strategy: 'auto',
+        lastUpdatedAt: Date.now(),
+      });
+
+      useAppStore.getState().setSessionContextWindow('s1', 128000);
+
+      const state = useAppStore.getState().sessionStates['s1'];
+      expect(state.contextWindow).toBe(128000);
+      expect(state.tokenBudget).toBeNull();
+    });
   });
 
   describe('cross-session isolation', () => {

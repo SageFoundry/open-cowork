@@ -676,6 +676,110 @@ function initializeSchema(database: Database.Database): void {
     ON tool_output_snapshots(created_at)
   `);
 
+    // SSH credentials are encrypted with Electron safeStorage before they reach this table.
+    database.exec(`
+    CREATE TABLE IF NOT EXISTS ssh_servers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      host TEXT NOT NULL,
+      port INTEGER NOT NULL DEFAULT 22,
+      username TEXT NOT NULL,
+      auth_type TEXT NOT NULL,
+      credential BLOB,
+      host_key_hash TEXT,
+      default_cwd TEXT,
+      tags_json TEXT NOT NULL DEFAULT '[]',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `);
+    ensureColumn(database, 'ssh_servers', 'host_key_hash', 'host_key_hash TEXT');
+
+    database.exec(`
+    CREATE TABLE IF NOT EXISTS session_ssh_grants (
+      session_id TEXT NOT NULL,
+      server_id TEXT NOT NULL,
+      permission TEXT NOT NULL,
+      execution_mode TEXT NOT NULL DEFAULT 'foreground',
+      granted_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (session_id, server_id),
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (server_id) REFERENCES ssh_servers(id) ON DELETE CASCADE
+    )
+  `);
+    ensureColumn(database, 'session_ssh_grants', 'execution_mode', "execution_mode TEXT NOT NULL DEFAULT 'foreground'");
+    database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_session_ssh_grants_session
+    ON session_ssh_grants(session_id)
+  `);
+    database.exec(`
+    CREATE TABLE IF NOT EXISTS ssh_resource_nodes (
+      id TEXT PRIMARY KEY,
+      parent_id TEXT,
+      node_type TEXT NOT NULL,
+      server_id TEXT UNIQUE,
+      name TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (parent_id) REFERENCES ssh_resource_nodes(id) ON DELETE CASCADE,
+      FOREIGN KEY (server_id) REFERENCES ssh_servers(id) ON DELETE CASCADE
+    )
+  `);
+    database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_ssh_resource_nodes_parent
+    ON ssh_resource_nodes(parent_id, sort_order, name)
+  `);
+    database.exec(`
+    CREATE TABLE IF NOT EXISTS session_ssh_resource_grants (
+      session_id TEXT NOT NULL,
+      resource_node_id TEXT NOT NULL,
+      permission TEXT NOT NULL,
+      execution_mode TEXT NOT NULL DEFAULT 'foreground',
+      recursive INTEGER NOT NULL DEFAULT 1,
+      include_future_children INTEGER NOT NULL DEFAULT 0,
+      granted_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (session_id, resource_node_id),
+      FOREIGN KEY (resource_node_id) REFERENCES ssh_resource_nodes(id) ON DELETE CASCADE
+    )
+  `);
+    ensureColumn(database, 'session_ssh_resource_grants', 'execution_mode', "execution_mode TEXT NOT NULL DEFAULT 'foreground'");
+    database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_session_ssh_resource_grants_session
+    ON session_ssh_resource_grants(session_id)
+  `);
+    database.exec(`
+    INSERT OR IGNORE INTO ssh_resource_nodes (id, parent_id, node_type, server_id, name, sort_order, created_at, updated_at)
+    VALUES ('ssh-root', NULL, 'folder', NULL, '全部服务器', 0, ${Date.now()}, ${Date.now()})
+  `);
+    database.exec(`
+    INSERT OR IGNORE INTO ssh_resource_nodes (id, parent_id, node_type, server_id, name, sort_order, created_at, updated_at)
+    SELECT 'server:' || id, 'ssh-root', 'server', id, name, 0, created_at, updated_at FROM ssh_servers
+  `);
+
+    database.exec(`
+    CREATE TABLE IF NOT EXISTS ssh_audit_events (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      server_id TEXT NOT NULL,
+      operation TEXT NOT NULL,
+      command_preview TEXT,
+      path TEXT,
+      status TEXT NOT NULL,
+      exit_code INTEGER,
+      started_at INTEGER NOT NULL,
+      ended_at INTEGER NOT NULL,
+      output_bytes INTEGER NOT NULL DEFAULT 0,
+      error_message TEXT
+    )
+  `);
+    database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_ssh_audit_events_session_started
+    ON ssh_audit_events(session_id, started_at DESC)
+  `);
+
     log('[Database] Schema initialized');
   } catch (error) {
     logError('[Database] Schema initialization failed:', error);

@@ -22,6 +22,12 @@ import type {
   BackgroundTask,
   BackgroundTaskStartInput,
   UpdateState,
+  SshServer,
+  SessionSshGrant,
+  SshConnectionStatus,
+  SshResourceNode,
+  SshResourceGrant,
+  SshAgentTerminal,
 } from '../renderer/types';
 import type { DiagnosticInput, DiagnosticResult } from '../renderer/types';
 import type {
@@ -190,6 +196,52 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }): Promise<{ id: string }> => ipcRenderer.invoke('memory.save', entry),
     extract: (sessionId: string): Promise<{ entries: number }> =>
       ipcRenderer.invoke('memory.extract', sessionId),
+  },
+
+  ssh: {
+    listServers: (): Promise<SshServer[]> => ipcRenderer.invoke('ssh.listServers'),
+    listResourceTree: (): Promise<SshResourceNode[]> => ipcRenderer.invoke('ssh.listResourceTree'),
+    createFolder: (name: string, parentId?: string): Promise<SshResourceNode> => ipcRenderer.invoke('ssh.createFolder', name, parentId),
+    moveResourceNode: (nodeId: string, parentId: string): Promise<void> => ipcRenderer.invoke('ssh.moveResourceNode', nodeId, parentId),
+    saveServer: (input: {
+      id?: string;
+      name: string;
+      host: string;
+      port?: number;
+      username: string;
+      authType: 'password' | 'privateKey';
+      password?: string;
+      privateKey?: string;
+      defaultCwd?: string;
+      tags?: string[];
+    }): Promise<SshServer> => ipcRenderer.invoke('ssh.saveServer', input),
+    deleteServer: (id: string): Promise<void> => ipcRenderer.invoke('ssh.deleteServer', id),
+    testConnection: (id: string): Promise<{ status: 'connected' | 'host_key_confirmation_required' | 'failed'; fingerprint?: string; error?: string }> => ipcRenderer.invoke('ssh.testConnection', id),
+    trustHostKey: (id: string, fingerprint: string): Promise<void> => ipcRenderer.invoke('ssh.trustHostKey', id, fingerprint),
+    getConnectionStatus: (id: string): Promise<SshConnectionStatus> => ipcRenderer.invoke('ssh.getConnectionStatus', id),
+    listConnectionStatuses: (): Promise<SshConnectionStatus[]> => ipcRenderer.invoke('ssh.listConnectionStatuses'),
+    disconnectServer: (id: string): Promise<void> => ipcRenderer.invoke('ssh.disconnectServer', id),
+    listSessionGrants: (sessionId: string): Promise<SessionSshGrant[]> =>
+      ipcRenderer.invoke('ssh.listSessionGrants', sessionId),
+    listResourceGrants: (sessionId: string): Promise<SshResourceGrant[]> =>
+      ipcRenderer.invoke('ssh.listResourceGrants', sessionId),
+    grantResource: (sessionId: string, nodeId: string, permission: 'read' | 'execute', recursive = true, includeFutureChildren = false, executionMode: 'foreground' | 'background' = 'foreground'): Promise<void> =>
+      ipcRenderer.invoke('ssh.grantResource', sessionId, nodeId, permission, recursive, includeFutureChildren, executionMode),
+    revokeResource: (sessionId: string, nodeId: string): Promise<void> =>
+      ipcRenderer.invoke('ssh.revokeResource', sessionId, nodeId),
+    denyAuthorization: (sessionId: string): Promise<void> => ipcRenderer.invoke('ssh.denyAuthorization', sessionId),
+    grantSessionServer: (sessionId: string, serverId: string, permission: 'read' | 'execute', executionMode: 'foreground' | 'background' = 'foreground'): Promise<SessionSshGrant> =>
+      ipcRenderer.invoke('ssh.grantSessionServer', sessionId, serverId, permission, executionMode),
+    revokeSessionServer: (sessionId: string, serverId: string): Promise<void> =>
+      ipcRenderer.invoke('ssh.revokeSessionServer', sessionId, serverId),
+    openTerminal: (serverId: string, cols?: number, rows?: number): Promise<string> => ipcRenderer.invoke('ssh.openTerminal', serverId, cols, rows),
+    writeTerminal: (terminalId: string, text: string): Promise<void> => ipcRenderer.invoke('ssh.writeTerminal', terminalId, text),
+    resizeTerminal: (terminalId: string, cols: number, rows: number): Promise<void> => ipcRenderer.invoke('ssh.resizeTerminal', terminalId, cols, rows),
+    closeTerminal: (terminalId: string): Promise<void> => ipcRenderer.invoke('ssh.closeTerminal', terminalId),
+    listAgentTerminals: (sessionId: string): Promise<SshAgentTerminal[]> => ipcRenderer.invoke('ssh.listAgentTerminals', sessionId),
+    openAgentTerminal: (sessionId: string, serverId: string): Promise<SshAgentTerminal> => ipcRenderer.invoke('ssh.openAgentTerminal', sessionId, serverId),
+    closeAgentTerminal: (sessionId: string, terminalId: string): Promise<void> => ipcRenderer.invoke('ssh.closeAgentTerminal', sessionId, terminalId),
+    cancelExecution: (executionId: string): Promise<void> => ipcRenderer.invoke('ssh.cancelExecution', executionId),
   },
 
   // Config methods
@@ -509,6 +561,38 @@ declare global {
           sinceMs: number,
           limit?: number
         ) => Promise<Array<{ path: string; modifiedAt: number; size: number }>>;
+      };
+      ssh: {
+        listServers: () => Promise<SshServer[]>;
+        listResourceTree: () => Promise<SshResourceNode[]>;
+        createFolder: (name: string, parentId?: string) => Promise<SshResourceNode>;
+        moveResourceNode: (nodeId: string, parentId: string) => Promise<void>;
+        saveServer: (input: {
+          id?: string; name: string; host: string; port?: number; username: string;
+          authType: 'password' | 'privateKey'; password?: string; privateKey?: string;
+          defaultCwd?: string; tags?: string[];
+        }) => Promise<SshServer>;
+        deleteServer: (id: string) => Promise<void>;
+        testConnection: (id: string) => Promise<{ status: 'connected' | 'host_key_confirmation_required' | 'failed'; fingerprint?: string; error?: string }>;
+        trustHostKey: (id: string, fingerprint: string) => Promise<void>;
+        getConnectionStatus: (id: string) => Promise<SshConnectionStatus>;
+        listConnectionStatuses: () => Promise<SshConnectionStatus[]>;
+        disconnectServer: (id: string) => Promise<void>;
+        listSessionGrants: (sessionId: string) => Promise<SessionSshGrant[]>;
+        listResourceGrants: (sessionId: string) => Promise<SshResourceGrant[]>;
+        grantResource: (sessionId: string, nodeId: string, permission: 'read' | 'execute', recursive?: boolean, includeFutureChildren?: boolean, executionMode?: 'foreground' | 'background') => Promise<void>;
+        revokeResource: (sessionId: string, nodeId: string) => Promise<void>;
+        denyAuthorization: (sessionId: string) => Promise<void>;
+        grantSessionServer: (sessionId: string, serverId: string, permission: 'read' | 'execute', executionMode?: 'foreground' | 'background') => Promise<SessionSshGrant>;
+        revokeSessionServer: (sessionId: string, serverId: string) => Promise<void>;
+        openTerminal: (serverId: string, cols?: number, rows?: number) => Promise<string>;
+        writeTerminal: (terminalId: string, text: string) => Promise<void>;
+        resizeTerminal: (terminalId: string, cols: number, rows: number) => Promise<void>;
+        closeTerminal: (terminalId: string) => Promise<void>;
+        listAgentTerminals: (sessionId: string) => Promise<SshAgentTerminal[]>;
+        openAgentTerminal: (sessionId: string, serverId: string) => Promise<SshAgentTerminal>;
+        closeAgentTerminal: (sessionId: string, terminalId: string) => Promise<void>;
+        cancelExecution: (executionId: string) => Promise<void>;
       };
       memory: {
         list: (cwd?: string | null) => Promise<

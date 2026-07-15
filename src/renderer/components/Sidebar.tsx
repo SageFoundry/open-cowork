@@ -17,6 +17,7 @@ import {
   Check,
   Folder,
   Pencil,
+  Server,
 } from 'lucide-react';
 import { DEFAULT_PROJECT_ID, type ProjectSummary, type Session } from '../types';
 import {
@@ -49,6 +50,8 @@ export function Sidebar() {
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const setShowSettings = useAppStore((s) => s.setShowSettings);
+  const mainView = useAppStore((s) => s.mainView);
+  const setMainView = useAppStore((s) => s.setMainView);
   const {
     deleteSession,
     batchDeleteSessions,
@@ -203,6 +206,7 @@ export function Sidebar() {
   const handleSessionClick = useCallback(
     async (sessionId: string) => {
       setShowSettings(false);
+      setMainView('chat');
       const session = sessions.find((item) => item.id === sessionId);
       if (session) {
         setActiveProject(getProjectIdForCwd(session.cwd));
@@ -255,6 +259,7 @@ export function Sidebar() {
       setActiveSession,
       setMessages,
       setShowSettings,
+      setMainView,
       setMessagePagination,
       setTraceSteps,
     ]
@@ -269,11 +274,13 @@ export function Sidebar() {
     }
     setActiveSession(null);
     setShowSettings(false);
+    setMainView('chat');
   };
 
   const handleProjectToggle = (projectId: string) => {
     setActiveProject(projectId);
     setShowSettings(false);
+    setMainView('chat');
     setExpandedProjectIds((prev) => {
       const next = new Set(prev);
       if (next.has(projectId)) {
@@ -390,7 +397,14 @@ export function Sidebar() {
           </button>
           <UpdateBadge />
           <button
-            onClick={() => setShowSettings(true)}
+            onClick={() => { setShowSettings(false); setMainView('servers'); }}
+            className={`w-9 h-9 rounded-2xl flex items-center justify-center hover:bg-surface-hover transition-colors text-text-secondary ${mainView === 'servers' ? 'bg-surface-hover text-text-primary' : ''}`}
+            title="服务器"
+          >
+            <Server className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => { setMainView('chat'); setShowSettings(true); }}
             className="w-9 h-9 rounded-2xl flex items-center justify-center hover:bg-surface-hover transition-colors text-text-secondary relative"
             title={t('sidebar.settings')}
           >
@@ -572,7 +586,14 @@ export function Sidebar() {
         <div className="px-3 py-3 border-t border-border-muted">
           <div className="flex items-center gap-2 rounded-2xl bg-background/50 px-3 py-2.5">
             <button
-              onClick={() => setShowSettings(true)}
+              onClick={() => { setShowSettings(false); setMainView('servers'); }}
+              className={`w-8 h-8 rounded-xl flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors flex-shrink-0 ${mainView === 'servers' ? 'bg-surface-hover text-text-primary' : ''}`}
+              title="服务器"
+            >
+              <Server className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => { setMainView('chat'); setShowSettings(true); }}
               className="flex-1 min-w-0 flex items-center gap-2 text-left text-text-secondary hover:text-text-primary transition-colors"
             >
               <Settings className="w-4 h-4 flex-shrink-0" />

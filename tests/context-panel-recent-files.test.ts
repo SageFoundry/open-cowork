@@ -3,6 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 
 const contextPanelPath = path.resolve(process.cwd(), 'src/renderer/components/ContextPanel.tsx');
+const sessionManagerPath = path.resolve(process.cwd(), 'src/main/session/session-manager.ts');
 
 describe('ContextPanel memory module integration', () => {
   it('loads memory list through electron memory API', () => {
@@ -57,6 +58,13 @@ describe('ContextPanel memory module integration', () => {
     const source = fs.readFileSync(contextPanelPath, 'utf8');
     expect(source).toContain("getSessionTokenBudget(activeSessionId, activeSession?.model)");
     expect(source).toContain('setSessionTokenBudget(activeSessionId, snapshot)');
+  });
+
+  it('refreshes context information when the runtime model changes', () => {
+    const source = fs.readFileSync(sessionManagerPath, 'utf8');
+    expect(source).toContain('const tokenBudget = this.getTokenBudgetSnapshot(sessionId);');
+    expect(source).toContain("type: 'session.contextInfo'");
+    expect(source).toContain('this.emitTokenBudget(sessionId, tokenBudget);');
   });
 
   it('uses an in-app compact confirmation dialog instead of native confirm', () => {

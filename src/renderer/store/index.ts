@@ -150,6 +150,8 @@ interface AppState {
   contextPanelCollapsed: boolean;
   showSettings: boolean;
   settingsTab: string | null;
+  mainView: 'chat' | 'servers';
+  serverEditorRequestId: number;
 
   // Permission
   pendingPermission: PermissionRequest | null;
@@ -236,6 +238,8 @@ interface AppState {
   setContextPanelCollapsed: (collapsed: boolean) => void;
   setShowSettings: (show: boolean) => void;
   setSettingsTab: (tab: string | null) => void;
+  setMainView: (view: 'chat' | 'servers') => void;
+  requestServerEditor: () => void;
 
   setPendingPermission: (permission: PermissionRequest | null) => void;
 
@@ -334,6 +338,8 @@ export const useAppStore = create<AppState>((set) => ({
   contextPanelCollapsed: false,
   showSettings: false,
   settingsTab: null,
+  mainView: 'chat',
+  serverEditorRequestId: 0,
   pendingPermission: null,
   pendingSudoPassword: null,
   settings: defaultSettings,
@@ -723,6 +729,12 @@ export const useAppStore = create<AppState>((set) => ({
   setContextPanelCollapsed: (collapsed) => set({ contextPanelCollapsed: collapsed }),
   setShowSettings: (show) => set({ showSettings: show }),
   setSettingsTab: (tab) => set({ settingsTab: tab }),
+  setMainView: (view) => set({ mainView: view }),
+  requestServerEditor: () => set((state) => ({
+    mainView: 'servers',
+    showSettings: false,
+    serverEditorRequestId: state.serverEditorRequestId + 1,
+  })),
 
   // Permission actions
   setPendingPermission: (permission) => set({ pendingPermission: permission }),
@@ -808,9 +820,14 @@ export const useAppStore = create<AppState>((set) => ({
 
   // Context window actions
   setSessionContextWindow: (sessionId, contextWindow) =>
-    set((state) => ({
-      sessionStates: patchSession(state.sessionStates, sessionId, { contextWindow }),
-    })),
+    set((state) => {
+      const current = getSession(state.sessionStates, sessionId);
+      const tokenBudget =
+        current.tokenBudget?.contextWindow === contextWindow ? current.tokenBudget : null;
+      return {
+        sessionStates: patchSession(state.sessionStates, sessionId, { contextWindow, tokenBudget }),
+      };
+    }),
   setSessionTokenBudget: (sessionId, tokenBudget) =>
     set((state) => ({
       sessionStates: patchSession(state.sessionStates, sessionId, { tokenBudget }),
@@ -869,6 +886,7 @@ if (typeof window !== 'undefined') {
     const s = useAppStore.getState();
     return {
       showSettings: !!s.showSettings,
+      mainView: s.mainView,
       activeSessionId: s.activeSessionId || null,
       sessionCount: (s.sessions || []).length,
     };
@@ -878,17 +896,22 @@ if (typeof window !== 'undefined') {
     const store = useAppStore.getState();
     if (page === 'welcome') {
       store.setShowSettings(false);
+      store.setMainView('chat');
       store.setActiveProject(null);
       store.setActiveSession(null);
     } else if (page === 'settings') {
       store.setSettingsTab(tab || 'api');
       store.setShowSettings(true);
+    } else if (page === 'servers') {
+      store.setShowSettings(false);
+      store.setMainView('servers');
     } else if (page === 'session') {
       if (!sessionId || typeof sessionId !== 'string') return false;
       const exists = store.sessions.some((s) => s.id === sessionId);
       if (!exists) return false;
       const session = store.sessions.find((s) => s.id === sessionId);
       store.setShowSettings(false);
+      store.setMainView('chat');
       store.setActiveProject(session ? getProjectIdForCwd(session.cwd) : null);
       store.setActiveSession(sessionId);
     }

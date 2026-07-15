@@ -59,6 +59,10 @@ import { registerTasksHandlers } from './ipc/tasks-handlers';
 import { registerMemoryHandlers } from './ipc/memory-handlers';
 import { registerToolCompressionHandlers } from './ipc/tool-compression-handlers';
 import { registerUpdateHandlers } from './ipc/update-handlers';
+import { registerSshHandlers } from './ipc/ssh-handlers';
+import { SshService } from './ssh/ssh-service';
+import { SshTerminalService } from './ssh/ssh-terminal-service';
+import { SshAuthorizationBroker } from './ssh/ssh-authorization-broker';
 import { initUpdateManager, subscribeUpdateState, checkForUpdates } from './update/update-manager';
 import { BackgroundTaskService } from './background/background-task-service';
 import { initializeOpenRouterModelSpecsCache } from './config/openrouter-model-specs-cache';
@@ -93,6 +97,8 @@ let skillsManager: SkillsManager | null = null;
 let pluginRuntimeService: PluginRuntimeService | null = null;
 let scheduledTaskManager: ScheduledTaskManager | null = null;
 let backgroundTaskService: BackgroundTaskService | null = null;
+let sshService: SshService | null = null;
+let sshTerminalService: SshTerminalService | null = null;
 
 function sanitizeDiagnosticBaseUrl(value: string | undefined): string | null {
   if (!value) {
@@ -825,13 +831,36 @@ app
 
     backgroundTaskService = new BackgroundTaskService(db, sendToRenderer);
     backgroundTaskService.initialize();
+    sshService = new SshService(
+      db,
+      (payload) => sendToRenderer({ type: 'ssh.execution', payload }),
+      (payload) => sendToRenderer({ type: 'ssh.connection', payload })
+    );
+    sshTerminalService = new SshTerminalService(sshService, (payload) => {
+      sendToRenderer({ type: 'ssh.terminal', payload });
+    });
+    sshService.setTerminalCloser((serverId) => sshTerminalService?.closeByServer(serverId));
+    sshService.setSessionTerminalCloser((sessionId) => sshTerminalService?.closeBySession(sessionId));
+    sshService.setForegroundExecutor((input) => {
+      if (!sshTerminalService) throw new Error('SSH 可见终端服务尚未初始化');
+      return sshTerminalService.executeAgentCommand(input);
+    });
+    sshService.setForegroundTerminalManager({
+      open: (sessionId, serverId) => sshTerminalService?.openAgentTerminal(sessionId, serverId) ?? Promise.reject(new Error('SSH 可见终端服务尚未初始化')),
+      list: (sessionId) => sshTerminalService?.listAgentTerminals(sessionId) ?? [],
+      close: (sessionId, terminalId) => sshTerminalService?.closeAgentTerminal(sessionId, terminalId),
+    });
+    sshService.setAuthorizationBroker(new SshAuthorizationBroker((sessionId) => {
+      sendToRenderer({ type: 'ssh.authorization.request', payload: { sessionId } });
+    }));
     // Initialize session manager after skills manager — it needs skillsManager for skill path resolution.
     sessionManager = new SessionManager(
       db,
       sendToRenderer,
       pluginRuntimeService,
       skillsManager,
-      backgroundTaskService
+      backgroundTaskService,
+      sshService
     );
 
     // pi-ai handles model routing natively — no proxy warmup needed
@@ -1025,6 +1054,8 @@ async function cleanupSandboxResources(): Promise<void> {
 
   stopNavServer();
   scheduledTaskManager?.stop();
+  sshTerminalService?.shutdown();
+  sshService?.shutdown();
   if (backgroundTaskService) {
     try {
       log('[App] Stopping background tasks...');
@@ -1116,6 +1147,8 @@ app.on('before-quit', async (event) => {
     // In dev mode, exit quickly — no need for async sandbox cleanup
     if (process.env.VITE_DEV_SERVER_URL) {
       stopNavServer();
+      sshTerminalService?.shutdown();
+      sshService?.shutdown();
       try {
         closeDatabase();
       } catch {
@@ -1496,6 +1529,7 @@ registerMemoryHandlers({
     sessionManager?.listSessions().find((session) => session.id === sessionId)?.cwd ?? null,
 });
 registerToolCompressionHandlers();
+registerSshHandlers(() => sshService, () => sshTerminalService);
 registerUpdateHandlers(() => mainWindow);
 async function handleClientEvent(event: ClientEvent): Promise<unknown> {
   // Check if configured before starting sessions

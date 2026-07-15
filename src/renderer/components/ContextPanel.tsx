@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import type { TraceStep, MCPServerInfo, BackgroundTask, SessionCompactionInfo } from '../types';
 import type { ToolCompressionBreakdownItem, ToolCompressionStats } from '../../shared/ipc-types';
+import { SessionServersSection } from './ssh/SessionServersSection';
 
 interface MemoryListItem {
   id: string;
@@ -876,6 +877,8 @@ export function ContextPanel() {
           </div>
         </div>
       )}
+
+      {activeSessionId && <SessionServersSection sessionId={activeSessionId} />}
 
       {/* Working Directory */}
       <div className="border-b border-border-muted shrink-0">

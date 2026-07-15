@@ -24,6 +24,10 @@ Support diagnostics:
 
 - `docs/support-diagnostics.md` - how to inspect `opencowork-support-bundle-*.zip` files from users, verify privacy boundaries, and triage model/config/pi-agent routing issues.
 
+SSH workspace handoff:
+
+- `docs/ssh-workspace-handoff.md` - current SSH workspace architecture, authorization model, IPC/events, implementation status, verification, and next-stage constraints. Read this before modifying SSH resources, Agent SSH tools, or terminal behavior.
+
 ## Runtime Modes
 
 Open Cowork has two runtime modes:
