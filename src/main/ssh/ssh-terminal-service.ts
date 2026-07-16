@@ -95,7 +95,7 @@ export class SshTerminalService {
   close(terminalId: string): void {
     const terminal = this.terminals.get(terminalId);
     if (!terminal) return;
-    this.rejectActiveCommand(terminal, new SshAbortError('SSH �ն��ѹر�'));
+    this.rejectActiveCommand(terminal, new SshAbortError('SSH 终端已关闭'));
     this.removeTerminal(terminal);
     terminal.channel.close();
   }
@@ -129,12 +129,12 @@ export class SshTerminalService {
   private async openShell(serverId: string, kind: 'user' | 'agent', sessionId: string | undefined, cols: number, rows: number): Promise<TerminalChannel> {
     const client = await this.ssh.acquireTerminalConnection(serverId);
     const server = this.ssh.listServers().find((item) => item.id === serverId);
-    if (!server) throw new Error('������������');
+    if (!server) throw new Error('服务器不存在');
     const terminalId = uuidv4();
     return new Promise((resolve, reject) => {
       this.createShell(client, cols, rows, (error, channel) => {
         if (error || !channel) {
-          reject(error ?? new Error('�޷����� SSH �ն�'));
+          reject(error ?? new Error('无法创建 SSH 终端'));
           return;
         }
         const terminal: TerminalChannel = { terminalId, serverId, serverName: server.name, sessionId, kind, channel, commandTail: Promise.resolve() };
@@ -151,7 +151,7 @@ export class SshTerminalService {
           this.rejectActiveCommand(terminal, channelError);
         });
         channel.once('close', () => {
-          this.rejectActiveCommand(terminal, new SshAbortError('SSH �ն������ѹر�'));
+          this.rejectActiveCommand(terminal, new SshAbortError('SSH 终端连接已关闭'));
           this.removeTerminal(terminal);
           this.emitTerminal(terminal, 'closed');
         });
@@ -258,7 +258,7 @@ export class SshTerminalService {
   private requireAgentTerminal(sessionId: string, terminalId: string, expectedServerId?: string): TerminalChannel {
     const terminal = this.requireTerminal(terminalId);
     if (terminal.kind !== 'agent' || terminal.sessionId !== sessionId) throw new Error('\u524d\u53f0 SSH \u7ec8\u7aef\u4e0d\u5c5e\u4e8e\u5f53\u524d\u4f1a\u8bdd');
-    if (expectedServerId && terminal.serverId !== expectedServerId) throw new Error('ǰ̨ SSH �ն˲�����ָ��������');
+    if (expectedServerId && terminal.serverId !== expectedServerId) throw new Error('前台 SSH 终端不属于指定服务器');
     return terminal;
   }
 
@@ -272,7 +272,7 @@ export class SshTerminalService {
 
   private requireTerminal(id: string): TerminalChannel {
     const terminal = this.terminals.get(id);
-    if (!terminal) throw new Error('�ն��ѹر�');
+    if (!terminal) throw new Error('终端已关闭');
     return terminal;
   }
 

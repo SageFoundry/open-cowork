@@ -5,7 +5,7 @@ import type { SshTerminalService } from '../ssh/ssh-terminal-service';
 export function registerSshHandlers(getService: () => SshService | null, getTerminalService: () => SshTerminalService | null): void {
   const service = (): SshService => {
     const result = getService();
-    if (!result) throw new Error('SSH ������δ��ʼ��');
+    if (!result) throw new Error('SSH 服务尚未初始化');
     return result;
   };
   ipcMain.handle('ssh.listServers', () => service().listServers());
@@ -28,7 +28,7 @@ export function registerSshHandlers(getService: () => SshService | null, getTerm
   ipcMain.handle('ssh.revokeSessionServer', (_event, sessionId: string, serverId: string) => service().revokeSessionServer(sessionId, serverId));
   const terminals = (): SshTerminalService => {
     const result = getTerminalService();
-    if (!result) throw new Error('SSH �ն˷�����δ��ʼ��');
+    if (!result) throw new Error('SSH 终端服务尚未初始化');
     return result;
   };
   ipcMain.handle('ssh.cancelExecution', (_event, executionId: string) => service().cancelExecution(executionId));

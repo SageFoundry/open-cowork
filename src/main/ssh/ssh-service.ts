@@ -141,10 +141,10 @@ export interface SshForegroundTerminal {
 }
 
 export class SshAbortError extends Error {
-  constructor(message = 'Զ���������ж�') { super(message); this.name = 'SshAbortError'; }
+  constructor(message = '远程命令已中断') { super(message); this.name = 'SshAbortError'; }
 }
 export class SshTimeoutError extends Error {
-  constructor() { super('Զ������ִ�г�ʱ'); this.name = 'SshTimeoutError'; }
+  constructor() { super('远程命令执行超时'); this.name = 'SshTimeoutError'; }
 }
 export class SshHostKeyError extends Error {
   constructor(message: string) { super(message); this.name = 'SshHostKeyError'; }
@@ -179,7 +179,7 @@ export class SshService {
     this.foregroundTerminalCloser = manager.close;
   }
   requestAuthorization(sessionId: string): Promise<void> {
-    if (!this.authorizationBroker) return Promise.reject(new Error('��ǰ�Ựδ��Ȩ SSH ��������Դ'));
+    if (!this.authorizationBroker) return Promise.reject(new Error('当前会话未授权 SSH 服务器资源'));
     return this.authorizationBroker.request(sessionId);
   }
   denyAuthorization(sessionId: string): void { this.authorizationBroker?.deny(sessionId); }
@@ -201,22 +201,22 @@ export class SshService {
   }
 
   createFolder(name: string, parentId = 'ssh-root'): SshResourceNode {
-    const trimmed = name.trim(); if (!trimmed) throw new Error('Ŀ¼���Ʋ���Ϊ��');
+    const trimmed = name.trim(); if (!trimmed) throw new Error('目录名称不能为空');
     const parent = this.getResourceNode(parentId);
-    if (!parent || parent.node_type !== 'folder') throw new Error('����ԴĿ¼�����ڻ򲻿ɰ����ӽڵ�');
+    if (!parent || parent.node_type !== 'folder') throw new Error('父资源目录不存在或不可包含子节点');
     const now = Date.now(); const id = uuidv4();
     this.db.raw.prepare('INSERT INTO ssh_resource_nodes (id, parent_id, node_type, server_id, name, sort_order, created_at, updated_at) VALUES (?, ?, ?, NULL, ?, ?, ?, ?)').run(id, parentId, 'folder', trimmed, now, now, now);
     return { id, parentId, type: 'folder', serverId: null, name: trimmed, sortOrder: now, children: [] };
   }
 
   moveResourceNode(nodeId: string, parentId: string): void {
-    if (nodeId === 'ssh-root' || nodeId === parentId) throw new Error('��Ч����ԴĿ¼');
+    if (nodeId === 'ssh-root' || nodeId === parentId) throw new Error('无效的资源目录');
     const node = this.getResourceNode(nodeId);
     const parent = this.getResourceNode(parentId);
-    if (!node) throw new Error('��Դ�ڵ㲻����');
-    if (!parent || parent.node_type !== 'folder') throw new Error('����ԴĿ¼�����ڻ򲻿ɰ����ӽڵ�');
+    if (!node) throw new Error('资源节点不存在');
+    if (!parent || parent.node_type !== 'folder') throw new Error('父资源目录不存在或不可包含子节点');
     const descendants = this.collectNodeIds(nodeId);
-    if (descendants.includes(parentId)) throw new Error('�����ƶ����������Ŀ¼');
+    if (descendants.includes(parentId)) throw new Error('不能移动到自身或子目录');
     this.db.raw.prepare('UPDATE ssh_resource_nodes SET parent_id = ?, updated_at = ? WHERE id = ?').run(parentId, Date.now(), nodeId);
   }
 
@@ -226,8 +226,8 @@ export class SshService {
 
   grantResource(sessionId: string, resourceNodeId: string, permission: SshPermission, recursive = true, includeFutureChildren = false, executionMode: SshExecutionMode = 'foreground'): void {
     if (permission !== 'read' && permission !== 'execute') throw new Error('\u65e0\u6548\u7684\u670d\u52a1\u5668\u6743\u9650');
-    if (executionMode !== 'foreground' && executionMode !== 'background') throw new Error('��Ч�� SSH ִ��ģʽ');
-    if (!this.collectNodeIds(resourceNodeId).length) throw new Error('��Դ�ڵ㲻����');
+    if (executionMode !== 'foreground' && executionMode !== 'background') throw new Error('无效的 SSH 执行模式');
+    if (!this.collectNodeIds(resourceNodeId).length) throw new Error('资源节点不存在');
     const now = Date.now();
     this.db.raw.prepare('INSERT INTO session_ssh_resource_grants (session_id, resource_node_id, permission, execution_mode, recursive, include_future_children, granted_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(session_id, resource_node_id) DO UPDATE SET permission = excluded.permission, execution_mode = excluded.execution_mode, recursive = excluded.recursive, include_future_children = excluded.include_future_children, updated_at = excluded.updated_at').run(sessionId, resourceNodeId, permission, executionMode, recursive ? 1 : 0, includeFutureChildren ? 1 : 0, now, now);
     this.authorizationBroker?.approve(sessionId);
@@ -242,10 +242,10 @@ export class SshService {
     const name = input.name.trim();
     const host = input.host.trim();
     const username = input.username.trim();
-    if (!name || !host || !username) throw new Error('���������ơ��������û�������Ϊ��');
-    if (input.authType !== 'password' && input.authType !== 'privateKey') throw new Error('��֧�ֵ���֤��ʽ');
+    if (!name || !host || !username) throw new Error('服务器名称、主机和用户名不能为空');
+    if (input.authType !== 'password' && input.authType !== 'privateKey') throw new Error('不支持的认证方式');
     const port = Number(input.port ?? 22);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('�˿ڱ������ 1 �� 65535');
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('端口必须介于 1 到 65535');
     const existing = input.id ? this.getServerRow(input.id) : undefined;
     const secret = input.authType === 'password' ? input.password?.trim() : input.privateKey?.trim();
     // A credential is only reusable when its authentication type did not change.
@@ -301,7 +301,7 @@ export class SshService {
 
   grantSessionServer(sessionId: string, serverId: string, permission: SshPermission, executionMode: SshExecutionMode = 'foreground'): SessionSshGrant {
     if (permission !== 'read' && permission !== 'execute') throw new Error('\u65e0\u6548\u7684\u670d\u52a1\u5668\u6743\u9650');
-    if (executionMode !== 'foreground' && executionMode !== 'background') throw new Error('��Ч�� SSH ִ��ģʽ');
+    if (executionMode !== 'foreground' && executionMode !== 'background') throw new Error('无效的 SSH 执行模式');
     this.getServerOrThrow(serverId);
     const now = Date.now();
     this.db.raw.prepare(`INSERT INTO session_ssh_grants (session_id, server_id, permission, execution_mode, granted_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(session_id, server_id) DO UPDATE SET permission = excluded.permission, execution_mode = excluded.execution_mode, updated_at = excluded.updated_at`).run(sessionId, serverId, permission, executionMode, now, now);
@@ -315,7 +315,7 @@ export class SshService {
 
   async testConnection(serverId: string): Promise<SshConnectionTestResult> {
     const row = this.getServerRow(serverId);
-    if (!row) throw new Error('������������');
+    if (!row) throw new Error('服务器不存在');
     let discoveredFingerprint: string | undefined;
     try {
       await this.connect(row, (hash) => {
@@ -331,15 +331,15 @@ export class SshService {
 
   trustHostKey(serverId: string, fingerprint: string): void {
     const row = this.getServerRow(serverId);
-    if (!row) throw new Error('������������');
-    if (!/^[a-f0-9]{64}$/i.test(fingerprint)) throw new Error('��Ч�� Host Key ָ��');
+    if (!row) throw new Error('服务器不存在');
+    if (!/^[a-f0-9]{64}$/i.test(fingerprint)) throw new Error('无效的 Host Key 指纹');
     this.db.raw.prepare('UPDATE ssh_servers SET host_key_hash = ?, updated_at = ? WHERE id = ?').run(fingerprint.toLowerCase(), Date.now(), serverId);
   }
 
   async acquireTerminalConnection(serverId: string): Promise<Client> {
     const row = this.getServerRow(serverId);
-    if (!row) throw new Error('������������');
-    if (!row.host_key_hash) throw new SshHostKeyError('��������δȷ�� Host Key�������ڷ����������в��Բ�ȷ������');
+    if (!row) throw new Error('服务器不存在');
+    if (!row.host_key_hash) throw new SshHostKeyError('服务器尚未确认 Host Key，请先在服务器设置中测试并确认连接');
     return this.connections.acquire(row.id, () => this.createClient(row, (hash) => row.host_key_hash === hash));
   }
 
@@ -401,8 +401,8 @@ export class SshService {
 
   async execForeground(input: { sessionId: string; serverId: string; terminalId?: string; command: string; timeoutSeconds?: number; signal?: AbortSignal }): Promise<SshForegroundExecutionResult> {
     this.requireExecuteGrant(input.sessionId, input.serverId, 'foreground');
-    if (!input.command.trim()) throw new Error('Զ�������Ϊ��');
-    if (!this.foregroundExecutor) throw new Error('SSH �ɼ��ն˷�����δ��ʼ��');
+    if (!input.command.trim()) throw new Error('远程命令不能为空');
+    if (!this.foregroundExecutor) throw new Error('SSH 可见终端服务尚未初始化');
     return this.foregroundExecutor(input);
   }
 
@@ -412,21 +412,21 @@ export class SshService {
 
   async openForegroundTerminal(sessionId: string, serverId: string): Promise<SshForegroundTerminal> {
     this.requireExecuteGrant(sessionId, serverId, 'foreground');
-    if (!this.foregroundTerminalOpener) throw new Error('SSH �ɼ��ն˷�����δ��ʼ��');
+    if (!this.foregroundTerminalOpener) throw new Error('SSH 可见终端服务尚未初始化');
     return this.foregroundTerminalOpener(sessionId, serverId);
   }
 
   closeForegroundTerminal(sessionId: string, terminalId: string): void {
-    if (!this.foregroundTerminalCloser) throw new Error('SSH �ɼ��ն˷�����δ��ʼ��');
+    if (!this.foregroundTerminalCloser) throw new Error('SSH 可见终端服务尚未初始化');
     this.foregroundTerminalCloser(sessionId, terminalId);
   }
 
   async exec(input: { sessionId: string; serverId: string; command: string; cwd?: string; timeoutSeconds?: number; signal?: AbortSignal }): Promise<{ executionId: string; stdout: string; stderr: string; exitCode: number | null; truncated: boolean }> {
     this.requireExecuteGrant(input.sessionId, input.serverId, 'background');
-    if (!input.command.trim()) throw new Error('Զ�������Ϊ��');
+    if (!input.command.trim()) throw new Error('远程命令不能为空');
     const row = this.getServerRow(input.serverId);
-    if (!row) throw new Error('������������');
-    if (!row.host_key_hash) throw new SshHostKeyError('��������δȷ�� Host Key�������ڷ����������в��Բ�ȷ������');
+    if (!row) throw new Error('服务器不存在');
+    if (!row.host_key_hash) throw new SshHostKeyError('服务器尚未确认 Host Key，请先在服务器设置中测试并确认连接');
 
     const executionId = uuidv4();
     const startedAt = Date.now();
@@ -508,19 +508,19 @@ export class SshService {
 
   private requireReadGrant(sessionId: string, serverId: string): SshServerRow {
     const grant = this.listSessionGrants(sessionId).find((item) => item.id === serverId);
-    if (!grant) throw new Error('�˷�����δ��Ȩ����ǰ�Ự');
+    if (!grant) throw new Error('此服务器未授权给当前会话');
     const row = this.getServerRow(serverId);
-    if (!row) throw new Error('������������');
-    if (!row.host_key_hash) throw new SshHostKeyError('��������δȷ�� Host Key�������ڷ����������в��Բ�ȷ������');
+    if (!row) throw new Error('服务器不存在');
+    if (!row.host_key_hash) throw new SshHostKeyError('服务器尚未确认 Host Key，请先在服务器设置中测试并确认连接');
     return row;
   }
 
   private requireExecuteGrant(sessionId: string, serverId: string, executionMode: SshExecutionMode): SessionSshGrant {
     const grant = this.listSessionGrants(sessionId).find((item) => item.id === serverId);
-    if (!grant) throw new Error('�˷�����δ��Ȩ����ǰ�Ự');
+    if (!grant) throw new Error('此服务器未授权给当前会话');
     if (grant.permission !== 'execute') throw new Error('\u5f53\u524d\u4f1a\u8bdd\u53ea\u6709\u53ea\u8bfb\u670d\u52a1\u5668\u6743\u9650\uff0c\u4e0d\u80fd\u6267\u884c\u8fdc\u7a0b\u547d\u4ee4');
     if (grant.executionMode !== executionMode) {
-      throw new Error(executionMode === 'foreground' ? '�˷���������Ȩ��ִ̨�У�����ʹ�ÿɼ��ն�' : '�˷���������Ȩ�ɼ��նˣ������ں�ִ̨��');
+      throw new Error(executionMode === 'foreground' ? '此服务器仅授权后台执行，不能使用可见终端' : '此服务器仅授权可见终端，不能在后台执行');
     }
     return grant;
   }
@@ -542,7 +542,7 @@ export class SshService {
         if (error) reject(error); else resolve(value as T);
       };
       client.sftp((error, openedSftp) => {
-        if (error || !openedSftp) return finish(error ?? new Error('�޷����� SFTP channel'));
+        if (error || !openedSftp) return finish(error ?? new Error('无法建立 SFTP channel'));
         sftp = openedSftp;
         callback(sftp).then((value) => finish(undefined, value), (callbackError) => finish(this.toError(callbackError)));
       });
@@ -568,7 +568,7 @@ export class SshService {
       const cleanup = () => { clearTimeout(timeout); client.removeAllListeners(); client.end(); };
       client.once('ready', () => { cleanup(); resolve(); });
       client.once('error', (error) => { cleanup(); reject(this.toHostKeyError(error)); });
-      client.once('close', () => { cleanup(); reject(new Error('SSH �����ѹر�')); });
+      client.once('close', () => { cleanup(); reject(new Error('SSH 连接已关闭')); });
     });
   }
 
@@ -604,13 +604,13 @@ export class SshService {
   }
 
   private getServerRow(id: string): SshServerRow | undefined { return this.db.raw.prepare('SELECT * FROM ssh_servers WHERE id = ?').get(id) as SshServerRow | undefined; }
-  private getServerOrThrow(id: string): SshServer { const row = this.getServerRow(id); if (!row) throw new Error('������������'); return this.toServer(row); }
+  private getServerOrThrow(id: string): SshServer { const row = this.getServerRow(id); if (!row) throw new Error('服务器不存在'); return this.toServer(row); }
   private toServer(row: SshServerRow): SshServer { let tags: string[] = []; try { tags = JSON.parse(row.tags_json); } catch { /* ignore malformed legacy tags */ } return { id: row.id, name: row.name, host: row.host, port: row.port, username: row.username, authType: row.auth_type, hasCredential: Boolean(row.credential), hasTrustedHostKey: Boolean(row.host_key_hash), defaultCwd: row.default_cwd, tags, createdAt: row.created_at, updatedAt: row.updated_at }; }
-  private encrypt(value: string): Buffer { if (!safeStorage.isEncryptionAvailable()) throw new Error('��ǰϵͳ�����ð�ȫƾ֤�洢'); return safeStorage.encryptString(value); }
-  private decrypt(value: Buffer | null): string { if (!value) throw new Error('������δ������֤ƾ֤'); try { return safeStorage.decryptString(value); } catch { throw new Error('�޷���ȡ������ƾ֤�������±���÷�����'); } }
+  private encrypt(value: string): Buffer { if (!safeStorage.isEncryptionAvailable()) throw new Error('当前系统不可用安全凭证存储'); return safeStorage.encryptString(value); }
+  private decrypt(value: Buffer | null): string { if (!value) throw new Error('服务器未配置认证凭证'); try { return safeStorage.decryptString(value); } catch { throw new Error('无法读取服务器凭证，请重新保存该服务器'); } }
   private normalizeFingerprint(hash: string | Buffer): string { return (typeof hash === 'string' ? hash : createHash('sha256').update(hash).digest('hex')).toLowerCase(); }
   private quote(value: string): string { return `'${value.replace(/'/g, "'\\''")}'`; }
   private toError(value: unknown): Error { return value instanceof Error ? value : new Error(String(value)); }
   private errorMessage(value: unknown): string { return this.toError(value).message; }
-  private toHostKeyError(error: Error): Error { return /host.*key|host.*denied/i.test(error.message) ? new SshHostKeyError('Host Key ָ��δȷ�ϻ��ѱ仯����������ֹ') : error; }
+  private toHostKeyError(error: Error): Error { return /host.*key|host.*denied/i.test(error.message) ? new SshHostKeyError('Host Key 指纹未确认或已变化，连接已阻止') : error; }
 }

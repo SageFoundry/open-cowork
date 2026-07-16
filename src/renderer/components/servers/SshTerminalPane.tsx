@@ -25,12 +25,12 @@ export function SshTerminalPane({ server }: { server: SshServer }) {
       if (event.payload.type === 'data' && event.payload.text) terminal.write(event.payload.text);
       if (event.payload.type === 'opened') setStatus('open');
       if (event.payload.type === 'closed') { setStatus('closed'); terminalIdRef.current = null; }
-      if (event.payload.type === 'error') { setStatus('error'); terminal.writeln(`\r\n[�ն˴���] ${event.payload.error ?? 'δ֪����'}`); }
+      if (event.payload.type === 'error') { setStatus('error'); terminal.writeln(`\r\n[终端错误] ${event.payload.error ?? '未知错误'}`); }
     });
-    window.electronAPI.ssh.openTerminal(server.id, terminal.cols, terminal.rows).then((id) => { terminalIdRef.current = id; }).catch((error) => { setStatus('error'); terminal.writeln(`\r\n[�޷����ն�] ${error instanceof Error ? error.message : String(error)}`); });
+    window.electronAPI.ssh.openTerminal(server.id, terminal.cols, terminal.rows).then((id) => { terminalIdRef.current = id; }).catch((error) => { setStatus('error'); terminal.writeln(`\r\n[无法打开终端] ${error instanceof Error ? error.message : String(error)}`); });
     return () => { disposable.dispose(); observer.disconnect(); cleanupListener(); const id = terminalIdRef.current; if (id) void window.electronAPI.ssh.closeTerminal(id); terminal.dispose(); };
   }, [server.id]);
 
   const close = () => { const id = terminalIdRef.current; if (id) void window.electronAPI.ssh.closeTerminal(id); };
-  return <div className="mt-4 overflow-hidden rounded-md border border-border-muted bg-[#111827]"><div className="flex items-center gap-2 border-b border-white/10 px-3 py-2 text-xs text-gray-300"><TerminalIcon className="w-4 h-4" /><span className="flex-1 truncate">{server.name} �� {server.username}@{server.host}</span>{status === 'opening' && <LoaderCircle className="w-3.5 h-3.5 animate-spin" />}{status === 'open' && <button onClick={close} title="�ر��ն�" className="p-1 hover:text-red-300"><Square className="w-3.5 h-3.5" /></button>}</div><div ref={hostRef} className="h-[360px] w-full p-2" /></div>;
+  return <div className="mt-4 overflow-hidden rounded-md border border-border-muted bg-[#111827]"><div className="flex items-center gap-2 border-b border-white/10 px-3 py-2 text-xs text-gray-300"><TerminalIcon className="w-4 h-4" /><span className="flex-1 truncate">{server.name} · {server.username}@{server.host}</span>{status === 'opening' && <LoaderCircle className="w-3.5 h-3.5 animate-spin" />}{status === 'open' && <button onClick={close} title="关闭终端" className="p-1 hover:text-red-300"><Square className="w-3.5 h-3.5" /></button>}</div><div ref={hostRef} className="h-[360px] w-full p-2" /></div>;
 }

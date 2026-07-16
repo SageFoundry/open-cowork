@@ -54,8 +54,12 @@ export async function executeWindowsPowerShell({
     "$OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
     "[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)",
     "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
+    "$PSDefaultParameterValues['Get-Content:Encoding'] = 'utf8'",
+    "$PSDefaultParameterValues['Set-Content:Encoding'] = 'utf8'",
+    "$PSDefaultParameterValues['Add-Content:Encoding'] = 'utf8'",
+    "$PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'",
   ].join('\n');
-  fs.writeFileSync(scriptPath, `${encodingPrelude}\n${script}`, 'utf-8');
+  fs.writeFileSync(scriptPath, `\uFEFF${encodingPrelude}\n${script}`, 'utf-8');
 
   return await new Promise<PowerShellExecutionResult>((resolve, reject) => {
     const child = spawn(

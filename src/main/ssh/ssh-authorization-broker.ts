@@ -32,7 +32,7 @@ export class SshAuthorizationBroker {
     const pending = this.pending.get(sessionId);
     if (!pending) return;
     this.pending.delete(sessionId);
-    const error = new Error('�û�δ��Ȩ SSH ��������Դ����ǰ�Ự');
+    const error = new Error('用户未授权 SSH 服务器资源给当前会话');
     pending.rejecters.forEach((reject) => reject(error));
   }
 

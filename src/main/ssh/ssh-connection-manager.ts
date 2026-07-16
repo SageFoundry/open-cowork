@@ -92,7 +92,7 @@ export class SshConnectionManager {
       const onCloseBeforeReady = () => finish(new Error('SSH \u8fde\u63a5\u5df2\u5173\u95ed'));
       const timeout = setTimeout(() => {
         client.destroy();
-        finish(new Error('SSH ���ӳ�ʱ'));
+        finish(new Error('SSH 连接超时'));
       }, timeoutMs);
       client.once('ready', onReady);
       client.once('error', onConnectError);

@@ -22,7 +22,7 @@ export class SshMcpProvider {
       if (this.service.listSessionGrants(sessionId).length > 0) return;
       if (this.authorizationBroker) await this.authorizationBroker.request(sessionId);
       else await this.service.requestAuthorization(sessionId);
-      if (!this.service.listSessionGrants(sessionId).length) throw new Error('��ǰ�Ựδ��Ȩ SSH ��������Դ');
+      if (!this.service.listSessionGrants(sessionId).length) throw new Error('当前会话未授权 SSH 服务器资源');
     };
     const listTool: ToolDefinition = {
       name: 'ssh_list_servers',
@@ -80,7 +80,7 @@ export class SshMcpProvider {
         await ensureAuthorized();
         if (this.isPlanMode(sessionId)) throw new Error('Plan mode does not allow remote SSH command execution.');
         const result = await this.service.execForeground({ sessionId, serverId: params.serverId, terminalId: params.terminalId, command: params.command, timeoutSeconds: params.timeout, signal });
-        return { content: [{ type: 'text' as const, text: `exit code: ${result.exitCode ?? 'unknown'}\n${result.output || '(�����)'}` }], details: { terminalId: result.terminalId, exitCode: result.exitCode } };
+        return { content: [{ type: 'text' as const, text: `exit code: ${result.exitCode ?? 'unknown'}\n${result.output || '(无输出)'}` }], details: { terminalId: result.terminalId, exitCode: result.exitCode } };
       },
     };
     const listTerminalsTool: ToolDefinition = {
@@ -129,8 +129,8 @@ export class SshMcpProvider {
         await ensureAuthorized();
         if (this.isPlanMode(sessionId)) throw new Error('Plan mode does not allow remote SSH command execution.');
         const result = await this.service.exec({ sessionId, serverId: params.serverId, command: params.command, cwd: params.cwd, timeoutSeconds: params.timeout, signal });
-        const output = [result.stdout, result.stderr ? `stderr:\n${result.stderr}` : '', result.truncated ? '\n[����ѽض�]' : ''].filter(Boolean).join('\n');
-        return { content: [{ type: 'text' as const, text: `exit code: ${result.exitCode ?? 'unknown'}\n${output || '(�����)'}` }], details: { executionId: result.executionId, exitCode: result.exitCode, truncated: result.truncated } };
+        const output = [result.stdout, result.stderr ? `stderr:\n${result.stderr}` : '', result.truncated ? '\n[输出已截断]' : ''].filter(Boolean).join('\n');
+        return { content: [{ type: 'text' as const, text: `exit code: ${result.exitCode ?? 'unknown'}\n${output || '(无输出)'}` }], details: { executionId: result.executionId, exitCode: result.exitCode, truncated: result.truncated } };
       },
     };
     return [listTool, listDirectoryTool, readFileTool, listTerminalsTool, openTerminalTool, closeTerminalTool, execTool, backgroundExecTool];
